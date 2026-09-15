@@ -184,7 +184,8 @@ const run=async()=>{
   check('K42 the Word statement contains the entries and the closing balance',
     bytes[0]===0x50 && xml.includes(inv1.invoiceNumber) && xml.includes(M.fmtPlain(sum.closing)),
     String(bytes.length));
-  fs.writeFileSync('sample-customer-statement.docx',Buffer.from(bytes));
+  fs.mkdirSync('dist', { recursive: true });
+  fs.writeFileSync('dist/sample-customer-statement.docx',Buffer.from(bytes));
 
   let downloaded=null;
   const origCreate=D.createElement.bind(D);

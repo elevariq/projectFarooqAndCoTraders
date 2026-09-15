@@ -40,5 +40,6 @@ const m = {
   footer:{thanks:'Thank you for your business.', terms:'Goods once sold are the responsibility of the buyer.', bank:''}
 };
 const bytes = DOCX.generate(m);
-fs.writeFileSync('/home/claude/build/test-invoice.docx', Buffer.from(bytes));
+fs.mkdirSync('dist', { recursive: true });
+fs.writeFileSync('dist/test-invoice.docx', Buffer.from(bytes));
 console.log('written', bytes.length, 'bytes;', DOCX.filename(m));

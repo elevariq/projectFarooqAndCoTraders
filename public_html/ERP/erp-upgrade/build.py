@@ -109,8 +109,8 @@ def main() -> None:
     for name in ("farooq-co-warehouse-pwa.html", "farooq-and-co-homepage.html", "farooq-erp-data.js"):
         (OUT / name).write_text((BUILD / name).read_text(encoding="utf-8"), encoding="utf-8")
 
-    print(f"ERP      {len(erp):>9,} → {len(upgraded):>9,} bytes  (+{len(payload):,} upgrade)")
-    print(f"launcher {len(launcher):>9,} → {len(new_launcher):>9,} bytes")
+    print(f"ERP      {len(erp):>9,} -> {len(upgraded):>9,} bytes  (+{len(payload):,} upgrade)")
+    print(f"launcher {len(launcher):>9,} -> {len(new_launcher):>9,} bytes")
 
 
 if __name__ == "__main__":
