@@ -1,0 +1,125 @@
+# MySQL Migration Plan — from IndexedDB to a real server database
+
+Status: **not started**. This document exists so that when work on this begins (this session or a
+future one), there's a concrete list of decisions and steps instead of starting from scratch. See
+`CLAUDE.md` → "MySQL database" for the one-paragraph summary and current connection details.
+
+## Where things stand today
+
+- The ERP (`erp.farooqandcotraders.online`) is 100% client-side: no server backend, no API. Every
+  read/write goes straight to the browser's own IndexedDB (`farooqco_erp_ledger`), primarily
+  through `erp-upgrade/01-db.js` (the persistence layer — transactions, sequences, money, backup)
+  and `02-services.js` (the domain logic built on top of it: invoices, purchases, payments,
+  returns, ledgers, migration, audit). Most of the other ~28 modules call into these two rather
+  than touching IndexedDB directly, but not all — this needs verifying, not assuming, before any
+  refactor (see Phase 3).
+- A MySQL/MariaDB database (`u943531942_facotraders` on `srv1774.hstgr.io`) has been provisioned
+  and is reachable, empty, with full CRUD+DDL permissions and a working MCP connection
+  (`dbhub-facotraders-...`). See `CLAUDE.md` for details. **Confirmed purpose**: this will
+  eventually replace the IndexedDB storage.
+- A relational schema already exists on paper for this data model, generated once before: `public_html/ERP/database/schema.sql` (PostgreSQL, 29 tables, 34 indexes, 48 foreign keys),
+  `schema.prisma` (same, as a Prisma schema), and `schema.json` (a JSON-Schema-ish export, said to
+  be "generated from the app itself"). **These need to be checked against the current app before
+  reuse** — they may predate the newest modules (`24-client-changes.js` through `28-areawise.js`,
+  e.g. landed cost, area-wise collection, options/settings, client-set fields). Don't assume they're
+  current; diff them against `01-db.js`/`02-services.js`'s actual store definitions first.
+- A fundamental constraint that shapes everything else: **browser JavaScript cannot open a raw
+  MySQL connection.** There is no client-side MySQL driver reachable from a `<script>` tag talking
+  to a remote database over the MySQL wire protocol. This means the eventual architecture is not
+  "point the existing app at MySQL instead of IndexedDB" — it necessarily requires **adding a
+  server-side API layer** that the browser talks to over HTTP, which then talks to MySQL. That's a
+  materially bigger addition than a storage swap, and needs to be scoped as such.
+
+## Decisions the user needs to make before implementation starts
+
+These aren't things to guess at — get explicit answers first:
+
+1. **Does this replace IndexedDB entirely, or supplement it?**
+   - Full replacement: MySQL becomes the only source of truth; the app requires connectivity.
+   - Hybrid: IndexedDB stays as an offline cache/queue, MySQL is the server source of truth, with
+     a sync layer reconciling the two. This preserves the "works with no internet" property the
+     README currently advertises as a feature — worth naming explicitly as something that would be
+     given up under full replacement.
+2. **What backend stack and where does it run?** No server exists today. Options on this same
+   Hostinger account (checked as available via the Hostinger MCP tools already connected):
+   - A **Node.js application** — Hostinger's hosting API already exposes Node.js deploy/build
+     tools (`hosting_deployJsApplication`, `hosting_listNodeJSBuildsV1`, etc.), so this is a real
+     option on the existing plan without new infrastructure.
+   - A **PHP backend** — the account is a standard CloudLinux/shared-hosting account (PHP-oriented
+     tooling is present: `hosting_getPHPDetailsV1`, `hosting_updatePHPVersionV1`, etc.), so PHP is
+     also viable with zero new infrastructure.
+   - Something off-Hostinger entirely (a separate VPS/serverless function) — possible (a Hostinger
+     VPS API is also connected) but adds operational surface area that isn't obviously justified
+     yet.
+   No recommendation is baked in here on purpose — this is the single biggest architecture
+   decision in the whole migration and should be made deliberately, not defaulted.
+3. **Cutover strategy**:
+   - **Big-bang**: pick a date, export everyone's current browser data, import to MySQL, switch
+     the app over.
+   - **Dual-write transition**: app writes to both IndexedDB and the new API for a period, read
+     from IndexedDB still, verify parity, then flip reads to the API.
+   - **Fresh start**: don't migrate historical transactional data at all, seed MySQL from
+     `database/fresh-install-backup.json` (clean master data, no transactions) and start the
+     server-backed ledger from zero going forward. Simplest, but throws away transaction history
+     unless the old per-device IndexedDB data is kept as an archival export.
+   This also interacts with the ERP's own still-open business decisions (opening balances cutover
+   date, the 68 `region_assumed` shops, blank catalogue rows, supplier account types — see
+   `CLAUDE.md` → "Open items") since those affect what data is actually worth migrating.
+4. **Multi-device/multi-user semantics once centralized.** Today each device/browser has its own
+   independent copy (the README: "each device keeps its own records"). A shared server database
+   changes the game: concurrent writes from multiple counters/devices need real handling —
+   invoice-number sequences, stock-quantity races, the "write lock" system already implemented at
+   the *browser* level in `20-integrity.js` — none of that logic transfers automatically to a
+   multi-writer server model and needs redesigning, not just moving.
+5. **Authentication and role enforcement.** `README.md` says outright: "Roles are advisory —
+   enforced by hiding actions, not by a server, because there is no server." That stops being true
+   once there is a server. Decide whether real server-side auth/authorization is in scope for this
+   migration or a fast-follow — but don't ship a server API with no auth in front of real business
+   data.
+
+## Concrete steps, once the above is decided
+
+1. **Reconcile the schema.** Diff `database/schema.sql`/`schema.prisma`/`schema.json` against
+   what `01-db.js` and the newer modules (`17-profit.js`, `18-master-data.js`, `25-options.js`,
+   `26-landed-cost.js`, `28-areawise.js`, etc.) actually store today. Produce an updated schema —
+   translated to MariaDB syntax (this DB is MariaDB 11.8, not Postgres: no native arrays, JSON
+   type differs, `ON CONFLICT` becomes `ON DUPLICATE KEY UPDATE`, generated/check-constraint
+   syntax differs, etc.) — and get it reviewed before creating a single table on the live DB.
+2. **Design and build the API layer** (stack chosen above): CRUD endpoints matching the domain
+   operations already defined in `02-services.js` (invoices, purchases, payments, returns,
+   inventory movements, ledgers, audit) rather than raw table CRUD — keep the same domain
+   boundaries that already exist and are already tested.
+3. **Add authentication** appropriate to the decision made above, before any real data touches it.
+4. **Write the migration/import tool**: reads a `Settings → Backup Database` JSON export (the same
+   format `01-db.js` already produces) and loads it into MySQL in FK-safe order. Test against
+   `database/fresh-install-backup.json` first (safe, no real transactions) before ever touching a
+   real device's backup.
+5. **Refactor the app's data-access layer.** Replace `01-db.js`'s IndexedDB calls with calls to
+   the new API, module by module, keeping `02-services.js`'s public surface stable so the other 28
+   modules built on top of it need minimal changes. Re-run the existing test suite constantly
+   during this — it's the regression safety net already in place (1,049 checks).
+6. **Rebuild the test strategy.** The current `test-*.mjs` harnesses boot the app in JSDOM with
+   `fake-indexeddb` standing in for the browser's real IndexedDB — that pattern doesn't apply once
+   reads/writes go over HTTP to a real API. Decide whether to mock the API layer in the same JSDOM
+   harnesses, or add a separate integration-test tier against a real (test) MySQL database. Don't
+   let test coverage regress silently during the transition.
+7. **Tighten remote MySQL access before going live with real data.** The database currently
+   allows connections from `%` (anywhere) in addition to this machine's specific IP — fine for
+   development, but once a real API server has a fixed IP, narrow the Remote MySQL whitelist to
+   just that IP (and remove `%`) as a basic hardening step.
+8. **Plan the actual cutover** per the strategy chosen in decision 3, execute it, and only then
+   consider deprecating the IndexedDB path (or keep it permanently as the offline cache, per
+   decision 1).
+
+## Risks to keep in mind throughout
+
+- This is live financial software with real customers, real invoices, real stock levels. Nothing
+  here should be deployed to `erp.farooqandcotraders.online` without going through the same
+  build → test → backup → deploy discipline already in place (`scripts/deploy-erp.sh`,
+  `.github/workflows/erp-build-test.yml`), extended to cover whatever new backend gets added.
+- A multi-writer server database introduces failure modes (partial writes, concurrent-update
+  conflicts, network failures mid-transaction) that a single-browser IndexedDB app never had to
+  handle. `20-integrity.js`'s existing write-lock/backup/verify approach is a reasonable model to
+  extend, not to discard.
+- Don't lose the "works offline" property silently — if it's being given up (decision 1), that
+  should be a deliberate, communicated choice, not a side effect of how the API layer got built.

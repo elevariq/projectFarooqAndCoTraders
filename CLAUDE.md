@@ -76,23 +76,11 @@ direction, not a green light to start wiring the app to MySQL without a plan.
 | Access from Claude Code | MCP server `dbhub-facotraders-theumairzero7@gmail.com` in the **global** `~/.claude.json` (`@bytebase/dbhub`). **Not in this git repo** — machine-level config, DSN has the password in plaintext, must never be copied into anything committed here. **Confirmed loaded and working after a session restart** (2026-09-15): tools `mcp__dbhub-facotraders-theumairzero7_gmail_com__execute_sql` and `..._search_objects` are callable. |
 | Tested | Twice: once via a raw `mysql2` script before the restart, once via the actual MCP `execute_sql` tool after the restart. Both did a full `CREATE TABLE → INSERT → SELECT → UPDATE → DELETE → DROP TABLE` round trip successfully, then cleaned up. Server: MariaDB 11.8.9. Currently **0 tables** — still empty. |
 
-**Still open — needs the user's input before any real migration work starts**:
-1. What the schema should look like (mirror `public_html/ERP/database/schema.sql` /
-   `schema.prisma`, which already describe a 29-table Postgres/Prisma design for exactly this kind
-   of server move — likely the intended starting point, but not yet confirmed as such) — but note
-   this DB is MariaDB, not Postgres, so `schema.sql`/`schema.prisma` would need translating, not
-   copy-pasting.
-2. Cutover strategy: one-time import of existing browser data (whose backup JSON becomes the seed
-   — a specific user's `Settings → Backup Database` export, or `fresh-install-backup.json` for a
-   clean start?), a dual-write transition period, or a hard cutover on a chosen date.
-3. How the app talks to MySQL from the browser — there's no server backend today, so this implies
-   adding one (an API layer) as part of this change, which is a significant architecture addition
-   beyond "point the app at a different database."
-4. Whether this replaces IndexedDB entirely or supplements it (e.g. IndexedDB as offline cache,
-   MySQL as source of truth).
-
-Don't start implementing any of this without the user confirming the above — get the plan agreed
-first, then update this section and `docs/OPERATIONS.md` with the design before writing code.
+**Full migration plan, decisions needed, and step-by-step approach**: see
+`docs/MYSQL_MIGRATION_PLAN.md`. Status: **not started, documentation only** — the user has said
+this is for later. Don't start implementing any part of it (schema, API layer, data-access
+refactor) without picking this back up deliberately and confirming the open decisions in that
+doc first.
 
 ## Access this session has (granted by the user, scope = this project only)
 
@@ -268,6 +256,7 @@ locally" above — and isn't a decision the user needs to make.)
 ## Where to look for more detail
 
 - `docs/OPERATIONS.md` — full access inventory, exact commands used, and the deploy checklist.
+- `docs/MYSQL_MIGRATION_PLAN.md` — the IndexedDB → MySQL migration: decisions needed, steps, risks.
 - `scripts/deploy-erp.sh` — the recommended ERP deploy flow, runnable directly.
 - `.github/workflows/erp-build-test.yml` — CI that build+tests every relevant push.
 - `public_html/ERP/README.md` — how the ERP app itself is structured.
