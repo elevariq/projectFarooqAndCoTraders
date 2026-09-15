@@ -131,7 +131,9 @@ one.
 - Never commit credentials, `.env` files, or anything from outside
   `farooqandcotraders.online`'s own `public_html`.
 
-## Deploy checklist (once an actual change is ready)
+## Deploy checklist (superseded by `scripts/deploy-erp.sh` — see below)
+
+Manual version, for reference or for the homepage (which the script doesn't cover):
 
 1. `git status` clean, changes committed and pushed to GitHub first.
 2. Back up whatever you're about to overwrite on the server, e.g.:
@@ -141,6 +143,88 @@ one.
          /home/u943531942/domains/farooqandcotraders.online/public_html/ERP/app/index.html.bak-$(date +%Y%m%d%H%M%S)'
    ```
 3. `scp` up only the specific rebuilt/changed files — not a blind full-folder overwrite.
-4. Spot-check the live URL after deploy.
-5. Tell the user what was deployed and confirm before deploying anything that touches how
+4. Clear the Hostinger cache (`hosting_clearWebsiteCacheV1`, domain = the one you changed) — both
+   sites sit behind Hostinger's CDN, see "Architecture, confirmed" below. Skipping this step is
+   the most likely reason a deploy would appear not to have worked.
+5. Spot-check the live URL after deploy (`curl -I https://...`).
+6. Tell the user what was deployed and confirm before deploying anything that touches how
    existing users' browser data is read (schema/migration changes).
+
+## Architecture, confirmed on the server (2026-09-15)
+
+Verified directly over SSH and via Hostinger's DNS/subdomain APIs — not assumed:
+
+```
+ssh ... 'ls -la /home/u943531942/domains/'
+```
+shows exactly **one** `farooqandcotraders.online` directory — there is no separate directory for
+`erp.farooqandcotraders.online`. `hosting_listWebsiteSubdomainsV1` confirms it directly:
+```json
+{"domain":"erp.farooqandcotraders.online","parent_domain":"farooqandcotraders.online",
+ "root_directory":"/home/u943531942/domains/farooqandcotraders.online/public_html/ERP","subdomain":"erp"}
+```
+And `DNS_getDNSRecordsV1` for `farooqandcotraders.online`:
+```json
+[{"name":"www","type":"CNAME","records":[{"content":"www.farooqandcotraders.online.cdn.hstgr.net."}]},
+ {"name":"ftp","type":"A","records":[{"content":"31.97.219.57"}]},
+ {"name":"erp","type":"ALIAS","records":[{"content":"erp.farooqandcotraders.online.cdn.hstgr.net."}]},
+ {"name":"@","type":"ALIAS","records":[{"content":"farooqandcotraders.online.cdn.hstgr.net."}]}]
+```
+Both `@` (the bare domain) and `erp` resolve through Hostinger's CDN (`*.cdn.hstgr.net`), which
+routes by hostname to the correct document root on this one hosting account. **One filesystem, one
+SSH login, one git repo, two document roots.** See `CLAUDE.md` for the full directory tree and the
+practical consequences (path mistakes, CDN caching).
+
+Also found at the domain root (outside `public_html`, so not web-served):
+- `farooq-co-erp-complete-v19.zip` (1.6MB) — a full mirror of the ERP package, timestamped to
+  match the last ERP update; reads as an intentional "download everything as one file" export, not
+  stray/leaked data. Left in place.
+- `DO_NOT_UPLOAD_HERE` — an empty marker file, likely Hostinger- or user-created, warning not to
+  put site files at the domain root (use `public_html/` instead). Left in place.
+- `web/package/` — an empty directory, looks like harmless leftover clutter from an earlier
+  session. Left in place; low priority, ask before deleting anything on the server this session
+  didn't create.
+
+Live status checked directly: both `https://farooqandcotraders.online/` and
+`https://erp.farooqandcotraders.online/` return `200` with valid SSL (`curl -s -o /dev/null -w
+'%{http_code} (SSL: %{ssl_verify_result})'`). Domain registration confirmed via
+`domains_getDomainDetailsV1`: active, locked, privacy-protected, expires 2027-09-08 — nothing
+needs attention there.
+
+## Full sync verified (2026-09-15)
+
+After fixing `build.py`, `test-docx.mjs`, and `test-khata.mjs` locally (see the build-pipeline
+section above), those three files were also deployed live — they aren't executed by the running
+site, only sitting in the webroot as reference source, so this carried no runtime risk:
+
+1. Backed up the three live originals to `/home/u943531942/backups/pre-sync-<timestamp>/` on the
+   server before touching anything.
+2. `scp`'d the fixed local copies over the live ones.
+3. Verified with `md5sum` on both ends — checksums matched exactly.
+
+**Result: local, GitHub (`main`), and live are fully in sync.** No application-facing behavior
+changed on either site; only non-executed dev tooling was updated.
+
+## New tooling added this session
+
+- **`.github/workflows/erp-build-test.yml`** — GitHub Actions CI. Reconstructs the build-staging
+  area the same way a human would (see `CLAUDE.md` → "How to build the ERP locally"), runs
+  `python3 build.py`, then every `test-*.mjs` (each already `process.exit(1)`s on any failed
+  check, confirmed by reading `test-erp.mjs`'s tail — so CI actually goes red on a real failure,
+  not just a script error). Triggers on push/PR touching `erp-upgrade/` or `app/`.
+- **`scripts/deploy-erp.sh`** — implements the recommended deploy flow end-to-end for the ERP
+  subdomain: refuses to run with uncommitted changes, rebuilds, runs the full test suite and
+  aborts on any failure, backs up the live `app/` folder with a timestamp, uploads the new build,
+  reminds you to clear the CDN cache (can't call the MCP tool from bash, so this step is manual or
+  done by whichever Claude session runs the script), then curls both live URLs to confirm `200`.
+  The homepage has no build step, so it isn't included — see the one-line `scp` command in
+  `CLAUDE.md` instead.
+
+## Scope explicitly not covered this session
+
+The 30 ERP modules under `erp-upgrade/` (the actual invoice/inventory/reporting/etc. business
+logic, roughly 1MB of JS) were **not** audited for bugs. This session's "fix all" was scoped to
+the deployment/build/sync infrastructure — a well-defined, verifiable unit of work (verified by
+1,049 passing tests + checksums). Auditing the business logic itself is a materially different,
+much larger task against live financial software real people depend on, and deserves an
+explicitly scoped review of its own rather than being bundled in here on assumption.

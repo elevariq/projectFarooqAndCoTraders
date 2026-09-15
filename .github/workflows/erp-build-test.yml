@@ -1,0 +1,52 @@
+name: ERP build & test
+
+on:
+  push:
+    paths:
+      - "public_html/ERP/erp-upgrade/**"
+      - "public_html/ERP/app/**"
+  pull_request:
+    paths:
+      - "public_html/ERP/erp-upgrade/**"
+      - "public_html/ERP/app/**"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: public_html/ERP/erp-upgrade
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Reconstruct local build inputs (gitignored on purpose, see CLAUDE.md)
+        run: |
+          mkdir -p mod
+          cp [0-9]*.js mod/
+          cp ../app/farooq-co-erp.html ../app/index.html \
+             ../app/farooq-co-warehouse-pwa.html ../app/farooq-and-co-homepage.html \
+             ../app/farooq-erp-data.js .
+
+      - name: Build
+        run: python3 build.py
+
+      - name: Install test dependencies
+        run: npm install jsdom fake-indexeddb --no-save
+
+      - name: Run all test harnesses
+        run: |
+          fail=0
+          for f in test-*.mjs; do
+            echo "::group::$f"
+            node "$f" || fail=1
+            echo "::endgroup::"
+          done
+          exit $fail

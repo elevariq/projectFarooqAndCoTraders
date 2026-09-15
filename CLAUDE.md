@@ -18,6 +18,44 @@ Read `public_html/ERP/README.md` and `public_html/ERP/database/SCHEMA.md` for ho
 is built — 25+ upgrade modules injected into one original HTML file, documented per-module in that
 README.
 
+### These are NOT two separate filesystems — confirmed on the server
+
+There is exactly one `farooqandcotraders.online` folder under `/home/u943531942/domains/` — no
+second one for `erp.*`. Confirmed via `hosting_listWebsiteSubdomainsV1` and DNS:
+
+```
+/home/u943531942/domains/farooqandcotraders.online/
+├── DO_NOT_UPLOAD_HERE           (empty marker file — don't put site files at this level)
+├── farooq-co-erp-complete-v19.zip   (a full mirror of ERP/, ~1.6MB — not web-exposed, see below)
+├── web/package/                 (empty leftover directory, harmless clutter — not investigated further)
+└── public_html/                        <- document root for farooqandcotraders.online
+    ├── index.html                      <- the homepage
+    └── ERP/                            <- document root for erp.farooqandcotraders.online
+        ├── app/            (what's actually served — index.html, farooq-co-erp.html, etc.)
+        ├── erp-upgrade/    (source modules + build tooling — also web-exposed, but unlinked)
+        ├── database/, data-exports/, docs/, samples/   (reference files, also web-exposed)
+```
+
+- **DNS**: `@` and `erp` are both `ALIAS` records pointing at Hostinger's CDN
+  (`*.cdn.hstgr.net`), which routes by hostname to the right document root on this one account.
+  `erp` is not a different server or a different account — it's the same SSH login, same
+  filesystem, same git repo.
+- **Consequence for deploys**: uploading to `public_html/index.html` only affects the homepage;
+  uploading to `public_html/ERP/app/*` only affects the ERP. They're independent *document roots*
+  sharing one *account*, so a script that gets a path wrong could touch the wrong site — always
+  double-check the target path.
+- **Consequence for caching**: both sites sit behind Hostinger's CDN. After deploying, call
+  `hosting_clearWebsiteCacheV1` (or clear cache in hPanel) or the CDN can keep serving the old
+  version for a while. This is a real edge case that was previously undocumented — the deploy
+  script below handles it.
+- The `farooq-co-erp-complete-v19.zip` at the domain root (outside `public_html`, so not
+  web-served) looks like an intentional single-file "download everything" export made at the same
+  time as the last ERP update (matching timestamps) — left alone, just noted here so it isn't
+  mistaken for stray/leaked data later. The empty `web/package/` directory looks like harmless
+  leftover clutter from an earlier session; also left alone (not sensitive, not costing anything
+  meaningful, low priority to clean up — ask the user before deleting anything on the server that
+  wasn't created this session).
+
 ## Access this session has (granted by the user, scope = this project only)
 
 - **SSH**: `ssh -p 65002 u943531942@31.97.219.57` — key-based, no password needed. Full shell on
@@ -60,9 +98,24 @@ other domains/sites on this account.
    `dist/` (gitignored) instead. Verified with a full test run: **1,049 checks across all 20
    `test-*.mjs` harnesses, 0 failures**, and `git status` stays clean afterward.
 
-No changes have been made to the live site — this was all local tooling/documentation work. Live,
-local, and GitHub match as of the initial snapshot commit; GitHub additionally has the two fix
-commits above (`main` branch, pushed).
+7. Confirmed the live site's SSL and HTTP status directly (`curl -I`): both domains return `200`
+   with valid SSL. Confirmed domain registration/lock/privacy status via
+   `domains_getDomainDetailsV1`: active, locked, privacy-protected, expires 2027-09-08 — no action
+   needed there.
+8. Deployed the three harmless build-tooling fixes (`build.py`, `test-docx.mjs`, `test-khata.mjs`)
+   to the live server, **after backing up the originals** to
+   `/home/u943531942/backups/pre-sync-<timestamp>/` on the server. Verified with `md5sum` that the
+   live files now byte-match local/GitHub exactly. These files aren't executed by the live
+   website (they're dev tooling that happens to sit in the public webroot) — this deploy carries
+   zero runtime risk to either site.
+9. Added `.github/workflows/erp-build-test.yml` — GitHub Actions CI that rebuilds the ERP and runs
+   all 20 `test-*.mjs` harnesses on every push/PR touching `erp-upgrade/` or `app/`. From now on, a
+   broken module change gets caught on push, before it's ever deployed.
+10. Added `scripts/deploy-erp.sh` — the recommended deploy flow as an actual script (see below).
+
+**Current sync status: local, GitHub, and live are fully in sync** (checksums verified for
+everything changed this session). Nothing in the live application behavior changed — only
+non-executed dev tooling was updated, and only after being backed up.
 
 ## How to build the ERP locally
 
@@ -90,32 +143,54 @@ doesn't exist.
 **Never `git mv` anything into `mod/`** — it's gitignored for already-tracked files too, but
 `git mv` will force-track it anyway, which is the wrong outcome. Only plain `cp`.
 
-## Workflow for future changes (plan)
+## Recommended deployment flow (local → GitHub → live)
 
-1. **Before touching anything live**: `git pull` locally to make sure the local copy matches
-   GitHub; if there's any doubt it matches production, re-pull from the server first
-   (`scp -P 65002 -r u943531942@31.97.219.57:.../public_html .`) and diff before editing.
-2. **Make changes locally**, not directly on the server:
-   - ERP logic changes → edit the relevant module under `public_html/ERP/erp-upgrade/` (the
-     tracked root-level `.js` files, not a `mod/` copy).
-   - Reconstruct the build staging area (above) if you haven't already this session, then rebuild
-     (`python3 build.py`) and run the test harnesses.
-   - Only commit rebuilt output (`app/farooq-co-erp.html`, `app/index.html`) alongside the source
-     module changes that produced it — never hand-edit the built HTML files directly.
-3. **Commit locally with a meaningful message** describing the *why*, not just the *what* (e.g.
-   "Fix landed-cost rounding on partial receipts" not "update file"). Small, scoped commits over
-   one giant one.
-4. **Push to GitHub** (`git push`) so the private repo stays the source of truth.
-5. **Deploy to live** only after the above, and only the specific changed files — back up the
-   live version of anything you're about to overwrite first (e.g. `scp` it down to a `backups/`
-   folder, or copy it to a `.bak` alongside it on the server via SSH) so a bad deploy is instantly
-   reversible.
-6. **Never deploy schema/logic changes that break compatibility** with existing browsers'
-   IndexedDB records without going through the app's own migration path (`01-db.js`,
-   `20-integrity.js`) — there is no server data to "just fix," each user's browser is the only
-   copy of their data.
-7. Confirm with the user before anything hard-to-reverse: overwriting live files, changing DNS,
-   deleting anything, or any action outside `farooqandcotraders.online`/`erp.farooqandcotraders.online`.
+**Homepage (`farooqandcotraders.online`, just `public_html/index.html`)**: trivial, single file.
+Edit locally, commit, push, then:
+```
+scp -P 65002 public_html/index.html \
+  u943531942@31.97.219.57:/home/u943531942/domains/farooqandcotraders.online/public_html/index.html
+```
+Back up the live file first if it's not a brand-new page (`ssh ... cp index.html index.html.bak-$(date +%Y%m%d%H%M%S)`).
+
+**ERP (`erp.farooqandcotraders.online`)**: multi-file, has a build step and a test suite — use
+`scripts/deploy-erp.sh`, which implements this exact flow:
+
+1. Refuses to run if there are uncommitted local changes (commit first).
+2. Reconstructs `mod/` and the build inputs, runs `python3 build.py`.
+3. Runs every `test-*.mjs` harness; **aborts if any test fails** — nothing broken ever reaches
+   the backup/upload steps.
+4. Backs up the live `app/` folder to `/home/u943531942/backups/erp-deploy-<timestamp>/` on the
+   server before touching anything.
+5. Uploads the freshly built `dist/*` files over the live `app/` folder.
+6. Reminds you to clear the Hostinger cache (the script itself can't call the MCP tool — from a
+   Claude session, call `hosting_clearWebsiteCacheV1` for `erp.farooqandcotraders.online` right
+   after; from a plain terminal, clear it in hPanel).
+7. Curls both live URLs and prints the HTTP status so you know immediately if something's wrong.
+
+Full loop for an actual code change:
+```
+# 1. edit a module, e.g. public_html/ERP/erp-upgrade/17-profit.js
+# 2. build + test locally (see "How to build the ERP locally")
+# 3. commit with a why-focused message, referencing the module by name
+git add public_html/ERP/erp-upgrade/17-profit.js public_html/ERP/app/farooq-co-erp.html public_html/ERP/app/index.html
+git commit -m "17-profit.js: fix landed-cost rounding on partial receipts"
+git push
+# 4. deploy
+./scripts/deploy-erp.sh
+```
+
+**General rules, either site:**
+- Never edit live files directly over SSH/FTP as the primary way of making a change — edit
+  locally, build/test, commit, push, *then* deploy. The server copy is a deploy target, not a
+  workspace.
+- Never deploy schema/logic changes that break compatibility with existing browsers' IndexedDB
+  records without going through the app's own migration path (`01-db.js`, `20-integrity.js`) —
+  there is no server data to "just fix," each user's browser is the only copy of their data.
+- Confirm with the user before anything hard-to-reverse: changing DNS, deleting anything on the
+  server, or any action outside `farooqandcotraders.online`/`erp.farooqandcotraders.online`.
+- CI (`.github/workflows/erp-build-test.yml`) runs the same build+test on every push touching
+  `erp-upgrade/` or `app/` — a red check on GitHub means don't deploy that commit.
 
 ## Open items (from the ERP's own README, still unresolved)
 
@@ -131,9 +206,32 @@ doesn't exist.
 (The build-pipeline question from earlier sessions is resolved — see "How to build the ERP
 locally" above — and isn't a decision the user needs to make.)
 
+## Edge cases and improvements found this session
+
+- **CDN caching** (see architecture note above) — a deploy can appear not to have worked if the
+  cache isn't cleared after. Handled in the deploy flow now; wasn't documented before.
+- **No CI before this session** — a broken module change could previously only be caught by
+  manually remembering to run the test suite. Fixed by adding GitHub Actions CI (item 9 above).
+- **Hostinger's own automated-backup status is unverified** — hPanel has a Website → Backups
+  section (seen in the panel screenshot the user shared) but no Hostinger MCP tool exposes it for
+  inspection or scheduling. **Check this manually in hPanel** — if it's not enabled, turning it on
+  is a cheap extra safety net on top of the deploy script's own pre-deploy backups.
+- **Both domains share one filesystem/account** — documented above under architecture. The
+  practical risk is a copy/paste error in an SSH/SCP path affecting the wrong site; both deploy
+  paths are now spelled out explicitly to reduce that.
+- **`git mv` into a gitignored directory silently force-tracks it** — hit and fixed this session
+  (see `docs/OPERATIONS.md`); recorded so it isn't repeated.
+- **Business-logic bugs in the 30 ERP modules themselves** (the actual invoice/inventory/reports
+  code, ~1MB of JS) have **not** been audited in this session — that's a separate, much larger
+  piece of work on live financial software real people depend on, and deserves its own explicitly
+  scoped review rather than being bundled into an infra/deployment session. Flagged for the user
+  to decide whether/how to scope that separately.
+
 ## Where to look for more detail
 
 - `docs/OPERATIONS.md` — full access inventory, exact commands used, and the deploy checklist.
+- `scripts/deploy-erp.sh` — the recommended ERP deploy flow, runnable directly.
+- `.github/workflows/erp-build-test.yml` — CI that build+tests every relevant push.
 - `public_html/ERP/README.md` — how the ERP app itself is structured.
 - `public_html/ERP/database/SCHEMA.md` — data model.
 - `public_html/ERP/docs/FINAL_ERP_REPORT.md` — most recent prior work report.
