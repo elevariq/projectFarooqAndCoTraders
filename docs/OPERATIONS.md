@@ -65,23 +65,60 @@ branch, one commit, 88 files, matches the live server exactly as of 2026-09-15.
 `public_html/ERP/database/fresh-install-backup.json`. This is why the repo must stay **private**.
 If it's ever made public or shared, strip or `.gitignore` those paths first.
 
-## The build pipeline gap (found while documenting, not yet fixed)
+## The build pipeline — investigated and fixed (2026-09-15)
 
-`public_html/ERP/erp-upgrade/build.py` is meant to inject the 25 upgrade modules into an
-original ERP HTML file to produce `app/farooq-co-erp.html` and `app/index.html`. Reading it:
+Initial read of `erp-upgrade/build.py` looked like it was missing inputs: it reads modules from
+`erp-upgrade/mod/<name>.js` (`MODDIR = BUILD / "mod"`) and a pre-upgrade original from
+`erp-upgrade/farooq-co-erp.html`, and neither existed after the initial `scp` pull — only the
+30 module `.js` files loose at `erp-upgrade/` root and the already-built `app/*.html`.
 
-- It reads modules from `erp-upgrade/mod/<name>.js` (`MODDIR = BUILD / "mod"`).
-- It reads the pre-upgrade original from `erp-upgrade/farooq-co-erp.html`.
+**That's intentional**, not a bug: `erp-upgrade/.gitignore` explicitly ignores `mod/`, `dist/`,
+and the exact input files (`farooq-co-erp.html`, `index.html`, `farooq-co-warehouse-pwa.html`,
+`farooq-and-co-homepage.html`, `farooq-erp-data.js`). The design is: the 30 numbered module files
+at `erp-upgrade/` root are the real tracked source; `mod/` and the input files are a local,
+disposable staging area you reconstruct before building, never commit. Nobody had exercised this
+step yet on this machine, which is why it looked broken.
 
-Neither exists in what's currently live/pulled — the deployed `erp-upgrade/` folder has the 25
-module `.js` files directly in its root (not under `mod/`), and there is no unbuilt original HTML
-file alongside them (only the already-built one under `app/`).
+**Reconstructing it** (see `CLAUDE.md` → "How to build the ERP locally" for the exact commands):
+copy the 30 module files into a new `mod/` folder, copy `app/farooq-co-erp.html`, `app/index.html`,
+`app/farooq-co-warehouse-pwa.html`, `app/farooq-and-co-homepage.html`, and `app/farooq-erp-data.js`
+into `erp-upgrade/` as the build inputs, then run `python3 build.py`. Feeding it the *already-built*
+`farooq-co-erp.html` as the "original" is correct: `inject()` strips any previous upgrade payload
+(matched by an HTML comment marker) before adding a fresh one, specifically so the build is
+repeatable from the current state rather than needing a pristine pre-upgrade file to be kept
+around.
 
-**Consequence**: `python3 build.py` cannot be run as-is right now. Before any ERP logic change
-that needs a rebuild, this needs to be sorted out first — either by locating/recreating the
-missing `mod/` layout and original file, or by adjusting `build.py` to match how the modules are
-actually laid out on disk. Don't hand-edit the built `app/*.html` files as a workaround; that
-defeats the module system and will make future rebuilds overwrite manual fixes silently.
+**Pitfall hit and worth recording**: don't use `git mv` to populate `mod/`. It force-tracks the
+destination into git even though `.gitignore` covers it (gitignore only stops *new* files from
+being added, not an explicit rename of an already-tracked file) — this briefly moved all 30
+module files out of their tracked root location into the ignored `mod/` path, which would have
+untracked them. Fixed by moving them back with `git mv` and populating `mod/` with a plain `cp`
+instead, which git correctly ignores.
+
+**Three real bugs found and fixed once the build actually ran** (commit `c0de02e`):
+
+1. `build.py`'s final `print()` used a Unicode arrow (`→`) that raises `UnicodeEncodeError` on
+   Windows' default `cp1252` console encoding. The build itself had already finished successfully
+   (`dist/` was written) — the crash only hid the success message. Replaced `→` with `->`.
+2. `test-docx.mjs` wrote its output to a hardcoded `/home/claude/build/test-invoice.docx`, a path
+   from whatever environment this was last built in, which doesn't exist elsewhere. Now writes to
+   `dist/test-invoice.docx`.
+3. `test-khata.mjs` wrote its generated sample to `sample-customer-statement.docx` — the exact
+   name of a **tracked** fixture file in the same folder — so every test run silently overwrote it
+   with a byte-identical-size but different-content file (DOCX embeds a timestamp), leaving a
+   spurious binary diff in `git status` after every test run. Now writes to
+   `dist/sample-customer-statement.docx`.
+
+**Verification**: full clean rebuild (`rm -rf dist && python3 build.py`) plus all 20 `test-*.mjs`
+harnesses run in sequence: **1,049 checks total, 0 failures**, and `git status` is clean
+afterward (no more incidental file changes from running tests). `test-pwa.mjs` prints
+diagnostic-only output with no pass/fail counter by design (it boots the ERP and the warehouse PWA
+in two separate JSDOM windows that don't share `localStorage`, so "PWA product catalogue: 0
+shops: 0" is expected there, not a regression — don't mistake it for a failure).
+
+No live-server files were touched for any of this — it's entirely local build tooling. The live
+`app/*.html` already reflects a correct build; this fix is about being able to produce the *next*
+one.
 
 ## Commit message conventions for this repo
 
