@@ -10,9 +10,11 @@ GitHub: talhaazhar-ta):
 
 - **`farooqandcotraders.online`** — public homepage (`public_html/index.html`).
 - **`erp.farooqandcotraders.online`** — a subdomain pointing at `public_html/ERP`, serving a
-  **client-side-only ERP app**. No server backend, no server database. All business data
-  (invoices, customers, inventory, ledgers) lives in each browser's own IndexedDB
-  (`farooqco_erp_ledger`). The static HTML/JS files here are the *application code*, not the data.
+  **client-side-only ERP app**. No server backend. All business data (invoices, customers,
+  inventory, ledgers) lives in each browser's own IndexedDB (`farooqco_erp_ledger`). The static
+  HTML/JS files here are the *application code*, not the data. **As of 2026-09-15 a real MySQL
+  database has been provisioned for this project (see "MySQL database" below) but nothing in the
+  app currently reads or writes it — its intended role isn't defined yet.**
 
 Read `public_html/ERP/README.md` and `public_html/ERP/database/SCHEMA.md` for how the ERP itself
 is built — 25+ upgrade modules injected into one original HTML file, documented per-module in that
@@ -55,6 +57,29 @@ second one for `erp.*`. Confirmed via `hosting_listWebsiteSubdomainsV1` and DNS:
   leftover clutter from an earlier session; also left alone (not sensitive, not costing anything
   meaningful, low priority to clean up — ask the user before deleting anything on the server that
   wasn't created this session).
+
+## MySQL database (provisioned 2026-09-15, role not yet defined)
+
+A real server-side MySQL database now exists for this project, separate from the client-side
+IndexedDB the ERP currently uses:
+
+| | |
+|---|---|
+| Database / user | `u943531942_facotraders` (same name for both) |
+| Host | `srv1774.hstgr.io` : `3306` (also reachable at `82.197.82.127`) |
+| Permissions | Full: Select/Insert/Update/Delete/Create/Alter/Drop/Index/Create+Alter routine/Create+Show view/Trigger/Event/Lock tables/Execute/References/Create temporary tables |
+| Remote access whitelist | `203.215.169.140` (this machine's outbound IP) and `%` (anywhere) — set up in hPanel → Databases → Remote MySQL before this session |
+| Access from Claude Code | MCP server `dbhub-facotraders-theumairzero7@gmail.com` added to the **global** `~/.claude.json` (`@bytebase/dbhub`, same pattern as the pre-existing `dbhub-goHelp-...` entry for an unrelated project). **Not in this git repo** — it's machine-level config, and the DSN contains the password in plaintext, so it must never be copied into anything committed here. |
+| Tested | 2026-09-15: full round trip — `CREATE TABLE`, `INSERT`, `SELECT`, `UPDATE`, `DELETE`, `DROP TABLE` — all succeeded against the live database, then cleaned up. Server: MariaDB 11.8.9. Currently **0 tables** — it's empty. |
+| MCP tool availability | Config is saved correctly, but a new MCP server only loads at Claude Code startup — it won't appear as a callable tool until the next session/restart after 2026-09-15. |
+
+**Open item**: nobody has said yet what this database is *for*. The ERP's own architecture
+(README, `SCHEMA.md`) is explicitly client-side/IndexedDB-only with no server component — so this
+isn't a drop-in replacement without a real migration decision (which browser data becomes the
+source of truth, how multi-device sync would work, whether this is for something else entirely
+like a future reporting/API layer). **Don't assume a purpose and start writing app code against
+it — ask the user first.** If/when a purpose is confirmed, add the schema design and the
+migration plan here and in `docs/OPERATIONS.md` before writing to it from the app.
 
 ## Access this session has (granted by the user, scope = this project only)
 

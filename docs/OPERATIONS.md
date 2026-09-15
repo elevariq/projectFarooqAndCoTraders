@@ -228,3 +228,56 @@ the deployment/build/sync infrastructure — a well-defined, verifiable unit of 
 1,049 passing tests + checksums). Auditing the business logic itself is a materially different,
 much larger task against live financial software real people depend on, and deserves an
 explicitly scoped review of its own rather than being bundled in here on assumption.
+
+## MySQL database setup and test (2026-09-15)
+
+The user had already provisioned a database in hPanel before this session: `u943531942_facotraders`
+on `srv1774.hstgr.io`, with Remote MySQL access already whitelisted for `203.215.169.140` and `%`
+(both visible in the hPanel screenshot the user shared). Confirmed the same via
+`hosting_listAccountDatabasesV1(username="u943531942", domain="farooqandcotraders.online")`, which
+also returned the full permission set (effectively full CRUD + DDL) and confirmed `port: 3306`.
+
+**Password**: Hostinger's API never returns an existing database password, and
+`hosting_changeDatabasePasswordV1` was blocked by Claude Code's own auto-mode safety classifier
+("Secret-Store Writes") — this is a harness-level guardrail on writing credentials, independent of
+whatever access the user has verbally granted, and correctly required an explicit decision rather
+than being silently retried or worked around. Asked the user directly; they provided the existing
+password (already set outside this session, not repeated here — see `~/.claude.json`) and said not
+to change it.
+
+**MCP server added** to the user's global `~/.claude.json` (this file lives outside any git repo —
+`C:\Users\talha\.claude.json` — so there was never any risk of the password ending up in this
+project's GitHub repo). Added as a sibling entry to the pre-existing `dbhub-goHelp-...` server,
+same `@bytebase/dbhub` package, same `stdio` transport:
+
+```json
+"dbhub-facotraders-theumairzero7@gmail.com": {
+  "command": "npx",
+  "args": ["-y", "@bytebase/dbhub@latest"],
+  "transport": "stdio",
+  "env": {
+    "DSN": "mysql://u943531942_facotraders:<password, percent-encoded>@srv1774.hstgr.io:3306/u943531942_facotraders"
+  }
+}
+```
+(Actual value is in `~/.claude.json` only — not reproduced here.) The real password contains an
+`@`, which is percent-encoded (`%40`) in the DSN so it isn't parsed as the user/host separator —
+same pattern already used in the pre-existing `dbhub-goHelp-...` entry for its own `@`-containing
+password.
+
+Validated `~/.claude.json` was still well-formed JSON after the edit (`python3 -c "import json;
+json.load(...)"` → `VALID JSON`).
+
+**Live test** (this MCP server won't be loaded as a tool until the next Claude Code session
+restart, so testing right now meant connecting directly rather than through the not-yet-loaded
+`dbhub` tool): installed `mysql2` in the scratchpad directory and ran a full round trip —
+`CREATE TABLE _claude_access_test`, `INSERT`, `SELECT`, `UPDATE`, `DELETE`, `DROP TABLE` — all
+succeeded, then the test table was dropped so the database is back to exactly how it started (0
+tables). Server reported: MariaDB `11.8.9-MariaDB-log`, connected as
+`u943531942_facotraders@203.215.169.140` — confirming the whitelisted IP is what's actually being
+used from this machine.
+
+**What this database is for is not yet defined.** The ERP is explicitly client-side/IndexedDB-only
+by design (see `README.md`, `SCHEMA.md`) — this new database doesn't have an assigned role in that
+architecture yet. Don't start writing application code against it on assumption; get the intended
+purpose from the user first (see `CLAUDE.md` → "MySQL database" for the open item).
