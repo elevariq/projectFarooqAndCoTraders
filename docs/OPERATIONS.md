@@ -281,3 +281,21 @@ used from this machine.
 by design (see `README.md`, `SCHEMA.md`) — this new database doesn't have an assigned role in that
 architecture yet. Don't start writing application code against it on assumption; get the intended
 purpose from the user first (see `CLAUDE.md` → "MySQL database" for the open item).
+
+## MySQL database — purpose confirmed, MCP tool verified post-restart (same day, 2026-09-15)
+
+After a Claude Code session restart (needed for a newly-added MCP server config to load), the
+user confirmed the database's purpose directly: **it will later replace the client-side IndexedDB
+storage** ("this db will be used later instead of file db"). No migration has happened and no
+migration plan exists yet — this is a stated future direction, not an instruction to start moving
+data now. See `CLAUDE.md` → "MySQL database" for the specific open questions (schema translation
+from the existing Postgres/Prisma design to MariaDB, cutover strategy, and the fact that talking
+to MySQL from a purely client-side app implies adding a server/API layer that doesn't exist today).
+
+Verified the MCP tool itself works, not just the config: called
+`mcp__dbhub-facotraders-theumairzero7_gmail_com__execute_sql` for `SELECT DATABASE(), VERSION(),
+CURRENT_USER(), NOW()` (got back `u943531942_facotraders`, `11.8.9-MariaDB-log`,
+`u943531942_facotraders@203.215.169.140`), then `search_objects(object_type="table")` (0 results —
+still empty), then a second full CRUD round trip (`CREATE TABLE _claude_mcp_test`, `INSERT`,
+`SELECT`, `UPDATE`, `SELECT`, `DELETE`, `DROP TABLE`) as a single multi-statement `execute_sql`
+call — all seven statements succeeded, table cleaned up, database back to 0 tables.
