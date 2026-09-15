@@ -1,0 +1,367 @@
+{
+  "database": "farooqco_erp_ledger",
+  "version": 3,
+  "engine": "IndexedDB",
+  "generatedAt": "2026-09-13T17:36:54.696Z",
+  "stores": {
+    "meta": {
+      "records": 7,
+      "fields": [
+        "k",
+        "v"
+      ]
+    },
+    "sequences": {
+      "records": 0,
+      "fields": []
+    },
+    "business": {
+      "records": 1,
+      "fields": [
+        "id",
+        "businessName",
+        "legalName",
+        "tagline",
+        "taglineUr",
+        "slogan",
+        "logoText",
+        "logoDataUrl",
+        "address",
+        "city",
+        "phone",
+        "shopPhone",
+        "whatsapp",
+        "email",
+        "website",
+        "ntn",
+        "registrationNo",
+        "proprietor",
+        "invoicePrefix",
+        "purchasePrefix",
+        "receiptPrefix",
+        "orderPrefix",
+        "dispatchPrefix",
+        "currency",
+        "currencyLabel",
+        "taxEnabled",
+        "defaultTaxRate",
+        "allowNegativeStock",
+        "defaultDueDays",
+        "invoiceFooter",
+        "terms",
+        "bankDetails",
+        "preparedByLabel",
+        "receivedByLabel",
+        "smsProvider",
+        "smsSenderId",
+        "whatsappProvider",
+        "updatedAt",
+        "invoiceTemplate",
+        "salesDocPrefix",
+        "invoiceExportFlow",
+        "costingMethod",
+        "profitCostBasis",
+        "lowMarginWarnPct",
+        "allowSaleBelowCost",
+        "warnBelowMinPrice",
+        "showProfitToStaff",
+        "priceApproval",
+        "priceReasonRequired",
+        "allowSellBelowCost",
+        "showProfitToSales",
+        "lowStockAlerts",
+        "defaultReorderLevel",
+        "adjustmentApproval",
+        "transferApproval",
+        "defaultPaymentTermDays",
+        "defaultCreditLimit",
+        "maxDiscountPct",
+        "supplierPaymentTermDays",
+        "purchaseApproval",
+        "notifyLowStock",
+        "notifyPaymentReceived",
+        "notifyInvoiceCreated",
+        "notifyPaymentReminder",
+        "notifyReturnApproved",
+        "autoBackup",
+        "lastAutoBackupAt",
+        "categories",
+        "brands",
+        "units",
+        "allowSelfApproval",
+        "requirePinOnSwitch"
+      ]
+    },
+    "warehouses": {
+      "records": 3,
+      "fields": [
+        "id",
+        "name",
+        "active"
+      ]
+    },
+    "regions": {
+      "records": 8,
+      "fields": [
+        "id",
+        "ur",
+        "en",
+        "active",
+        "routes"
+      ]
+    },
+    "products": {
+      "records": 136,
+      "fields": [
+        "id",
+        "sourceCode",
+        "sourceFolio",
+        "name",
+        "ur",
+        "en",
+        "kg",
+        "normalizedName",
+        "nameEn",
+        "searchAliases",
+        "category",
+        "categoryRaw",
+        "productType",
+        "cat",
+        "weightKg",
+        "unit",
+        "catalogListedValue",
+        "catalogValueIsNull",
+        "priceTypeConfirmed",
+        "priceConfirmed",
+        "zeroListedValue",
+        "brand",
+        "brandEn",
+        "supplierIds",
+        "supplier",
+        "sku",
+        "barcode",
+        "buy",
+        "sell",
+        "min",
+        "active",
+        "needsReview",
+        "reviewReason",
+        "duplicateCandidate",
+        "categoryNeedsReview",
+        "sourceFile",
+        "sourcePage"
+      ]
+    },
+    "customers": {
+      "records": 409,
+      "fields": [
+        "id",
+        "legacyCode",
+        "sh",
+        "ow",
+        "nameUr",
+        "ph",
+        "wa",
+        "addr",
+        "region",
+        "regionAssumed",
+        "area",
+        "areaEn",
+        "route",
+        "isCashCounter",
+        "alsoInFiles",
+        "bal",
+        "tot",
+        "ord",
+        "bagsOut",
+        "lim",
+        "term",
+        "last",
+        "legacyTotalSales",
+        "legacyTotalCollection",
+        "legacyBalanceSigned",
+        "active",
+        "needsReview",
+        "reviewReason",
+        "possibleDuplicate",
+        "sourceFile"
+      ]
+    },
+    "suppliers": {
+      "records": 32,
+      "fields": [
+        "id",
+        "legacyCode",
+        "co",
+        "nameUr",
+        "cp",
+        "ph",
+        "wa",
+        "lo",
+        "notes",
+        "categoryInferred",
+        "localityClue",
+        "prods",
+        "paid",
+        "due",
+        "last",
+        "legacyTotalSales",
+        "legacyTotalCollection",
+        "legacyBalanceSigned",
+        "active",
+        "needsReview",
+        "reviewReason",
+        "accountTypeReview",
+        "sourceFile"
+      ]
+    },
+    "inventory": {
+      "records": 0,
+      "fields": []
+    },
+    "stockMovements": {
+      "records": 0,
+      "fields": []
+    },
+    "invoices": {
+      "records": 0,
+      "fields": []
+    },
+    "invoiceItems": {
+      "records": 0,
+      "fields": []
+    },
+    "purchases": {
+      "records": 0,
+      "fields": []
+    },
+    "purchaseItems": {
+      "records": 0,
+      "fields": []
+    },
+    "payments": {
+      "records": 0,
+      "fields": []
+    },
+    "paymentAllocations": {
+      "records": 0,
+      "fields": []
+    },
+    "customerReturns": {
+      "records": 0,
+      "fields": []
+    },
+    "customerReturnItems": {
+      "records": 0,
+      "fields": []
+    },
+    "supplierReturns": {
+      "records": 0,
+      "fields": []
+    },
+    "supplierReturnItems": {
+      "records": 0,
+      "fields": []
+    },
+    "orders": {
+      "records": 0,
+      "fields": []
+    },
+    "orderItems": {
+      "records": 0,
+      "fields": []
+    },
+    "stockDocs": {
+      "records": 0,
+      "fields": []
+    },
+    "stockDocItems": {
+      "records": 0,
+      "fields": []
+    },
+    "migrationBackups": {
+      "records": 1,
+      "fields": [
+        "id",
+        "createdAt",
+        "reason",
+        "checksum",
+        "counts",
+        "source"
+      ]
+    },
+    "operations": {
+      "records": 0,
+      "fields": []
+    },
+    "documentEdits": {
+      "records": 0,
+      "fields": []
+    },
+    "supplierProducts": {
+      "records": 0,
+      "fields": []
+    },
+    "priceHistory": {
+      "records": 0,
+      "fields": []
+    },
+    "priceApprovals": {
+      "records": 0,
+      "fields": []
+    },
+    "costHistory": {
+      "records": 0,
+      "fields": []
+    },
+    "users": {
+      "records": 0,
+      "fields": []
+    },
+    "salesmen": {
+      "records": 0,
+      "fields": []
+    },
+    "accountAdjustments": {
+      "records": 0,
+      "fields": []
+    },
+    "expenses": {
+      "records": 0,
+      "fields": []
+    },
+    "documents": {
+      "records": 0,
+      "fields": []
+    },
+    "auditLog": {
+      "records": 2,
+      "fields": [
+        "id",
+        "createdAt",
+        "date",
+        "userId",
+        "action",
+        "entity",
+        "entityId",
+        "ref",
+        "oldValues",
+        "newValues",
+        "reason",
+        "userName",
+        "userRole"
+      ]
+    },
+    "syncQueue": {
+      "records": 0,
+      "fields": []
+    },
+    "legacy": {
+      "records": 9,
+      "fields": [
+        "k",
+        "v"
+      ]
+    }
+  }
+}

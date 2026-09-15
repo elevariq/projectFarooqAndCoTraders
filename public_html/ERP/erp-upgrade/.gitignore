@@ -1,0 +1,11 @@
+mod/
+dist/
+node_modules/
+package.json
+package-lock.json
+farooq-co-erp.html
+index.html
+farooq-co-warehouse-pwa.html
+farooq-and-co-homepage.html
+farooq-erp-data.js
+out-*

@@ -1,0 +1,787 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// Farooq & Co Traders ERP — Prisma schema
+//
+// The same relational design the client database uses, for the day the ERP
+// moves onto a server. Money is stored as BigInt paisa rather than a float or
+// a Decimal string, matching the client exactly: divide by 100 for rupees.
+// Quantities are Decimal because bags are occasionally counted in fractions.
+// ═══════════════════════════════════════════════════════════════════════════
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  CONFIRMED
+  DISPATCHED
+  PARTIALLY_PAID
+  PAID
+  CANCELLED
+  RETURNED
+  PARTIALLY_RETURNED
+}
+
+enum PaymentState {
+  UNPAID
+  PARTIAL
+  PAID
+}
+
+enum PaymentDirection {
+  IN
+  OUT
+}
+
+enum PartyType {
+  CUSTOMER
+  SUPPLIER
+}
+
+enum ReturnCondition {
+  SELLABLE
+  DAMAGED
+  DEFECTIVE
+  WRONG_ITEM
+  EXPIRED
+  OTHER
+}
+
+enum ReturnTreatment {
+  ADJUST_OUTSTANDING_BALANCE
+  CUSTOMER_CREDIT
+  REFUND
+  REPLACEMENT
+}
+
+enum StockDocType {
+  TRANSFER
+  RECEIVE
+  ADJUST
+  DISPATCH
+}
+
+enum MovementKind {
+  OPENING_STOCK
+  PURCHASE_IN
+  SALE_OUT
+  CUSTOMER_RETURN_IN
+  CUSTOMER_RETURN_DAMAGED_IN
+  SUPPLIER_RETURN_OUT
+  TRANSFER_IN
+  TRANSFER_OUT
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+  SALE_REVERSAL_IN
+  PURCHASE_REVERSAL_OUT
+  REPLACEMENT_OUT
+  SUPPLIER_REPLACEMENT_IN
+  STOCK_WRITE_OFF
+  DISPATCH_OUT
+}
+
+model BusinessSettings {
+  id                String   @id @default("business")
+  businessName      String
+  legalName         String?
+  tagline           String?
+  taglineUr         String?
+  slogan            String?
+  address           String?
+  city              String?
+  phone             String?
+  shopPhone         String?
+  whatsapp          String?
+  email             String?
+  website           String?
+  ntn               String?
+  registrationNo    String?
+  invoicePrefix     String   @default("INV")
+  purchasePrefix    String   @default("PUR")
+  receiptPrefix     String   @default("REC")
+  salesDocPrefix    String   @default("SLV")
+  currencyLabel     String   @default("PKR")
+  invoiceTemplate   String   @default("classic")
+  invoiceExportFlow String   @default("ask")
+  allowNegativeStock Boolean @default(false)
+  taxEnabled        Boolean  @default(false)
+  defaultTaxRate    Decimal  @default(0) @db.Decimal(6, 3)
+  invoiceFooter     String?
+  terms             String?
+  bankDetails       String?
+  updatedAt         DateTime @updatedAt
+}
+
+model Warehouse {
+  id         String  @id
+  name       String
+  active     Boolean @default(true)
+
+  inventory      Inventory[]
+  movements      StockMovement[]
+  invoices       Invoice[]
+  purchases      Purchase[]
+  orders         Order[]
+  stockDocsFrom  StockDoc[]      @relation("DocFrom")
+  stockDocsTo    StockDoc[]      @relation("DocTo")
+}
+
+model Region {
+  id      String     @id
+  nameUr  String?
+  nameEn  String?
+  active  Boolean    @default(true)
+  customers Customer[]
+  invoices  Invoice[]
+}
+
+model Product {
+  id                   String   @id
+  nameUr               String?
+  nameEn               String?
+  brand                String?
+  brandEn              String?
+  category             String?
+  productType          String?
+  bagKg                Decimal? @db.Decimal(8, 2)
+  sku                  String?
+  sourceFolio          String?
+  /// the catalogue "Size !" column — a listed figure, never treated as a price
+  catalogueListedValue BigInt?
+  priceConfirmed       Boolean  @default(false)
+  buyPrice             BigInt?
+  sellPrice            BigInt?
+  minLevel             Decimal? @db.Decimal(12, 3)
+  active               Boolean  @default(true)
+  needsReview          Boolean  @default(false)
+  duplicateCandidate   Boolean  @default(false)
+
+  inventory     Inventory[]
+  movements     StockMovement[]
+  invoiceItems  InvoiceItem[]
+  purchaseItems PurchaseItem[]
+  orderItems    OrderItem[]
+
+  @@index([category])
+  @@index([active])
+}
+
+model Customer {
+  id                    String    @id
+  legacyCode            String?
+  shopName              String
+  ownerName             String?
+  nameUr                String?
+  phone                 String?
+  whatsapp              String?
+  address               String?
+  area                  String?
+  route                 String?
+  regionId              String?
+  region                Region?   @relation(fields: [regionId], references: [id])
+  regionAssumed         Boolean   @default(false)
+  isCashCounter         Boolean   @default(false)
+  creditLimit           BigInt?
+  openingBalance        BigInt    @default(0)
+  openingBalanceDate    DateTime?
+  legacyTotalSales      BigInt?
+  legacyTotalCollection BigInt?
+  legacyBalanceSigned   BigInt?
+  needsReview           Boolean   @default(false)
+  active                Boolean   @default(true)
+
+  invoices  Invoice[]
+  orders    Order[]
+  returns   CustomerReturn[]
+  stockDocs StockDoc[]
+
+  @@index([regionId])
+  @@index([legacyCode])
+}
+
+model Supplier {
+  id                    String   @id
+  legacyCode            String?
+  company               String
+  contactPerson         String?
+  phone                 String?
+  whatsapp              String?
+  location              String?
+  openingBalance        BigInt   @default(0)
+  legacyTotalSales      BigInt?
+  legacyTotalCollection BigInt?
+  legacyBalanceSigned   BigInt?
+  needsReview           Boolean  @default(false)
+  active                Boolean  @default(true)
+
+  purchases Purchase[]
+  returns   SupplierReturn[]
+}
+
+/// Document numbers are issued from here inside the same transaction that
+/// writes the record, so two users cannot take the same number.
+model Sequence {
+  kind      String
+  year      Int
+  n         BigInt   @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@id([kind, year])
+}
+
+/// One row per logical operation. A repeated submission — double click,
+/// retry, replayed offline queue — fails the unique key and is refused.
+model Operation {
+  opId      String   @id
+  entity    String?
+  entityId  String?
+  ref       String?
+  state     String   @default("applied")
+  createdAt DateTime @default(now())
+}
+
+model Order {
+  id             String      @id
+  orderNumber    String      @unique
+  kind           String      @default("ORDER")
+  clientOpId     String?
+  revision       Int         @default(0)
+  customerId     String
+  customer       Customer    @relation(fields: [customerId], references: [id])
+  warehouseId    String
+  warehouse      Warehouse   @relation(fields: [warehouseId], references: [id])
+  orderDate      DateTime
+  deliveryDate   DateTime?
+  validUntil     DateTime?
+  salesperson    String?
+  subtotal       BigInt      @default(0)
+  discountAmount BigInt      @default(0)
+  taxAmount      BigInt      @default(0)
+  freightAmount  BigInt      @default(0)
+  loadingAmount  BigInt      @default(0)
+  otherCharges   BigInt      @default(0)
+  grandTotal     BigInt      @default(0)
+  totalQty       Decimal     @default(0) @db.Decimal(14, 3)
+  lineCount      Int         @default(0)
+  status         String      @default("CONFIRMED")
+  invoiceId      String?
+  notes          String?
+  createdBy      String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  items    OrderItem[]
+  invoices Invoice[]
+
+  @@index([customerId])
+  @@index([orderDate])
+}
+
+model OrderItem {
+  id            String    @id
+  orderId       String
+  order         Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  sortOrder     Int       @default(0)
+  productId     String
+  product       Product   @relation(fields: [productId], references: [id])
+  descriptionUr String?
+  descriptionEn String?
+  brand         String?
+  package       String?
+  quantity      Decimal   @db.Decimal(14, 3)
+  unit          String    @default("Bag")
+  unitPrice     BigInt
+  discount      BigInt    @default(0)
+  tax           BigInt    @default(0)
+  lineTotal     BigInt
+  warehouseId   String?
+  deliveredQty  Decimal   @default(0) @db.Decimal(14, 3)
+  notes         String?
+
+  @@index([orderId])
+}
+
+model Invoice {
+  id                   String        @id
+  /// null only while the invoice is a draft; never reused once issued
+  invoiceNumber        String?       @unique
+  clientOpId           String?
+  revision             Int           @default(0)
+  invoiceType          String        @default("SALE")
+  saleOrderId          String?
+  saleOrder            Order?        @relation(fields: [saleOrderId], references: [id])
+  orderNumber          String?
+  dispatchNumber       String?
+  customerId           String
+  customer             Customer      @relation(fields: [customerId], references: [id])
+  customerCodeSnapshot String?
+  customerNameSnapshot String?
+  shopNameSnapshot     String?
+  mobileSnapshot       String?
+  addressSnapshot      String?
+  regionId             String?
+  region               Region?       @relation(fields: [regionId], references: [id])
+  regionSnapshot       String?
+  marketSnapshot       String?
+  warehouseId          String
+  warehouse            Warehouse     @relation(fields: [warehouseId], references: [id])
+  warehouseSnapshot    String?
+  salesperson          String?
+  invoiceDate          DateTime
+  dueDate              DateTime?
+  subtotal             BigInt        @default(0)
+  itemDiscounts        BigInt        @default(0)
+  invoiceDiscount      BigInt        @default(0)
+  discountAmount       BigInt        @default(0)
+  taxAmount            BigInt        @default(0)
+  freightAmount        BigInt        @default(0)
+  loadingAmount        BigInt        @default(0)
+  otherCharges         BigInt        @default(0)
+  grandTotal           BigInt        @default(0)
+  paidAmount           BigInt        @default(0)
+  balanceAmount        BigInt        @default(0)
+  previousBalance      BigInt        @default(0)
+  paymentStatus        PaymentState  @default(UNPAID)
+  paymentMethod        String?
+  referenceNo          String?
+  status               InvoiceStatus @default(CONFIRMED)
+  stockApplied         Boolean       @default(false)
+  totalQty             Decimal       @default(0) @db.Decimal(14, 3)
+  lineCount            Int           @default(0)
+  notes                String?
+  createdBy            String?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  confirmedAt          DateTime?
+  cancelledAt          DateTime?
+  cancelReason         String?
+
+  items       InvoiceItem[]
+  allocations PaymentAllocation[]
+  returns     CustomerReturn[]
+  stockDocs   StockDoc[]
+
+  @@index([customerId])
+  @@index([invoiceDate])
+  @@index([status])
+  @@index([warehouseId])
+  @@index([regionId])
+}
+
+model InvoiceItem {
+  id               String   @id
+  invoiceId        String
+  invoice          Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  sortOrder        Int      @default(0)
+  productId        String
+  product          Product  @relation(fields: [productId], references: [id])
+  /// snapshots keep an old invoice truthful after a rename or a price change
+  descriptionUr    String?
+  descriptionEn    String?
+  brandSnapshot    String?
+  categorySnapshot String?
+  packageSnapshot  String?
+  skuSnapshot      String?
+  unit             String   @default("Bag")
+  quantity         Decimal  @db.Decimal(14, 3)
+  unitPrice        BigInt
+  discount         BigInt   @default(0)
+  tax              BigInt   @default(0)
+  lineTotal        BigInt
+  /// the cost on the day, so historical profit never moves
+  costSnapshot     BigInt   @default(0)
+  warehouseId      String
+  batchNo          String?
+  returnedQty      Decimal  @default(0) @db.Decimal(14, 3)
+  notes            String?
+
+  returnItems CustomerReturnItem[]
+
+  @@index([invoiceId])
+  @@index([productId])
+}
+
+model Purchase {
+  id                   String       @id
+  purchaseNumber       String       @unique
+  clientOpId           String?
+  revision             Int          @default(0)
+  supplierId           String
+  supplier             Supplier     @relation(fields: [supplierId], references: [id])
+  supplierNameSnapshot String?
+  supplierInvoiceNo    String?
+  warehouseId          String
+  warehouse            Warehouse    @relation(fields: [warehouseId], references: [id])
+  warehouseSnapshot    String?
+  purchaseDate         DateTime
+  vehicleNo            String?
+  driver               String?
+  deliveryRef          String?
+  subtotal             BigInt       @default(0)
+  discountAmount       BigInt       @default(0)
+  taxAmount            BigInt       @default(0)
+  freightAmount        BigInt       @default(0)
+  loadingAmount        BigInt       @default(0)
+  otherCharges         BigInt       @default(0)
+  grandTotal           BigInt       @default(0)
+  paidAmount           BigInt       @default(0)
+  balanceAmount        BigInt       @default(0)
+  paymentStatus        PaymentState @default(UNPAID)
+  status               String       @default("RECEIVED")
+  orderedQty           Decimal      @default(0) @db.Decimal(14, 3)
+  receivedQty          Decimal      @default(0) @db.Decimal(14, 3)
+  totalQty             Decimal      @default(0) @db.Decimal(14, 3)
+  lineCount            Int          @default(0)
+  stockApplied         Boolean      @default(false)
+  notes                String?
+  createdBy            String?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  items       PurchaseItem[]
+  allocations PaymentAllocation[]
+  returns     SupplierReturn[]
+
+  @@index([supplierId])
+  @@index([purchaseDate])
+}
+
+model PurchaseItem {
+  id              String   @id
+  purchaseId      String
+  purchase        Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  sortOrder       Int      @default(0)
+  productId       String
+  product         Product  @relation(fields: [productId], references: [id])
+  descriptionUr   String?
+  descriptionEn   String?
+  brandSnapshot   String?
+  packageSnapshot String?
+  quantity        Decimal  @db.Decimal(14, 3)
+  /// ordered and received differ while a delivery is still outstanding
+  orderedQty      Decimal  @default(0) @db.Decimal(14, 3)
+  receivedQty     Decimal  @default(0) @db.Decimal(14, 3)
+  unit            String   @default("Bag")
+  unitPrice       BigInt
+  discount        BigInt   @default(0)
+  tax             BigInt   @default(0)
+  lineTotal       BigInt
+  warehouseId     String
+  batchNo         String?
+  returnedQty     Decimal  @default(0) @db.Decimal(14, 3)
+  notes           String?
+
+  returnItems SupplierReturnItem[]
+
+  @@index([purchaseId])
+}
+
+model Payment {
+  id                String           @id
+  receiptNumber     String           @unique
+  direction         PaymentDirection
+  partyType         PartyType
+  partyId           String
+  partyNameSnapshot String?
+  regionSnapshot    String?
+  amount            BigInt
+  method            String
+  reference         String?
+  paymentDate       DateTime
+  note              String?
+  isRefund          Boolean          @default(false)
+  balanceBefore     BigInt?
+  balanceAfter      BigInt?
+  status            String           @default("POSTED")
+  reversedAt        DateTime?
+  reverseReason     String?
+  receivedBy        String?
+  createdBy         String?
+  createdAt         DateTime         @default(now())
+
+  allocations PaymentAllocation[]
+
+  @@index([partyId])
+  @@index([paymentDate])
+}
+
+model PaymentAllocation {
+  id         String    @id
+  paymentId  String
+  payment    Payment   @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoiceId  String?
+  invoice    Invoice?  @relation(fields: [invoiceId], references: [id])
+  purchaseId String?
+  purchase   Purchase? @relation(fields: [purchaseId], references: [id])
+  amount     BigInt
+  createdAt  DateTime  @default(now())
+
+  @@index([paymentId])
+  @@index([invoiceId])
+}
+
+model Expense {
+  id            String   @id
+  expenseNumber String   @unique
+  clientOpId    String?
+  expenseDate   DateTime
+  category      String
+  description   String?
+  paidTo        String?
+  amount        BigInt
+  method        String   @default("Cash")
+  reference     String?
+  warehouseId   String?
+  createdBy     String?
+  createdAt     DateTime @default(now())
+
+  @@index([expenseDate])
+  @@index([category])
+}
+
+model CustomerReturn {
+  id                   String          @id
+  returnNumber         String          @unique
+  clientOpId           String?
+  invoiceId            String
+  invoice              Invoice         @relation(fields: [invoiceId], references: [id])
+  invoiceNumber        String?
+  customerId           String
+  customer             Customer        @relation(fields: [customerId], references: [id])
+  customerNameSnapshot String?
+  regionSnapshot       String?
+  warehouseId          String
+  returnDate           DateTime
+  reason               String?
+  treatment            ReturnTreatment @default(ADJUST_OUTSTANDING_BALANCE)
+  creditAmount         BigInt          @default(0)
+  replacementValue     BigInt          @default(0)
+  totalQty             Decimal         @default(0) @db.Decimal(14, 3)
+  lineCount            Int             @default(0)
+  status               String          @default("POSTED")
+  notes                String?
+  createdBy            String?
+  createdAt            DateTime        @default(now())
+
+  items CustomerReturnItem[]
+
+  @@index([invoiceId])
+  @@index([customerId])
+}
+
+model CustomerReturnItem {
+  id              String          @id
+  returnId        String
+  parent          CustomerReturn  @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  invoiceItemId   String
+  invoiceItem     InvoiceItem     @relation(fields: [invoiceItemId], references: [id])
+  productId       String
+  descriptionUr   String?
+  descriptionEn   String?
+  packageSnapshot String?
+  quantity        Decimal         @db.Decimal(14, 3)
+  /// valued at the rate charged on the original invoice
+  unitPrice       BigInt
+  lineTotal       BigInt
+  condition       ReturnCondition @default(SELLABLE)
+  sellable        Boolean         @default(true)
+  reason          String?
+  warehouseId     String
+  sortOrder       Int             @default(0)
+
+  @@index([returnId])
+}
+
+model SupplierReturn {
+  id                   String    @id
+  returnNumber         String    @unique
+  clientOpId           String?
+  supplierId           String
+  supplier             Supplier  @relation(fields: [supplierId], references: [id])
+  supplierNameSnapshot String?
+  purchaseId           String?
+  purchase             Purchase? @relation(fields: [purchaseId], references: [id])
+  purchaseNumber       String?
+  warehouseId          String
+  returnDate           DateTime
+  reason               String?
+  debitAmount          BigInt    @default(0)
+  totalQty             Decimal   @default(0) @db.Decimal(14, 3)
+  lineCount            Int       @default(0)
+  expectReplacement    Boolean   @default(false)
+  replacementReceived  Boolean   @default(false)
+  status               String    @default("POSTED")
+  notes                String?
+  createdBy            String?
+  createdAt            DateTime  @default(now())
+
+  items SupplierReturnItem[]
+}
+
+model SupplierReturnItem {
+  id              String         @id
+  returnId        String
+  parent          SupplierReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  purchaseItemId  String?
+  purchaseItem    PurchaseItem?  @relation(fields: [purchaseItemId], references: [id])
+  productId       String
+  descriptionUr   String?
+  descriptionEn   String?
+  packageSnapshot String?
+  quantity        Decimal        @db.Decimal(14, 3)
+  unitPrice       BigInt
+  lineTotal       BigInt
+  fromDamaged     Boolean        @default(false)
+  reason          String?
+  warehouseId     String
+  sortOrder       Int            @default(0)
+}
+
+model StockDoc {
+  id              String       @id
+  docNumber       String       @unique
+  type            StockDocType
+  clientOpId      String?
+  docDate         DateTime
+  warehouseId     String
+  warehouse       Warehouse    @relation("DocFrom", fields: [warehouseId], references: [id])
+  toWarehouseId   String?
+  toWarehouse     Warehouse?   @relation("DocTo", fields: [toWarehouseId], references: [id])
+  customerId      String?
+  customer        Customer?    @relation(fields: [customerId], references: [id])
+  invoiceId       String?
+  invoice         Invoice?     @relation(fields: [invoiceId], references: [id])
+  /// false when the invoice already took the bags out — stock is never
+  /// deducted twice for the same load
+  stockApplied    Boolean      @default(true)
+  vehicleNo       String?
+  driver          String?
+  reason          String?
+  notes           String?
+  totalQty        Decimal      @default(0) @db.Decimal(14, 3)
+  lineCount       Int          @default(0)
+  status          String       @default("POSTED")
+  createdBy       String?
+  createdAt       DateTime     @default(now())
+
+  items StockDocItem[]
+
+  @@index([type])
+  @@index([docDate])
+}
+
+model StockDocItem {
+  id              String   @id
+  docId           String
+  doc             StockDoc @relation(fields: [docId], references: [id], onDelete: Cascade)
+  sortOrder       Int      @default(0)
+  productId       String
+  descriptionUr   String?
+  descriptionEn   String?
+  packageSnapshot String?
+  quantity        Decimal  @db.Decimal(14, 3)
+  direction       String   @default("OUT")
+  warehouseId     String
+  toWarehouseId   String?
+  fromDamaged     Boolean  @default(false)
+  unitCost        BigInt?
+  reason          String?
+  batchNo         String?
+  notes           String?
+
+  @@index([docId])
+}
+
+model Inventory {
+  productId   String
+  product     Product   @relation(fields: [productId], references: [id])
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  qty         Decimal   @default(0) @db.Decimal(14, 3)
+  /// damaged bags are held apart so they can never be sold by mistake
+  damagedQty  Decimal   @default(0) @db.Decimal(14, 3)
+  avgCost     BigInt    @default(0)
+
+  @@id([productId, warehouseId])
+}
+
+model StockMovement {
+  id           String       @id
+  productId    String
+  product      Product      @relation(fields: [productId], references: [id])
+  warehouseId  String
+  warehouse    Warehouse    @relation(fields: [warehouseId], references: [id])
+  kind         MovementKind
+  qtyDelta     Decimal      @db.Decimal(14, 3)
+  bucket       String       @default("stock")
+  balanceAfter Decimal      @db.Decimal(14, 3)
+  ref          String?
+  refType      String?
+  note         String?
+  unitCost     BigInt?
+  movementDate DateTime
+  userId       String?
+  createdAt    DateTime     @default(now())
+
+  @@index([productId])
+  @@index([warehouseId])
+  @@index([movementDate])
+  @@index([ref])
+}
+
+/// Hand edits made to a document before printing. They are the document from
+/// then on — nothing regenerates over them — and they never touch the record.
+model DocumentEdit {
+  id        String   @id
+  entity    String
+  entityId  String
+  fields    Json     @default("{}")
+  rows      Json     @default("{}")
+  removed   Json     @default("[]")
+  extraRows Json     @default("[]")
+  charges   Json     @default("[]")
+  notes     String?
+  revisions Json     @default("[]")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([entityId])
+}
+
+model IssuedDocument {
+  no        String   @id
+  kind      String?
+  entityId  String?
+  payload   Json?
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id
+  userId    String?
+  action    String
+  entity    String?
+  entityId  String?
+  ref       String?
+  oldValues Json?
+  newValues Json?
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
+
+model SyncOperation {
+  opId      String   @id
+  entity    String?
+  entityId  String?
+  state     String   @default("pending")
+  payload   Json?
+  createdAt DateTime @default(now())
+}

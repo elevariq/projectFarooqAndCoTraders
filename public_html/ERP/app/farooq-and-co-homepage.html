@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Farooq &amp; Co Traders — Wholesale Rice &amp; Flour Traders, Dealers &amp; Suppliers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Inter:wght@400;500;600&family=Noto+Nastaliq+Urdu:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --black:#111111;
+    --white:#FFFFFF;
+    --soft:#F7F7F7;
+    --muted:#666666;
+    --border:#E5E5E5;
+    --radius:22px;
+    --wrap:1180px;
+  }
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0;
+    background:var(--white);
+    color:var(--black);
+    font-family:'Inter', sans-serif;
+    -webkit-font-smoothing:antialiased;
+    line-height:1.55;
+  }
+  h1,h2,h3,.wordmark{
+    font-family:'Manrope', sans-serif;
+    margin:0;
+    letter-spacing:-0.02em;
+  }
+  .urdu{
+    font-family:'Noto Nastaliq Urdu', serif;
+    direction:rtl;
+    line-height:2;
+  }
+  a{color:inherit; text-decoration:none;}
+  img{max-width:100%; display:block;}
+  .wrap{max-width:var(--wrap); margin:0 auto; padding:0 32px;}
+  .hairline{height:1px; background:var(--border); border:none; margin:0;}
+  .dotted{
+    border-bottom:1px dotted #b9b9b9;
+  }
+
+  /* ---------- Buttons ---------- */
+  .btn{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    gap:8px;
+    padding:14px 26px;
+    border-radius:100px;
+    font-family:'Inter', sans-serif;
+    font-weight:600;
+    font-size:15px;
+    cursor:pointer;
+    border:1px solid var(--black);
+    transition:background .15s ease, color .15s ease, transform .1s ease;
+    white-space:nowrap;
+  }
+  .btn:active{transform:scale(.98);}
+  .btn-solid{background:var(--black); color:var(--white);}
+  .btn-solid:hover{background:#000;}
+  .btn-outline{background:transparent; color:var(--black);}
+  .btn-outline:hover{background:var(--black); color:var(--white);}
+  .btn-ghost{border-color:var(--border); color:var(--black); background:var(--white);}
+  .btn-ghost:hover{border-color:var(--black);}
+
+  /* ---------- Navbar ---------- */
+  header{
+    position:sticky; top:0; z-index:50;
+    background:rgba(255,255,255,.92);
+    backdrop-filter:saturate(180%) blur(10px);
+    border-bottom:1px solid var(--border);
+  }
+  .nav{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:16px 32px;
+    max-width:var(--wrap); margin:0 auto;
+  }
+  .brand-block{display:flex; align-items:center; gap:12px;}
+  .fc-mark{
+    width:40px; height:40px;
+    border:1.5px solid var(--black);
+    border-radius:10px;
+    display:flex; align-items:center; justify-content:center;
+    font-family:'Manrope', sans-serif;
+    font-weight:800;
+    font-size:14px;
+    flex-shrink:0;
+  }
+  .brand-text .wordmark{font-size:18px; font-weight:800;}
+  .brand-text .urdu-small{font-size:13px; color:var(--muted); margin-top:1px;}
+  nav.links{display:flex; gap:34px; font-size:14.5px; font-weight:500;}
+  nav.links a{color:var(--black); opacity:.75; transition:opacity .15s ease;}
+  nav.links a:hover{opacity:1;}
+  .nav-right{display:flex; align-items:center; gap:18px;}
+  .menu-toggle{display:none;}
+
+  @media (max-width:920px){
+    nav.links{display:none;}
+    .menu-toggle{display:block; font-size:13px; font-weight:600; border:1px solid var(--border); border-radius:100px; padding:9px 16px; background:var(--white);}
+  }
+
+  /* ---------- Hero ---------- */
+  .hero{
+    padding:88px 0 0;
+    overflow:hidden;
+  }
+  .hero-grid{
+    display:grid;
+    grid-template-columns:1.05fr .95fr;
+    gap:64px;
+    align-items:center;
+  }
+  .hero-eyebrow-urdu{
+    font-size:15px;
+    color:var(--muted);
+    margin-bottom:18px;
+  }
+  .hero h1{
+    font-size:53px;
+    font-weight:800;
+    line-height:1.08;
+  }
+  .hero p.lede{
+    margin-top:22px;
+    font-size:17.5px;
+    color:var(--muted);
+    max-width:52ch;
+  }
+  .hero-ctas{
+    margin-top:34px;
+    display:flex;
+    gap:14px;
+    flex-wrap:wrap;
+  }
+  .hero-strip{
+    margin-top:52px;
+    padding-top:22px;
+    border-top:1px dotted #b9b9b9;
+    display:flex;
+    gap:10px;
+    align-items:center;
+    font-size:14px;
+    color:var(--muted);
+    font-weight:500;
+    flex-wrap:wrap;
+  }
+  .hero-strip span.dot{color:#c9c9c9;}
+
+  .hero-panel{
+    position:relative;
+    background:var(--soft);
+    border:1px solid var(--border);
+    border-radius:28px;
+    padding:52px 40px;
+    text-align:center;
+    aspect-ratio:1/1.08;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    background-image:
+      radial-gradient(circle, #d8d8d8 1.4px, transparent 1.4px);
+    background-size:16px 16px;
+  }
+  .hero-panel-inner{
+    background:var(--white);
+    border:1px solid var(--border);
+    border-radius:20px;
+    padding:44px 30px;
+    width:100%;
+  }
+  .hero-panel .urdu-big{
+    font-size:44px;
+    font-weight:700;
+    color:var(--black);
+  }
+  .hero-panel .wordmark-en{
+    margin-top:14px;
+    font-size:13px;
+    letter-spacing:.14em;
+    color:var(--muted);
+    font-weight:600;
+  }
+  .hero-panel .seal{
+    margin-top:26px;
+    display:inline-flex;
+    flex-direction:column;
+    align-items:center;
+    gap:6px;
+    padding-top:22px;
+    border-top:1px dotted #cfcfcf;
+    width:100%;
+  }
+  .seal .fc-mark{width:46px; height:46px; font-size:15px; border-width:1.5px;}
+  .seal .seal-caption{font-size:11.5px; color:var(--muted); direction:rtl; font-family:'Noto Nastaliq Urdu', serif;}
+
+  @media (max-width:920px){
+    .hero-grid{grid-template-columns:1fr;}
+    .hero h1{font-size:38px;}
+    .hero{padding-top:56px;}
+  }
+
+  /* ---------- Section shell ---------- */
+  section{padding:96px 0;}
+  .section-head{max-width:640px; margin-bottom:56px;}
+  .section-head h2{font-size:34px; font-weight:800;}
+  .section-head p{margin-top:14px; color:var(--muted); font-size:16px;}
+  .soft-bg{background:var(--soft);}
+
+  /* ---------- Stats (ledger row) ---------- */
+  .ledger{
+    display:grid;
+    grid-template-columns:repeat(4,1fr);
+    border-top:1px solid var(--border);
+    border-bottom:1px solid var(--border);
+  }
+  .ledger .cell{
+    padding:38px 28px;
+    border-left:1px solid var(--border);
+  }
+  .ledger .cell:first-child{border-left:none;}
+  .ledger .cell .num{
+    font-family:'Manrope', sans-serif;
+    font-weight:800;
+    font-size:38px;
+  }
+  .ledger .cell .label{
+    margin-top:8px;
+    font-size:14px;
+    color:var(--muted);
+    font-weight:500;
+  }
+  @media (max-width:920px){
+    .ledger{grid-template-columns:repeat(2,1fr);}
+    .ledger .cell:nth-child(2n+1){border-left:none;}
+    .ledger .cell:nth-child(n+3){border-top:1px solid var(--border);}
+  }
+
+  /* ---------- About ---------- */
+  .about-grid{
+    display:grid;
+    grid-template-columns:.9fr 1.1fr;
+    gap:64px;
+    align-items:start;
+  }
+  .about-grid .urdu{font-size:22px; color:var(--black); margin-bottom:18px;}
+  .about-grid p{color:var(--muted); font-size:16px;}
+  .about-list{margin-top:26px; display:flex; flex-direction:column;}
+  .about-list li{
+    list-style:none;
+    padding:16px 0;
+    border-top:1px solid var(--border);
+    display:flex;
+    justify-content:space-between;
+    font-size:15px;
+  }
+  .about-list li:last-child{border-bottom:1px solid var(--border);}
+  .about-list .k{color:var(--muted);}
+  .about-list .v{font-weight:600;}
+  @media (max-width:920px){.about-grid{grid-template-columns:1fr;}}
+
+  /* ---------- Products ---------- */
+  .product-grid{
+    display:grid;
+    grid-template-columns:repeat(2,1fr);
+    gap:1px;
+    background:var(--border);
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    overflow:hidden;
+  }
+  .product-card{
+    background:var(--white);
+    padding:38px 34px;
+  }
+  .product-card .tag{
+    font-size:12.5px;
+    color:var(--muted);
+    font-weight:600;
+    text-transform:uppercase;
+    letter-spacing:.06em;
+  }
+  .product-card h3{font-size:22px; font-weight:700; margin-top:10px;}
+  .product-card p{margin-top:10px; color:var(--muted); font-size:14.5px;}
+  .product-card ul{margin:16px 0 0; padding:0; list-style:none;}
+  .product-card ul li{
+    padding:9px 0;
+    border-top:1px solid var(--border);
+    font-size:14.5px;
+    display:flex;
+    justify-content:space-between;
+  }
+  .product-card ul li:first-child{border-top:none;}
+  @media (max-width:760px){.product-grid{grid-template-columns:1fr;}}
+
+  /* ---------- Supply areas ---------- */
+  .region-grid{
+    display:grid;
+    grid-template-columns:repeat(4,1fr);
+    gap:14px;
+  }
+  .region-card{
+    border:1px solid var(--border);
+    border-radius:16px;
+    padding:22px 20px;
+    background:var(--white);
+  }
+  .region-card .region-en{font-weight:700; font-size:15.5px;}
+  .region-card .region-ur{margin-top:4px; font-size:14px; color:var(--muted); direction:rtl; font-family:'Noto Nastaliq Urdu', serif;}
+  @media (max-width:920px){.region-grid{grid-template-columns:repeat(2,1fr);}}
+
+  /* ---------- Warehouses ---------- */
+  .wh-row{
+    display:flex;
+    align-items:flex-start;
+    gap:26px;
+    padding:30px 0;
+    border-top:1px solid var(--border);
+  }
+  .wh-row:last-child{border-bottom:1px solid var(--border);}
+  .wh-index{
+    font-family:'Manrope', sans-serif;
+    font-weight:800;
+    font-size:15px;
+    color:var(--muted);
+    padding-top:3px;
+    width:64px;
+    flex-shrink:0;
+  }
+  .wh-body h3{font-size:19px; font-weight:700;}
+  .wh-body p{margin-top:6px; color:var(--muted); font-size:15px; max-width:60ch;}
+  .wh-body .wh-meta{margin-top:10px; font-size:13.5px; color:var(--muted); display:flex; gap:16px; flex-wrap:wrap;}
+
+  /* ---------- Why us ---------- */
+  .why-grid{
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    gap:20px;
+  }
+  .why-card{
+    border:1px solid var(--border);
+    border-radius:var(--radius);
+    padding:32px 28px;
+  }
+  .why-card .why-mark{
+    width:36px; height:36px;
+    border:1.5px solid var(--black);
+    border-radius:9px;
+    display:flex; align-items:center; justify-content:center;
+    font-weight:800; font-size:14px;
+    margin-bottom:20px;
+  }
+  .why-card h3{font-size:17.5px; font-weight:700;}
+  .why-card p{margin-top:10px; font-size:14.5px; color:var(--muted);}
+  @media (max-width:920px){.why-grid{grid-template-columns:1fr 1fr;}}
+  @media (max-width:640px){.why-grid{grid-template-columns:1fr;}}
+
+  /* ---------- Contact CTA ---------- */
+  .cta-block{
+    background:var(--black);
+    color:var(--white);
+    border-radius:32px;
+    padding:72px 56px;
+    text-align:center;
+  }
+  .cta-block h2{font-size:36px; font-weight:800; color:var(--white); max-width:20ch; margin:0 auto;}
+  .cta-block p.urdu{margin-top:16px; color:#c9c9c9; font-size:18px;}
+  .cta-block .cta-buttons{margin-top:34px; display:flex; gap:14px; justify-content:center; flex-wrap:wrap;}
+  .cta-block .btn-outline{border-color:#3a3a3a; color:var(--white);}
+  .cta-block .btn-outline:hover{background:var(--white); color:var(--black); border-color:var(--white);}
+  .cta-block .btn-solid{background:var(--white); color:var(--black); border-color:var(--white);}
+  .cta-block .btn-solid:hover{background:#eee;}
+  .cta-contacts{
+    margin-top:40px;
+    display:flex;
+    justify-content:center;
+    gap:44px;
+    flex-wrap:wrap;
+    font-size:14.5px;
+    color:#bdbdbd;
+    border-top:1px dotted #333;
+    padding-top:28px;
+  }
+  .cta-contacts strong{display:block; color:var(--white); font-size:15px; margin-bottom:3px; font-weight:600;}
+
+  /* ---------- Footer ---------- */
+  footer{padding:72px 0 34px; border-top:1px solid var(--border);}
+  .footer-top{
+    display:grid;
+    grid-template-columns:1.3fr 1fr 1fr 1fr;
+    gap:40px;
+    padding-bottom:48px;
+  }
+  .footer-brand .brand-block{margin-bottom:16px;}
+  .footer-brand p{color:var(--muted); font-size:14.5px; max-width:34ch;}
+  .footer-col h4{font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); font-weight:600; margin-bottom:16px;}
+  .footer-col ul{list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:11px;}
+  .footer-col a{font-size:14.5px; color:var(--black); opacity:.8;}
+  .footer-col a:hover{opacity:1;}
+  .footer-erp{
+    display:inline-flex; align-items:center; gap:6px;
+    font-weight:600; margin-top:4px;
+    border-bottom:1px solid var(--black);
+    padding-bottom:2px;
+  }
+  .footer-bottom{
+    padding-top:26px;
+    border-top:1px solid var(--border);
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:12px;
+    font-size:13px;
+    color:var(--muted);
+  }
+  @media (max-width:920px){
+    .footer-top{grid-template-columns:1fr 1fr; row-gap:36px;}
+  }
+  @media (max-width:560px){
+    .footer-top{grid-template-columns:1fr;}
+    .cta-block{padding:52px 24px;}
+    .cta-block h2{font-size:28px;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="nav">
+    <a href="#top" class="brand-block">
+      <div class="fc-mark">FC</div>
+      <div class="brand-text">
+        <div class="wordmark">FAROOQ AND CO</div>
+        <div class="urdu-small urdu">فاروق اینڈ کو</div>
+      </div>
+    </a>
+    <nav class="links">
+      <a href="#about">About</a>
+      <a href="#products">Products</a>
+      <a href="#supply-areas">Supply Areas</a>
+      <a href="#warehouses">Warehouses</a>
+      <a href="#contact">Contact</a>
+    </nav>
+    <div class="nav-right">
+      <button class="menu-toggle">Menu</button>
+      <a class="btn btn-solid" href="index.html" target="_blank" rel="noopener">ERP Login</a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- HERO -->
+  <section class="hero">
+    <div class="wrap">
+      <div class="hero-grid">
+        <div>
+          <div class="hero-eyebrow-urdu urdu">آپ کے اعتماد کا نام</div>
+          <h1>Trusted rice &amp; flour traders across Chitral &amp; Dir</h1>
+          <p class="lede">Farooq &amp; Co Traders supplies quality rice and flour products to retailers, wholesalers, shopkeepers and businesses through a strong regional distribution network.</p>
+          <div class="hero-ctas">
+            <a class="btn btn-solid" href="#products">View Products</a>
+            <a class="btn btn-outline" href="#contact">Contact Us</a>
+            <a class="btn btn-ghost" href="index.html" target="_blank" rel="noopener">Open ERP</a>
+          </div>
+          <div class="hero-strip">
+            <span>Quality Products</span><span class="dot">•</span>
+            <span>Reliable Supply</span><span class="dot">•</span>
+            <span>Strong Distribution</span>
+          </div>
+        </div>
+
+        <div class="hero-panel">
+          <div class="hero-panel-inner">
+            <div class="urdu-big urdu">فاروق اینڈ کو</div>
+            <div class="wordmark-en">FAROOQ AND CO · MAIN BAZAR DIR BALA</div>
+            <div class="seal">
+              <div class="fc-mark">FC</div>
+              <div class="seal-caption">ٹریڈ مارک</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- STATS -->
+  <div class="wrap">
+    <div class="ledger">
+      <div class="cell">
+        <div class="num">8+</div>
+        <div class="label">Supply Regions</div>
+      </div>
+      <div class="cell">
+        <div class="num">3</div>
+        <div class="label">Warehouses</div>
+      </div>
+      <div class="cell">
+        <div class="num">R&amp;F</div>
+        <div class="label">Rice &amp; Flour Distribution</div>
+      </div>
+      <div class="cell">
+        <div class="num">B2B</div>
+        <div class="label">Wholesale Supply Network</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ABOUT -->
+  <section id="about">
+    <div class="wrap">
+      <div class="about-grid">
+        <div>
+          <div class="urdu">بھول سیل ڈیلر اینڈ سپلائیر</div>
+          <h2 style="font-size:30px; font-weight:800;">A regional name built on stock, not slogans</h2>
+        </div>
+        <div>
+          <p>Farooq &amp; Co Traders has operated out of Main Bazar, Dir Bala, moving rice and flour into the shops and warehouses of Chitral and Dir for years. The business runs on three warehouses, a standing supply route across the region, and direct relationships with the shopkeepers who reorder every week.</p>
+          <p style="margin-top:14px;">Every sack that leaves the warehouse is logged the same way it always has been — now backed by an ERP system that keeps stock, purchases and payments in one place for the office, and simple receive/dispatch screens for warehouse staff.</p>
+          <ul class="about-list">
+            <li><span class="k">Positioning</span><span class="v">Wholesale Rice &amp; Flour Traders, Dealers &amp; Suppliers</span></li>
+            <li><span class="k">Based in</span><span class="v">Main Bazar, Dir Bala</span></li>
+            <li><span class="k">Proprietor</span><span class="v">Farooq Jameel</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRODUCTS -->
+  <section id="products" class="soft-bg">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Products</h2>
+        <p>Two core lines, moved in wholesale volume to shops and dealers across the region.</p>
+      </div>
+      <div class="product-grid">
+        <div class="product-card">
+          <div class="tag">Rice</div>
+          <h3>Rice, by the sack</h3>
+          <p>Sourced and graded for shopkeepers who need consistent quality, order after order.</p>
+          <ul>
+            <li><span>Basmati</span><span class="k" style="color:var(--muted);">Wholesale sacks</span></li>
+            <li><span>Super Kernel</span><span class="k" style="color:var(--muted);">Wholesale sacks</span></li>
+            <li><span>Sella (Parboiled)</span><span class="k" style="color:var(--muted);">Wholesale sacks</span></li>
+            <li><span>Broken Rice</span><span class="k" style="color:var(--muted);">Wholesale sacks</span></li>
+          </ul>
+        </div>
+        <div class="product-card">
+          <div class="tag">Flour</div>
+          <h3>Flour, milled for volume</h3>
+          <p>Stocked across all three warehouses so dispatch to any shop in the network is same-day.</p>
+          <ul>
+            <li><span>Fine Atta</span><span class="k" style="color:var(--muted);">Wholesale bags</span></li>
+            <li><span>Chakki Atta</span><span class="k" style="color:var(--muted);">Wholesale bags</span></li>
+            <li><span>Maida</span><span class="k" style="color:var(--muted);">Wholesale bags</span></li>
+            <li><span>Suji / Sooji</span><span class="k" style="color:var(--muted);">Wholesale bags</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- SUPPLY AREAS -->
+  <section id="supply-areas">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Supply areas</h2>
+        <p>A standing distribution route across Dir and Chitral, with shops restocked on a fixed weekly cycle.</p>
+      </div>
+      <div class="region-grid">
+        <div class="region-card"><div class="region-en">Dir Bala</div><div class="region-ur">دیر بالا</div></div>
+        <div class="region-card"><div class="region-en">Dir Payan</div><div class="region-ur">دیر پائیں</div></div>
+        <div class="region-card"><div class="region-en">Timergara</div><div class="region-ur">تیمرگرہ</div></div>
+        <div class="region-card"><div class="region-en">Wari</div><div class="region-ur">واری</div></div>
+        <div class="region-card"><div class="region-en">Chakdara</div><div class="region-ur">چکدرہ</div></div>
+        <div class="region-card"><div class="region-en">Chitral Town</div><div class="region-ur">چترال</div></div>
+        <div class="region-card"><div class="region-en">Drosh</div><div class="region-ur">دروش</div></div>
+        <div class="region-card"><div class="region-en">Lower Dir</div><div class="region-ur">لوئر دیر</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WAREHOUSES -->
+  <section id="warehouses" class="soft-bg">
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Warehouses</h2>
+        <p>Stock sits in three warehouses across the network, all tracked against the same ledger.</p>
+      </div>
+      <div>
+        <div class="wh-row">
+          <div class="wh-index">01</div>
+          <div class="wh-body">
+            <h3>Dir Bala — Main Warehouse</h3>
+            <p>The primary store, attached to the Main Bazar office, handling the bulk of incoming purchases before onward dispatch.</p>
+            <div class="wh-meta"><span>Rice &amp; flour</span><span>Main Bazar, Dir Bala</span></div>
+          </div>
+        </div>
+        <div class="wh-row">
+          <div class="wh-index">02</div>
+          <div class="wh-body">
+            <h3>Timergara Warehouse</h3>
+            <p>Covers dispatch into Lower Dir and Chakdara, kept stocked to cut delivery time to those shops.</p>
+            <div class="wh-meta"><span>Rice &amp; flour</span><span>Lower Dir route</span></div>
+          </div>
+        </div>
+        <div class="wh-row">
+          <div class="wh-index">03</div>
+          <div class="wh-body">
+            <h3>Chitral Warehouse</h3>
+            <p>Serves Chitral Town and Drosh, holding enough stock to bridge the longer route from Dir.</p>
+            <div class="wh-meta"><span>Rice &amp; flour</span><span>Chitral route</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- WHY US -->
+  <section>
+    <div class="wrap">
+      <div class="section-head">
+        <h2>Why Farooq &amp; Co</h2>
+        <p>The reasons shopkeepers keep reordering from the same supplier.</p>
+      </div>
+      <div class="why-grid">
+        <div class="why-card">
+          <div class="why-mark">01</div>
+          <h3>Reliable Supply</h3>
+          <p>Fixed routes and standing stock mean orders go out on schedule, not when it's convenient.</p>
+        </div>
+        <div class="why-card">
+          <div class="why-mark">02</div>
+          <h3>Quality Products</h3>
+          <p>Rice and flour graded and checked before it leaves the warehouse, sack by sack.</p>
+        </div>
+        <div class="why-card">
+          <div class="why-mark">03</div>
+          <h3>Competitive Wholesale Trading</h3>
+          <p>Pricing set for volume buyers — retailers, wholesalers and shopkeepers alike.</p>
+        </div>
+        <div class="why-card">
+          <div class="why-mark">04</div>
+          <h3>Strong Regional Network</h3>
+          <p>Eight-plus supply regions across Dir and Chitral, served on a consistent cycle.</p>
+        </div>
+        <div class="why-card">
+          <div class="why-mark">05</div>
+          <h3>Organized Warehousing</h3>
+          <p>Three warehouses, one ledger — stock is always accounted for, wherever it sits.</p>
+        </div>
+        <div class="why-card">
+          <div class="why-mark">06</div>
+          <h3>Long-Term Business Relationships</h3>
+          <p>Many shops on the route have been ordering from Farooq &amp; Co for years, not months.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CONTACT CTA -->
+  <section id="contact">
+    <div class="wrap">
+      <div class="cta-block">
+        <h2>Looking for a reliable rice &amp; flour supplier?</h2>
+        <p class="urdu">فاروق اینڈ کو سے رابطہ کریں</p>
+        <div class="cta-buttons">
+          <a class="btn btn-solid" href="https://wa.me/923219535252" target="_blank" rel="noopener">WhatsApp Us</a>
+          <a class="btn btn-outline" href="tel:+923459535252">Request Supply</a>
+          <a class="btn btn-outline" href="index.html" target="_blank" rel="noopener">ERP Login</a>
+        </div>
+        <div class="cta-contacts">
+          <div><strong>Mobile</strong>0321‑9535252 · 0345‑9535252</div>
+          <div><strong>Shop Phone</strong>0944‑881316 · 0944‑880316</div>
+          <div><strong>Proprietor</strong>Farooq Jameel · 0322‑9535252</div>
+          <div><strong>Address</strong>Main Bazar, Dir Bala</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="footer-top">
+      <div class="footer-brand">
+        <div class="brand-block">
+          <div class="fc-mark">FC</div>
+          <div class="brand-text">
+            <div class="wordmark">FAROOQ AND CO</div>
+            <div class="urdu-small urdu">فاروق اینڈ کو</div>
+          </div>
+        </div>
+        <p>Wholesale Rice &amp; Flour Traders, Dealers &amp; Suppliers. Serving Chitral &amp; Dir from Main Bazar, Dir Bala.</p>
+      </div>
+      <div class="footer-col">
+        <h4>Navigate</h4>
+        <ul>
+          <li><a href="#about">About</a></li>
+          <li><a href="#products">Products</a></li>
+          <li><a href="#supply-areas">Supply Areas</a></li>
+          <li><a href="#warehouses">Warehouses</a></li>
+          <li><a href="#contact">Contact</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>Supply Regions</h4>
+        <ul>
+          <li>Dir Bala &amp; Dir Payan</li>
+          <li>Timergara &amp; Chakdara</li>
+          <li>Wari &amp; Lower Dir</li>
+          <li>Chitral Town &amp; Drosh</li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h4>Contact</h4>
+        <ul>
+          <li>0321‑9535252</li>
+          <li>0345‑9535252</li>
+          <li>Shop: 0944‑881316</li>
+          <li>Main Bazar, Dir Bala</li>
+          <li><a class="footer-erp" href="index.html" target="_blank" rel="noopener">ERP Login →</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="hairline"></div>
+    <div class="footer-bottom">
+      <span>© <span id="year"></span> Farooq &amp; Co Traders. Main Bazar, Dir Bala.</span>
+      <span class="urdu">آپ کے اعتماد کا نام</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.getElementById('year').textContent = new Date().getFullYear();
+</script>
+</body>
+</html>

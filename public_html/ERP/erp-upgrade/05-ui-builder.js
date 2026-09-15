@@ -1,0 +1,816 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   FAROOQ & CO TRADERS — ERP UPGRADE · MODULE 5
+   THE LINE EDITOR  ·  one screen, every transaction type
+   Sales, purchases, orders, quotations, dispatch, transfers, receiving,
+   adjustments and supplier returns all use this one editor: Add Item,
+   edit, reorder, remove, a searchable picker showing warehouse stock, a
+   sticky totals bar and drafts. (§2 §3 §4 §11 §37 §38 §39 §49)
+   ══════════════════════════════════════════════════════════════════════════ */
+(function (global) {
+'use strict';
+var ERP = global.ERP, M = global.Money, FDB = global.FDB;
+
+var esc = function (s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+};
+var I  = function (n) { return global.I ? global.I(n) : ''; };
+var u  = function (t) { return global.u ? global.u(t) : esc(t); };
+var say = function (m) { return global.say ? global.say(m) : null; };
+function todayISO() { return global.FC_TODAY ? global.FC_TODAY() : new Date().toISOString().slice(0, 10); }
+function fmtDate(iso) { return global.fmtDate ? global.fmtDate(iso) : iso; }
+function firstWh() { return (WHS()[0] || {}).id || ''; }
+
+/* The app declares its master data with top-level `let`, which is not a
+   property of window; a bridge exposes it. If that bridge ever fails the
+   lists would silently come back empty, so every read goes through these
+   and falls back to the master-data file that is embedded in the page. */
+function MASTER() { return global.FAROOQ_ERP_MASTER || {}; }
+function PRODS()  { return global.PRODUCTS  || MASTER().products  || []; }
+function CUSTS()  { return global.CUSTOMERS || MASTER().customers || []; }
+function SUPS()   { return global.SUPPLIERS || MASTER().suppliers || []; }
+function REGS()   { return global.REGIONS   || MASTER().regions   || []; }
+function WHS() {
+  if (global.activeWh) { try { return global.activeWh() || []; } catch (e) {} }
+  return (global.WAREHOUSES || MASTER().warehouses || []).filter(function (w) { return w.active !== false; });
+}
+ERP.sources = { PRODS: PRODS, CUSTS: CUSTS, SUPS: SUPS, REGS: REGS, WHS: WHS };
+
+/* ══ what each transaction type needs from the editor ══ */
+var MODES = {
+  sale: {
+    title: 'New invoice', party: 'customer', rates: true, stockOut: true, drafts: true,
+    cta: 'Save &amp; Generate Invoice', back: 'invoices', noun: 'invoice',
+    save: function (d, asDraft) { return ERP.Invoices.save(d, { draft: asDraft }); },
+    after: function (rec) { return ERP.DocModel.invoice(rec.id); }
+  },
+  purchase: {
+    title: 'Receive stock from a mill', party: 'supplier', rates: true, received: true,
+    cta: 'Save &amp; Receive Stock', back: 'purchases', noun: 'purchase',
+    save: function (d) { return ERP.Purchases.save(d); },
+    after: function (rec) { return ERP.DocModel.purchase(rec.id); }
+  },
+  order: {
+    title: 'New sales order', party: 'customer', rates: true, drafts: true,
+    cta: 'Save Order', back: 'orders', noun: 'order',
+    save: function (d, asDraft) { return ERP.Orders.save(Object.assign({ kind: 'ORDER' }, d), { draft: asDraft }); },
+    after: function (rec) { return ERP.DocModel.order(rec.id); }
+  },
+  quotation: {
+    title: 'New quotation', party: 'customer', rates: true, drafts: true,
+    cta: 'Save Quotation', back: 'orders', noun: 'quotation',
+    save: function (d, asDraft) { return ERP.Orders.save(Object.assign({ kind: 'QUOTATION' }, d), { draft: asDraft }); },
+    after: function (rec) { return ERP.DocModel.order(rec.id); }
+  },
+  dispatch: {
+    title: 'Dispatch a load', party: 'customer', stockOut: true, vehicle: true,
+    cta: 'Confirm Dispatch', back: 'dispatch', noun: 'dispatch',
+    save: function (d) { return ERP.StockDocs.dispatch(d); },
+    after: function (rec) { return ERP.DocModel.stockDoc(rec.id); }
+  },
+  transfer: {
+    title: 'Transfer between warehouses', toWarehouse: true, stockOut: true,
+    cta: 'Post Transfer', back: 'inventory', noun: 'transfer',
+    save: function (d) { return ERP.StockDocs.transfer(d); },
+    after: function (rec) { return ERP.DocModel.stockDoc(rec.id); }
+  },
+  receive: {
+    title: 'Add stock', reason: true, cost: true,
+    cta: 'Add to Stock', back: 'inventory', noun: 'stock receipt',
+    save: function (d) { return ERP.StockDocs.receive(d); },
+    after: function (rec) { return ERP.DocModel.stockDoc(rec.id); }
+  },
+  adjust: {
+    title: 'Stock adjustment', reason: true, direction: true, stockOut: true,
+    cta: 'Post Adjustment', back: 'inventory', noun: 'adjustment',
+    save: function (d) { return ERP.StockDocs.adjust(d); },
+    after: function (rec) { return ERP.DocModel.stockDoc(rec.id); }
+  },
+  supreturn: {
+    title: 'Return to supplier', party: 'supplier', stockOut: true, rates: true, reason: true,
+    cta: 'Post Supplier Return', back: 'suppliers', noun: 'supplier return',
+    save: function (d) {
+      return ERP.Returns.toSupplier(Object.assign({}, d, {
+        items: d.items.map(function (i) {
+          return { productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice,
+                   fromDamaged: !!i.fromDamaged, purchaseItemId: i.purchaseItemId || null };
+        })
+      }));
+    },
+    after: function (rec) { return ERP.DocModel.supplierReturn(rec.id); }
+  }
+};
+
+var B = ERP.Builder = {
+  mode: 'sale', cfg: MODES.sale, draft: null, saving: false,
+  pickerQuery: '', pickerOpen: false, regionFilter: 'all', editingId: null, dirty: false, errors: []
+};
+
+function blankDraft() {
+  return {
+    id: FDB.uid('tx'), clientOpId: null,
+    customerId: '', supplierId: '', warehouseId: firstWh(), toWarehouseId: '', invoiceId: '',
+    invoiceDate: todayISO(), purchaseDate: todayISO(), orderDate: todayISO(), date: todayISO(),
+    dueDate: '', deliveryDate: '', validUntil: '',
+    orderNumber: '', dispatchNumber: '', referenceNo: '', supplierInvoiceNo: '',
+    vehicleNo: '', driver: '', deliveryRef: '', reason: '',
+    salesperson: global.CURRENT_USER || 'Owner',
+    paymentMethod: 'Cash', notes: '',
+    invoiceDiscount: 0, freight: 0, loading: 0, otherCharges: 0, paidAmount: 0,
+    items: []
+  };
+}
+
+B.start = function (mode, draft) {
+  B.mode = MODES[mode] ? mode : 'sale';
+  B.cfg = MODES[B.mode];
+  B.draft = Object.assign(blankDraft(), draft || {});
+  B.draft.clientOpId = B.draft.clientOpId || FDB.uid('op');
+  B.editingId = draft && draft.existing ? draft.id : null;
+  B.pickerQuery = ''; B.pickerOpen = false; B.dirty = false; B.saving = false; B.errors = [];
+  global.go('invoiceBuilder');
+};
+
+/* ── product search: name, Urdu name, brand, category, SKU, bag size ── */
+function searchProducts(q) {
+  q = (q || '').toLowerCase().trim();
+  var wid = B.draft.warehouseId;
+  var list = PRODS().filter(function (p) { return p.active !== false; });
+  if (q) {
+    list = list.filter(function (p) {
+      var hay = [p.en, p.ur, p.brand, p.brandEn, p.cat, p.sku, p.sourceFolio, p.id,
+                 p.normalizedName, p.nameEn, p.kg ? p.kg + ' kg' : ''].filter(Boolean).join(' ').toLowerCase();
+      return hay.indexOf(q) > -1;
+    });
+  }
+  return list.sort(function (a, b) {
+    if (B.cfg.stockOut) {
+      var sa = ERP.Inventory.available(a.id, wid) > 0, sb = ERP.Inventory.available(b.id, wid) > 0;
+      if (sa !== sb) return sa ? -1 : 1;
+    }
+    return (a.en || '').localeCompare(b.en || '');
+  }).slice(0, 40);
+}
+
+/* The last rate actually charged is offered as a starting point. The
+   catalogue "Size !" figure is never used — the data import marked it
+   unconfirmed, and it is not a price. */
+function lastRate(pid) {
+  var hit = null;
+  if (B.cfg.party === 'supplier') {
+    ERP.S.purchaseItems.forEach(function (it) {
+      if (it.productId !== pid) return;
+      var pu = ERP.Purchases.byId(it.purchaseId); if (!pu) return;
+      if (!hit || pu.purchaseDate > hit.date) hit = { date: pu.purchaseDate, rate: it.unitPrice };
+    });
+  } else {
+    /* the price the owner has set for the product comes first; the last rate
+       actually charged is only the fallback where no price is set */
+    if (ERP.Prices && ERP.Prices.of) {
+      var priced = ERP.Prices.of(pid);
+      if (priced && priced.sell) return priced.sell;
+    }
+    ERP.S.invoiceItems.forEach(function (it) {
+      if (it.productId !== pid) return;
+      var inv = ERP.Invoices.byId(it.invoiceId);
+      if (!inv || inv.status === 'CANCELLED' || inv.status === 'DRAFT') return;
+      if (!hit || inv.invoiceDate > hit.date) hit = { date: inv.invoiceDate, rate: it.unitPrice };
+    });
+  }
+  return hit ? hit.rate : null;
+}
+
+function addLine(pid) {
+  if (!global.prodOf(pid)) return;
+  var r = (B.cfg.rates || B.cfg.cost) ? lastRate(pid) : null;
+  B.draft.items.push({
+    lineId: FDB.uid('ln'), productId: pid, quantity: '',
+    unitPrice: r === null ? '' : M.toR(r), discount: '', receivedQty: '',
+    direction: 'IN', warehouseId: B.draft.warehouseId, fromDamaged: false,
+    batchNo: '', notes: '', unit: 'Bag'
+  });
+  B.dirty = true; B.pickerQuery = '';
+  var input = global.document.getElementById('fcbPick');
+  if (input) input.value = '';
+  renderLines();
+  renderResults();                      /* the list stays open for the next product */
+  var rows = global.document.querySelectorAll('[data-fcline="qty"]');
+  var last = rows[rows.length - 1];
+  if (last) { last.focus(); if (last.select) last.select(); }
+}
+
+function totals() { return ERP.Calc.invoice(B.draft); }
+
+/* ══ blocks ══ */
+function partyBlock() {
+  if (B.cfg.party === 'supplier') {
+    var sups = SUPS().filter(function (s) { return s.active !== false; });
+    var sup = B.draft.supplierId ? global.supOf(B.draft.supplierId) : null;
+    return '<label class="f"><span>Supplier</span><select data-fcb="supplierId">' +
+      '<option value="">— choose a supplier —</option>' +
+      sups.map(function (s) {
+        return '<option value="' + s.id + '"' + (B.draft.supplierId === s.id ? ' selected' : '') + '>' +
+          esc(s.co) + (s.legacyCode ? ' · ' + esc(s.legacyCode) : '') + '</option>';
+      }).join('') + '</select></label>' +
+      (sup ? '<div class="fcb-party"><div><i>Payable</i><b class="due">' +
+        M.fmt(ERP.Ledger.supplierBalance(sup.id)) + '</b></div></div>' : '');
+  }
+  if (B.cfg.party !== 'customer') return '';
+  var regions = REGS().filter(function (r) { return r.active !== false; });
+  var custs = CUSTS().filter(function (c) {
+    return B.regionFilter === 'all' || c.region === B.regionFilter;
+  });
+  var c = B.draft.customerId ? global.custBy(B.draft.customerId) : null;
+  var bal = c ? ERP.Ledger.customerBalance(c.id) : 0;
+  return '<div class="f2">' +
+    '<label class="f"><span>Region</span><select data-fcb="regionFilter">' +
+      '<option value="all">All regions (' + CUSTS().length + ' shops)</option>' +
+      regions.map(function (r) {
+        var n = CUSTS().filter(function (x) { return x.region === r.id; }).length;
+        return '<option value="' + r.id + '"' + (B.regionFilter === r.id ? ' selected' : '') + '>' +
+          esc(r.en) + ' — ' + esc(r.ur) + ' (' + n + ')</option>';
+      }).join('') + '</select></label>' +
+    '<label class="f"><span>Shop</span><select data-fcb="customerId">' +
+      '<option value="">— choose a shop —</option>' +
+      custs.map(function (x) {
+        return '<option value="' + x.id + '"' + (B.draft.customerId === x.id ? ' selected' : '') + '>' +
+          esc(x.sh) + (x.legacyCode ? ' · ' + esc(x.legacyCode) : '') + '</option>';
+      }).join('') + '</select></label></div>' +
+    (c ? '<div class="fcb-party">' +
+        '<div><i>Owner</i><b>' + esc(c.ow || '—') + '</b></div>' +
+        '<div><i>Mobile</i><b>' + esc(c.ph || 'Not set') + '</b></div>' +
+        '<div><i>Region</i><b>' + (global.regionLbl ? global.regionLbl(c.region) : '') + '</b></div>' +
+        '<div><i>Current balance</i><b class="' + (bal > 0 ? 'due' : '') + '">' + M.fmt(bal) + '</b></div>' +
+      '</div>' : '');
+}
+
+function headerBlock() { return headerBody(true); }
+function headerBody(withCard) {
+  var cfg = B.cfg, d = B.draft;
+  var wh = WHS();
+  var whSel = function (key, label) {
+    return '<label class="f"><span>' + label + '</span><select data-fcb="' + key + '">' +
+      (key === 'toWarehouseId' ? '<option value="">— choose —</option>' : '') +
+      wh.map(function (w) {
+        return '<option value="' + w.id + '"' + (d[key] === w.id ? ' selected' : '') + '>' + esc(w.name) + '</option>';
+      }).join('') + '</select></label>';
+  };
+  var dateKey = B.mode === 'sale' ? 'invoiceDate' : B.mode === 'purchase' ? 'purchaseDate'
+              : (B.mode === 'order' || B.mode === 'quotation') ? 'orderDate' : 'date';
+  var extra = '';
+  if (B.mode === 'sale') {
+    extra = '<div class="f2">' +
+        '<label class="f"><span>Due date</span><input type="date" data-fcb="dueDate" value="' + esc(d.dueDate || '') + '"></label>' +
+        '<label class="f"><span>Order number</span><input data-fcb="orderNumber" class="mono" value="' +
+          esc(d.orderNumber || '') + '" placeholder="Optional"></label></div>';
+  } else if (B.mode === 'purchase') {
+    extra = '<div class="f2">' +
+        '<label class="f"><span>Supplier invoice / bilty</span><input data-fcb="supplierInvoiceNo" class="mono" value="' +
+          esc(d.supplierInvoiceNo || '') + '" placeholder="Optional"></label>' +
+        '<label class="f"><span>Vehicle number</span><input data-fcb="vehicleNo" class="mono" value="' +
+          esc(d.vehicleNo || '') + '" placeholder="Optional"></label></div>' +
+      '<div class="banner info">' + I('box') + '<div><p>Leave <b>Received</b> blank if the whole line arrived. ' +
+        'Enter a smaller figure for a part delivery — only those bags go into stock and the rest stays open.</p></div></div>';
+  } else if (cfg.vehicle) {
+    extra = '<div class="f2">' +
+        '<label class="f"><span>Vehicle number</span><input data-fcb="vehicleNo" class="mono" value="' +
+          esc(d.vehicleNo || '') + '" placeholder="Optional"></label>' +
+        '<label class="f"><span>Driver</span><input data-fcb="driver" value="' + esc(d.driver || '') +
+          '" placeholder="Optional"></label></div>' +
+      '<label class="f"><span>Against invoice</span><select data-fcb="invoiceId">' +
+        '<option value="">Not linked — this dispatch takes the bags out of stock</option>' +
+        ERP.Invoices.all().filter(function (i) {
+          return i.status !== 'DRAFT' && i.status !== 'CANCELLED' &&
+                 (!d.customerId || i.customerId === d.customerId);
+        }).slice(0, 200).map(function (i) {
+          return '<option value="' + i.id + '"' + (d.invoiceId === i.id ? ' selected' : '') + '>' +
+            esc(i.invoiceNumber) + ' · ' + esc(i.shopNameSnapshot) + '</option>';
+        }).join('') + '</select>' +
+        '<span class="hint">If the invoice already took the bags out of stock, this dispatch records the ' +
+        'delivery only. Stock is never deducted twice.</span></label>';
+  } else if (B.mode === 'order' || B.mode === 'quotation') {
+    extra = '<div class="f2">' +
+        '<label class="f"><span>' + (B.mode === 'quotation' ? 'Valid until' : 'Delivery date') + '</span>' +
+        '<input type="date" data-fcb="' + (B.mode === 'quotation' ? 'validUntil' : 'deliveryDate') + '" value="' +
+          esc(B.mode === 'quotation' ? (d.validUntil || '') : (d.deliveryDate || '')) + '"></label>' +
+        '<label class="f"><span>Salesperson</span><input data-fcb="salesperson" value="' +
+          esc(d.salesperson || '') + '"></label></div>';
+  }
+  if (cfg.reason) {
+    extra += '<label class="f"><span>Reason' + (B.mode === 'adjust' ? ' (required — it is audited)' : '') + '</span>' +
+      '<input data-fcb="reason" value="' + esc(d.reason || '') + '" placeholder="' +
+      (B.mode === 'receive' ? 'e.g. opening stock count, own production'
+        : B.mode === 'supreturn' ? 'e.g. torn bags' : 'e.g. physical count correction') + '"></label>';
+  }
+  var nextNo = '';
+  try {
+    var seqKey = { sale: ERP.Settings.get().invoicePrefix || 'INV',
+                   purchase: ERP.Settings.get().purchasePrefix || 'PUR',
+                   order: ERP.Settings.get().orderPrefix || 'SO', quotation: 'QT', dispatch: 'DSP',
+                   transfer: 'TRF', receive: 'RCV', adjust: 'ADJ', supreturn: 'SR' }[B.mode];
+    nextNo = FDB.peekNumber(seqKey, new Date().getFullYear(), ERP.S.sequences);
+  } catch (e) {}
+
+  var body = partyBlock() +
+    '<div class="f2">' +
+      whSel('warehouseId', cfg.toWarehouse ? 'From warehouse' : B.mode === 'purchase' ? 'Into warehouse' : 'Warehouse') +
+      (cfg.toWarehouse ? whSel('toWarehouseId', 'To warehouse')
+        : '<label class="f"><span>Date</span><input type="date" data-fcb="' + dateKey + '" value="' +
+          esc(d[dateKey] || todayISO()) + '"></label>') +
+    '</div>' +
+    (cfg.toWarehouse ? '<label class="f"><span>Date</span><input type="date" data-fcb="date" value="' +
+      esc(d.date || todayISO()) + '"></label>' : '') +
+    extra;
+  var card = '<div class="card fcb-card"><div class="card-h"><h3>' + esc(cfg.title) + '</h3>' +
+    '<span class="pill neu mono">' + (B.editingId ? 'Editing' : 'Next: ' + nextNo) + '</span>' +
+    '</div><div class="card-b" id="fcbHead">' + body + '</div></div>';
+  return withCard ? card : body;
+}
+
+function resultRow(p, wid) {
+  var st = ERP.Inventory.available(p.id, wid);
+  return '<button class="fcb-res" data-fcbadd="' + p.id + '">' +
+    '<div class="fcb-res-n">' + u(p.ur || '') + ' <span class="rn">' + esc(p.en || '') + '</span></div>' +
+    '<div class="fcb-res-m">' + esc(p.brandEn || p.brand || '') + (p.kg ? ' · ' + p.kg + ' KG' : '') +
+      ' · ' + esc(p.cat || '') + '</div>' +
+    '<div class="fcb-res-s ' + (st > 0 ? 'ok' : 'bad') + '">Available: ' +
+      Number(st).toLocaleString('en-US') + ' Bags</div></button>';
+}
+
+function resultsHtml() {
+  var wid = B.draft.warehouseId;
+  var all = PRODS();
+  if (!all.length) {
+    return '<div class="fcb-none"><b>No products are loaded on this device.</b><br>' +
+      'Open Settings and restore a backup, or reload the page.</div>';
+  }
+  var results = searchProducts(B.pickerQuery);
+  if (!results.length) {
+    return '<div class="fcb-none">Nothing matches “' + esc(B.pickerQuery) + '”.<br>' +
+      'Try the Urdu name, the brand, or the bag size.</div>';
+  }
+  return results.map(function (p) { return resultRow(p, wid); }).join('');
+}
+function pickerBlock() {
+  return '<div class="fcb-picker">' +
+    '<div class="fcb-search">' + I('search') +
+      '<input id="fcbPick" placeholder="Search product, brand, category, SKU or bag size…" ' +
+        'autocomplete="off" value="' + esc(B.pickerQuery) + '">' +
+      '<button class="btn pri" data-fcbact="openpicker">' + I('plus') + 'Add Item</button>' +
+    '</div>' +
+    (B.pickerOpen ? '<div class="fcb-results">' + resultsHtml() + '</div>' : '') +
+    /* a plain list and button that work even where the search panel does not */
+    '<div class="fcb-fallback"><select id="fcbPlain">' +
+      PRODS().filter(function (p) { return p.active !== false; }).map(function (p) {
+        return '<option value="' + p.id + '">' + esc(p.en || p.ur || p.id) +
+          (p.kg ? ' — ' + p.kg + ' KG' : '') + '</option>';
+      }).join('') + '</select>' +
+      '<button class="btn" data-fcbact="addplain">' + I('plus') + 'Add this product</button>' +
+    '</div></div>';
+}
+
+function columns() {
+  var cfg = B.cfg;
+  var c = [{ k: 'sr', l: '#', cls: 'c' }, { k: 'prod', l: 'Product' },
+           { k: 'pack', l: 'Package', cls: 'c' }, { k: 'wh', l: 'Warehouse' }];
+  if (cfg.direction) c.push({ k: 'dir', l: 'In / out' });
+  c.push({ k: 'qty', l: cfg.received ? 'Ordered' : 'Qty', cls: 'r' });
+  if (cfg.received) c.push({ k: 'recv', l: 'Received', cls: 'r' });
+  if (cfg.rates || cfg.cost) c.push({ k: 'rate', l: cfg.cost ? 'Cost (optional)' : 'Rate', cls: 'r' });
+  if (cfg.rates && B.mode !== 'supreturn') c.push({ k: 'disc', l: 'Discount', cls: 'r' });
+  if (cfg.rates || cfg.cost) c.push({ k: 'amt', l: 'Amount', cls: 'r' });
+  c.push({ k: 'act', l: '', cls: 'c' });
+  return c;
+}
+
+function lineRows() {
+  var cfg = B.cfg, cols = columns(), wid = B.draft.warehouseId;
+  if (!B.draft.items.length) {
+    return '<tr class="fcb-empty"><td colspan="' + cols.length + '">' +
+      '<b>No items yet.</b> Search above and press <em>Add Item</em> — one ' + cfg.noun +
+      ' can hold as many products as the load needs.</td></tr>';
+  }
+  return B.draft.items.map(function (it, ix) {
+    var p = global.prodOf(it.productId) || {};
+    var calc = ERP.Calc.line(it);
+    var lw = it.warehouseId || wid;
+    var have = it.fromDamaged ? ERP.Inventory.damaged(it.productId, lw) : ERP.Inventory.available(it.productId, lw);
+    var isOut = cfg.stockOut && (!cfg.direction || it.direction === 'OUT');
+    var over = isOut && calc.qty > have;
+    var cell = function (k) {
+      switch (k) {
+        case 'sr': return '<td class="c num" data-label="Line">' + (ix + 1) + '</td>';
+        case 'prod': return '<td class="fcb-prodcell" data-label="Product"><div class="fcb-pn">' + u(p.ur || '') + ' <span class="rn">' + esc(p.en || '') +
+          '</span></div><div class="fcb-ps">' + esc(p.brandEn || p.brand || '—') + ' · ' + esc(p.cat || '') +
+          (p.sourceFolio ? ' · ' + esc(p.sourceFolio) : '') + '</div></td>';
+        case 'pack': return '<td class="c" data-label="Package">' + (p.kg ? p.kg + ' KG' : 'Bag') + '</td>';
+        case 'wh': return '<td data-label="Warehouse"><select data-fcline="wh" data-ix="' + ix + '" class="fcb-mini">' +
+          WHS().map(function (w) {
+            return '<option value="' + w.id + '"' + (lw === w.id ? ' selected' : '') + '>' + esc(w.name) + '</option>';
+          }).join('') + '</select><div class="fcb-avail ' + (over ? 'bad' : '') + '">' +
+          Number(have).toLocaleString('en-US') + (it.fromDamaged ? ' damaged' : ' available') + '</div>' +
+          (B.mode === 'supreturn' ? '<label class="fcb-chk"><input type="checkbox" data-fcline="damaged" data-ix="' +
+            ix + '"' + (it.fromDamaged ? ' checked' : '') + '> from damaged stock</label>' : '') + '</td>';
+        case 'dir': return '<td data-label="In / out"><select data-fcline="dir" data-ix="' + ix + '" class="fcb-mini">' +
+          '<option value="IN"' + (it.direction === 'IN' ? ' selected' : '') + '>Increase</option>' +
+          '<option value="OUT"' + (it.direction === 'OUT' ? ' selected' : '') + '>Decrease</option></select></td>';
+        case 'qty': return '<td class="r" data-label="' + (cfg.received ? 'Ordered' : 'Quantity') + '"><input class="fcb-in num" data-fcline="qty" data-ix="' + ix +
+          '" inputmode="decimal" value="' + esc(it.quantity) + '" placeholder="0"></td>';
+        case 'recv': return '<td class="r" data-label="Received"><input class="fcb-in num" data-fcline="recv" data-ix="' + ix +
+          '" inputmode="decimal" value="' + esc(it.receivedQty) + '" placeholder="all"></td>';
+        case 'rate': return '<td class="r" data-label="' + (cfg.cost ? 'Cost' : 'Rate') + '"><input class="fcb-in num" data-fcline="rate" data-ix="' + ix +
+          '" inputmode="decimal" value="' + esc(it.unitPrice) + '" placeholder="0"></td>';
+        case 'disc': return '<td class="r" data-label="Discount"><input class="fcb-in num" data-fcline="disc" data-ix="' + ix +
+          '" inputmode="decimal" value="' + esc(it.discount) + '" placeholder="0"></td>';
+        case 'amt': return '<td class="r num fcb-amtcell" data-label="Amount"><b data-fcamt="' + ix + '">' + M.fmtPlain(calc.lineTotal) + '</b></td>';
+        default: return '<td class="c fcb-acts" data-label="">' +
+          '<button class="icon-btn sm" data-fcmove="up" data-ix="' + ix + '" title="Move up"' +
+            (ix === 0 ? ' disabled' : '') + '>↑</button>' +
+          '<button class="icon-btn sm" data-fcmove="down" data-ix="' + ix + '" title="Move down"' +
+            (ix === B.draft.items.length - 1 ? ' disabled' : '') + '>↓</button>' +
+          '<button class="icon-btn sm danger" data-fcdel="' + ix + '" title="Remove line">✕</button></td>';
+      }
+    };
+    return '<tr' + (over ? ' class="over"' : '') + '>' +
+      cols.map(function (c) { return cell(c.k); }).join('') + '</tr>';
+  }).join('');
+}
+
+function totalsBar() {
+  var t = totals(), cfg = B.cfg;
+  var row = function (l, v, cls) { return '<div class="' + (cls || '') + '"><i>' + l + '</i><b>' + v + '</b></div>'; };
+  if (!cfg.rates && !cfg.cost) {
+    return row('Lines', String(B.draft.items.length)) +
+      row('Total bags', Number(t.totalQty).toLocaleString('en-US'), 'grand');
+  }
+  var prev = cfg.party === 'customer' && B.draft.customerId ? ERP.Ledger.customerBalance(B.draft.customerId) : 0;
+  return row('Subtotal', M.fmt(t.subtotal)) +
+    row('Discount', '− ' + M.fmt(t.discountAmount)) +
+    row('Charges', M.fmt(t.freightAmount + t.loadingAmount + t.otherCharges + t.taxAmount)) +
+    row('Bags', Number(t.totalQty).toLocaleString('en-US')) +
+    (cfg.party === 'customer' ? row('Paid now', M.fmt(t.paidAmount)) : '') +
+    (cfg.party === 'customer' ? row('Previous balance', M.fmt(prev)) : '') +
+    row('Grand total', M.fmt(t.grandTotal), 'grand');
+}
+
+function chargesBlock() {
+  if (!B.cfg.rates || B.mode === 'supreturn') {
+    return '<div class="card fcb-card"><div class="card-h"><h3>Notes</h3></div><div class="card-b">' +
+      '<label class="f"><span>Notes</span><textarea data-fcb="notes" rows="2" placeholder="Optional">' +
+      esc(B.draft.notes || '') + '</textarea></label></div></div>';
+  }
+  var t = totals();
+  var f = function (key, label, hint) {
+    return '<label class="f"><span>' + label + '</span><input class="num" data-fcb="' + key +
+      '" inputmode="decimal" value="' + esc(B.draft[key] || '') + '" placeholder="0">' +
+      (hint ? '<span class="hint">' + hint + '</span>' : '') + '</label>';
+  };
+  var isSaleSide = B.cfg.party === 'customer';
+  var quoteLike = B.mode === 'order' || B.mode === 'quotation';
+  return '<div class="card fcb-card"><div class="card-h"><h3>Charges' +
+      (quoteLike ? '' : ' &amp; payment') + '</h3></div><div class="card-b">' +
+    '<div class="f2">' + f('invoiceDiscount', 'Overall discount') + f('freight', 'Delivery / freight') + '</div>' +
+    '<div class="f2">' + f('loading', 'Loading / unloading') + f('otherCharges', 'Other charges') + '</div>' +
+    (quoteLike ? '' :
+      '<div class="f2 fc-amtpaid">' + f('paidAmount', 'Amount Paid',
+          isSaleSide ? 'Leave at 0 for a credit sale' : '') +
+        '<label class="f"><span>Payment method</span><select data-fcb="paymentMethod">' +
+          ERP.ENUM.methods.map(function (m) {
+            return '<option' + (B.draft.paymentMethod === m ? ' selected' : '') + '>' + m + '</option>';
+          }).join('') + '</select></label></div>' +
+      '<label class="f"><span>Reference number</span><input data-fcb="referenceNo" class="mono" value="' +
+        esc(B.draft.referenceNo || '') + '" placeholder="Cheque / transaction / bilty number"></label>') +
+    /* the ledger-facing line — shown on the statement. Separate from Notes,
+       which stays an internal remark. Left blank, the statement generates a
+       sensible default instead. */
+    '<label class="f fc-desc"><span>Description / تفصیل</span><input data-fcb="description" ' +
+      'maxlength="500" value="' + esc(B.draft.description || '') + '" ' +
+      'placeholder="Appears on the account statement — English or Urdu"></label>' +
+    '<label class="f"><span>Internal note</span><textarea data-fcb="notes" rows="2" ' +
+      'placeholder="Anything that should appear on the document">' + esc(B.draft.notes || '') + '</textarea></label>' +
+    '<div class="fcb-check">' + (t.grandTotal ? 'Grand total ' + M.fmt(t.grandTotal) +
+      ' · balance after this payment ' + M.fmt(t.grandTotal - t.paidAmount) : 'Add a line to see the totals.') +
+    '</div></div></div>';
+}
+
+global.PAGES = global.PAGES || {};
+global.PAGES.invoiceBuilder = function () {
+  if (!B.draft) B.start(B.mode);
+  var cfg = B.cfg, t = totals(), cols = columns();
+  return '<div id="fcbuilder" class="fcb">' +
+    '<div id="fcbErr">' + errorBlock() + '</div>' +
+    '<div class="fcb-grid"><div>' + headerBlock() +
+      '<div class="card fcb-card"><div class="card-h"><h3>Items</h3>' +
+        '<span class="pill ' + (t.lineCount ? 'ok' : 'neu') + '" id="fcbItemCount">' + t.lineCount +
+        (t.lineCount === 1 ? ' line' : ' lines') + ' · ' +
+        Number(t.totalQty).toLocaleString('en-US') + ' bags</span>' +
+      '</div><div class="card-b">' + pickerBlock() +
+        '<div class="tw fcb-tw"><table class="fcb-table"><thead><tr>' +
+          cols.map(function (c) { return '<th class="' + (c.cls || '') + '">' + c.l + '</th>'; }).join('') +
+        '</tr></thead><tbody id="fcbLines">' + lineRows() + '</tbody></table></div>' +
+      '</div></div>' + chargesBlock() + '</div>' +
+      '<div class="fcb-side">' +
+        '<div class="card fcb-card"><div class="card-h"><h3>Summary</h3></div>' +
+        '<div class="card-b fcb-sum" id="fcbSum">' + totalsBar() + '</div></div>' +
+        '<div class="banner info">' + I('box') + '<div><p>' +
+          (cfg.stockOut
+            ? 'Every line is checked against warehouse stock before anything is written. If one line is short, nothing is posted.'
+            : 'Each line writes its own stock movement, so the bag count always reconciles.') +
+        '</p></div></div>' +
+      '</div></div>' +
+    '<div class="fcb-sticky"><div class="fcb-sticky-in">' +
+      '<div class="fcb-stotals">' + totalsBar() + '</div>' +
+      '<div class="fcb-btns">' +
+        '<button class="btn" data-fcbact="cancel">Discard</button>' +
+        (cfg.drafts ? '<button class="btn" data-fcbact="draft">' + I('doc') + 'Save Draft</button>' : '') +
+        '<button class="btn pri lg" data-fcbact="save">' + I('check') + cfg.cta + '</button>' +
+      '</div></div></div></div>';
+};
+
+/* recalculating must not steal the caret */
+/* ── partial rendering ───────────────────────────────────────────────────
+   A full repaint rebuilds every control on the screen, which closes any
+   open dropdown and throws away what is being typed. The builder therefore
+   redraws only the piece that changed. ── */
+function renderResults() {
+  var wrap = global.document.querySelector('.fcb-picker');
+  var box = global.document.querySelector('.fcb-results');
+  if (!B.pickerOpen) { if (box) box.remove(); return; }
+  if (box) { box.innerHTML = resultsHtml(); return; }
+  if (wrap) {
+    var search = wrap.querySelector('.fcb-search');
+    var el = global.document.createElement('div');
+    el.className = 'fcb-results';
+    el.innerHTML = resultsHtml();
+    if (search && search.nextSibling) wrap.insertBefore(el, search.nextSibling);
+    else wrap.appendChild(el);
+  }
+}
+function renderLines() {
+  var tb = global.document.getElementById('fcbLines');
+  if (!tb) { global.paint(); return; }
+  tb.innerHTML = lineRows();
+  var count = global.document.querySelector('#fcbItemCount');
+  var t = totals();
+  if (count) count.textContent = t.lineCount + (t.lineCount === 1 ? ' line' : ' lines') +
+    ' · ' + Number(t.totalQty).toLocaleString('en-US') + ' bags';
+  refreshTotals();
+}
+function renderHeader() {
+  var host = global.document.getElementById('fcbHead');
+  if (!host) { global.paint(); return; }
+  host.innerHTML = headerBody();
+}
+function renderErrors() {
+  var host = global.document.getElementById('fcbErr');
+  if (!host) { global.paint(); return; }
+  host.innerHTML = errorBlock();
+  var box = host.querySelector('.fcb-errs');
+  if (box && box.scrollIntoView) box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+ERP.BuilderRender = { lines: renderLines, header: renderHeader, results: renderResults, errors: renderErrors };
+
+function refreshTotals() {
+  var t = totals();
+  var sum = global.document.getElementById('fcbSum');
+  var sticky = global.document.querySelector('.fcb-stotals');
+  if (sum) sum.innerHTML = totalsBar();
+  if (sticky) sticky.innerHTML = totalsBar();
+  var cfg = B.cfg;
+  B.draft.items.forEach(function (it, ix) {
+    var calc = ERP.Calc.line(it);
+    var cell = global.document.querySelector('[data-fcamt="' + ix + '"]');
+    if (cell) cell.textContent = M.fmtPlain(calc.lineTotal);
+    /* the shortage warning has to appear as the quantity is typed, not
+       after the next repaint */
+    var input = global.document.querySelector('[data-fcline="qty"][data-ix="' + ix + '"]');
+    var row = input && input.closest ? input.closest('tr') : null;
+    if (!row) return;
+    var lw = it.warehouseId || B.draft.warehouseId;
+    var have = it.fromDamaged ? ERP.Inventory.damaged(it.productId, lw)
+                              : ERP.Inventory.available(it.productId, lw);
+    var isOut = cfg.stockOut && (!cfg.direction || it.direction === 'OUT');
+    var over = isOut && calc.qty > have;
+    row.classList.toggle('over', !!over);
+    var avail = row.querySelector('.fcb-avail');
+    if (avail) {
+      avail.classList.toggle('bad', !!over);
+      avail.textContent = Number(have).toLocaleString('en-US') +
+        (it.fromDamaged ? ' damaged' : ' available') +
+        (over ? ' · short by ' + Number(calc.qty - have).toLocaleString('en-US') : '');
+    }
+  });
+  var chk = global.document.querySelector('.fcb-check');
+  if (chk) chk.textContent = t.grandTotal
+    ? 'Grand total ' + M.fmt(t.grandTotal) + ' · balance after this payment ' + M.fmt(t.grandTotal - t.paidAmount)
+    : 'Add a line to see the totals.';
+}
+
+/* Problems are held in state and rendered by the page itself, so a repaint
+   — from a background save, another device, or the person switching a
+   dropdown — can never wipe the explanation off the screen. */
+function showErrors(list) {
+  B.errors = list || [];
+  renderErrors();
+  if (!global.document.querySelector('.fcb-errs')) say(list[0]);
+}
+function errorBlock() {
+  if (!B.errors || !B.errors.length) return '';
+  return '<div class="banner err fcb-errs">' + I('alert') + '<div><b>This ' + B.cfg.noun +
+    ' cannot be saved yet — nothing has been changed</b><ul>' +
+    B.errors.map(function (e) { return '<li>' + esc(e) + '</li>'; }).join('') +
+    '</ul></div></div>';
+}
+function setSaving(on, label) {
+  B.saving = on;
+  var btns = global.document.querySelectorAll('[data-fcbact="save"],[data-fcbact="draft"]');
+  Array.prototype.forEach.call(btns, function (b) {
+    b.disabled = on;
+    if (on && b.dataset.fcbact === 'save') { b.dataset.prev = b.innerHTML; b.innerHTML = label || 'Saving…'; }
+    else if (!on && b.dataset.prev) { b.innerHTML = b.dataset.prev; delete b.dataset.prev; }
+  });
+}
+
+B.save = function (asDraft) {
+  if (B.saving) return;                       /* double submission (§34) */
+  B.errors = [];
+  renderErrors();
+  setSaving(true, asDraft ? 'Saving draft…' : 'Saving…');
+  var cfg = B.cfg, mode = B.mode, orderId = B.draft.saleOrderId;
+
+  cfg.save(B.draft, asDraft).then(function (rec) {
+    setSaving(false); B.dirty = false;
+    var no = rec.invoiceNumber || rec.purchaseNumber || rec.orderNumber ||
+             rec.docNumber || rec.returnNumber || '';
+    say(cfg.title.replace(/^New /, '') + ' saved' + (no ? ' — ' + no : '') + '.');
+    if (mode === 'sale' && orderId) ERP.Orders.markInvoiced(orderId, rec);
+    ERP.Notify.fire(mode === 'sale' ? 'INVOICE_CREATED' : 'TRANSACTION_SAVED', { id: rec.id, ref: no });
+    B.draft = null;
+    global.go(cfg.back);
+    if (!asDraft && cfg.after) {
+      setTimeout(function () {
+        var model = cfg.after(rec);
+        if (model) ERP.Viewer.open(model);
+      }, 260);
+    }
+  }).catch(function (err) {
+    setSaving(false);
+    if (err && err.validation) { showErrors(err.validation); return; }
+    if (err && err.duplicate) {
+      showErrors(['This ' + cfg.noun + ' has already been saved — the repeated submission was ignored, ' +
+        'so nothing was duplicated.']);
+      return;
+    }
+    showErrors(['It could not be written to the database: ' +
+      (err && err.message ? err.message : 'unknown error') +
+      '. Nothing was saved — no stock or balance has changed.']);
+    try { global.console.error(err); } catch (e) {}
+  });
+};
+
+/* ══════════════════════════════════════════════════════════════════════════
+   INVOICE LIST (§37 §38 §39)
+   ══════════════════════════════════════════════════════════════════════════ */
+var LIST = ERP.InvoiceList = { q: '', period: 'all', status: 'all', region: 'all', wh: 'all', custom: null };
+
+function matches(inv) {
+  var q = LIST.q.toLowerCase().trim();
+  if (q) {
+    var items = ERP.Invoices.items(inv.id);
+    var hay = [inv.invoiceNumber, inv.shopNameSnapshot, inv.customerNameSnapshot, inv.mobileSnapshot,
+      inv.regionSnapshot, inv.orderNumber, inv.warehouseSnapshot, inv.referenceNo,
+      ERP.STATUS_LABEL[inv.status], M.toR(inv.grandTotal),
+      items.map(function (i) {
+        return i.descriptionSnapshot + ' ' + i.descriptionEnSnapshot + ' ' + i.brandSnapshot;
+      }).join(' ')].filter(Boolean).join(' ').toLowerCase();
+    if (hay.indexOf(q) === -1) return false;
+  }
+  if (LIST.status !== 'all' && inv.status !== LIST.status) return false;
+  if (LIST.region !== 'all' && inv.regionId !== LIST.region) return false;
+  if (LIST.wh !== 'all' && inv.warehouseId !== LIST.wh) return false;
+  if (LIST.period !== 'all') {
+    var r = LIST.period === 'custom' ? (LIST.custom || [null, null]) : ERP.Reports.range(LIST.period);
+    if (r[0] && inv.invoiceDate < r[0]) return false;
+    if (r[1] && inv.invoiceDate > r[1]) return false;
+  }
+  return true;
+}
+
+global.PAGES.invoices = function () {
+  var all = ERP.Invoices.all().slice().sort(function (a, b) {
+    return a.invoiceDate === b.invoiceDate ? (a.createdAt < b.createdAt ? 1 : -1)
+                                           : (a.invoiceDate < b.invoiceDate ? 1 : -1);
+  });
+  var list = all.filter(matches);
+  var live = list.filter(function (i) { return i.status !== 'CANCELLED' && i.status !== 'DRAFT'; });
+  var revenue = live.reduce(function (a, i) { return a + i.grandTotal; }, 0);
+  var received = live.reduce(function (a, i) { return a + ERP.Invoices.paidFor(i.id); }, 0);
+  var outstanding = live.reduce(function (a, i) { return a + ERP.Invoices.outstanding(i); }, 0);
+
+  var periods = [['all', 'All dates'], ['today', 'Today'], ['yesterday', 'Yesterday'], ['week', 'This week'],
+                 ['month', 'This month'], ['lastmonth', 'Last month'], ['year', 'This year']];
+  var statuses = [['all', 'All statuses']].concat(ERP.ENUM.invoiceStatus.map(function (s) {
+    return [s, ERP.STATUS_LABEL[s]];
+  }));
+
+  var rows = list.map(function (i) {
+    var paid = ERP.Invoices.paidFor(i.id), due = ERP.Invoices.outstanding(i);
+    var cls = i.status === 'PAID' ? 'ok' : i.status === 'CANCELLED' ? 'neu'
+            : i.status === 'DRAFT' ? 'neu' : i.status === 'PARTIALLY_PAID' ? 'low'
+            : /RETURNED/.test(i.status) ? 'info' : 'bad';
+    return '<tr data-row data-iso="' + i.invoiceDate + '" data-status="' + esc(ERP.STATUS_LABEL[i.status]) + '">' +
+      '<td data-label="Invoice" class="fcb-key"><b class="mono">' + esc(i.invoiceNumber || 'Draft') + '</b>' +
+        (i.orderNumber ? '<div class="sub mono">' + esc(i.orderNumber) + '</div>' : '') + '</td>' +
+      '<td data-label="Date">' + esc(fmtDate(i.invoiceDate)) + '</td>' +
+      '<td data-label="Shop"><button class="lnk" data-cust="' + i.customerId + '">' +
+        esc(i.shopNameSnapshot || '—') + '</button>' +
+        (i.customerNameSnapshot ? '<div class="sub">' + esc(i.customerNameSnapshot) + '</div>' : '') + '</td>' +
+      '<td data-label="Region">' + (i.regionSnapshot ? esc(i.regionSnapshot) : '—') + '</td>' +
+      '<td class="c num" data-label="Items">' + i.lineCount + '</td>' +
+      '<td data-label="Warehouse">' + esc(i.warehouseSnapshot || '—') + '</td>' +
+      '<td class="r num" data-label="Total">' + M.fmtPlain(i.grandTotal) + '</td>' +
+      '<td class="r num" data-label="Paid">' + M.fmtPlain(paid) + '</td>' +
+      '<td class="r num" data-label="Balance"><b>' + M.fmtPlain(due) + '</b></td>' +
+      '<td data-label="Status">' + (global.pill ? global.pill(cls, ERP.STATUS_LABEL[i.status]) : ERP.STATUS_LABEL[i.status]) + '</td>' +
+      '<td class="c fcb-rowacts">' +
+        '<button class="btn sm" data-fcinv="view" data-id="' + i.id + '">View</button>' +
+        '<button class="btn sm" data-fcinv="word" data-id="' + i.id + '">Word</button>' +
+        (i.status !== 'CANCELLED' ? '<button class="btn sm" data-fcinv="edit" data-id="' + i.id + '">Edit</button>' : '') +
+        '<button class="btn sm" data-fcinv="dup" data-id="' + i.id + '">Duplicate</button>' +
+        (i.status !== 'CANCELLED' && i.status !== 'DRAFT'
+          ? '<button class="btn sm" data-fcinv="pay" data-id="' + i.id + '">Payment</button>' +
+            '<button class="btn sm" data-fcinv="return" data-id="' + i.id + '">Return</button>' : '') +
+      '</td></tr>';
+  });
+
+  return '<div class="ledger l4">' +
+      '<div class="kpi"><div class="k">' + I('tag') + 'Invoices</div><div class="v">' + live.length + '</div>' +
+        '<div class="d">' + all.filter(function (i) { return i.status === 'DRAFT'; }).length + ' drafts</div></div>' +
+      '<div class="kpi"><div class="k">' + I('chart') + 'Invoiced</div><div class="v">' + M.fmt(revenue) + '</div>' +
+        '<div class="d">In the current filter</div></div>' +
+      '<div class="kpi"><div class="k">' + I('wallet') + 'Received</div><div class="v">' + M.fmt(received) + '</div>' +
+        '<div class="d">Against these invoices</div></div>' +
+      '<div class="kpi"><div class="k">' + I('alert') + 'Outstanding</div><div class="v">' + M.fmt(outstanding) + '</div>' +
+        '<div class="d">Still to collect</div></div>' +
+    '</div>' +
+    '<div class="bar">' +
+      '<div class="tsearch">' + I('search') +
+        '<input placeholder="Invoice no, shop, phone, region, product, order, amount…" data-fcq value="' +
+        esc(LIST.q) + '"></div>' +
+      '<label class="fld">' + I('cal') + '<select data-fcfil="period">' + periods.map(function (p) {
+        return '<option value="' + p[0] + '"' + (LIST.period === p[0] ? ' selected' : '') + '>' + p[1] + '</option>';
+      }).join('') + '</select></label>' +
+      '<label class="fld">' + I('filter') + '<select data-fcfil="status">' + statuses.map(function (s) {
+        return '<option value="' + s[0] + '"' + (LIST.status === s[0] ? ' selected' : '') + '>' + s[1] + '</option>';
+      }).join('') + '</select></label>' +
+      '<label class="fld">' + I('pin') + '<select data-fcfil="region"><option value="all">All regions</option>' +
+        (global.REGIONS || []).map(function (r) {
+          return '<option value="' + r.id + '"' + (LIST.region === r.id ? ' selected' : '') + '>' +
+            esc(r.en) + '</option>';
+        }).join('') + '</select></label>' +
+      '<label class="fld">' + I('box') + '<select data-fcfil="wh"><option value="all">All warehouses</option>' +
+        (global.activeWh ? global.activeWh() : []).map(function (w) {
+          return '<option value="' + w.id + '"' + (LIST.wh === w.id ? ' selected' : '') + '>' +
+            esc(w.name) + '</option>';
+        }).join('') + '</select></label>' +
+      '<div class="grow"></div>' +
+      '<button class="btn" data-fcbact="exportcsv">' + I('sheet') + 'CSV</button>' +
+      '<button class="btn" data-fcnew="order">' + I('doc') + 'New Order</button>' +
+      '<button class="btn pri" data-fcnew="sale">' + I('plus') + 'New Invoice</button>' +
+    '</div>' +
+    (rows.length ? '<div class="tw"><table class="fcb-list"><thead><tr>' +
+      '<th>Invoice #</th><th>Date</th><th>Customer / shop</th><th>Region</th><th class="c">Items</th>' +
+      '<th>Warehouse</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Balance</th>' +
+      '<th>Status</th><th class="c">Actions</th></tr></thead><tbody>' + rows.join('') + '</tbody></table></div>'
+    : '<div class="empty"><div class="ei">' + I('tag') + '</div><b>No invoices match</b>' +
+      '<p>Change the filters, or raise the first invoice for a shop.</p>' +
+      '<button class="btn pri" data-fcnew="sale">' + I('plus') + 'New Invoice</button></div>');
+};
+
+LIST.exportCsv = function () {
+  var rows = [['Invoice', 'Date', 'Shop', 'Owner', 'Region', 'Warehouse', 'Items', 'Bags', 'Subtotal',
+               'Discount', 'Charges', 'Grand total', 'Paid', 'Balance', 'Status']];
+  ERP.Invoices.all().filter(matches).forEach(function (i) {
+    rows.push([i.invoiceNumber || 'DRAFT', i.invoiceDate, i.shopNameSnapshot, i.customerNameSnapshot,
+      i.regionSnapshot, i.warehouseSnapshot, i.lineCount, i.totalQty,
+      M.toR(i.subtotal), M.toR(i.discountAmount),
+      M.toR(i.freightAmount + i.loadingAmount + i.otherCharges + i.taxAmount),
+      M.toR(i.grandTotal), M.toR(ERP.Invoices.paidFor(i.id)), M.toR(ERP.Invoices.outstanding(i)),
+      ERP.STATUS_LABEL[i.status]]);
+  });
+  var csv = rows.map(function (r) {
+    return r.map(function (c) { return '"' + String(c === undefined ? '' : c).replace(/"/g, '""') + '"'; }).join(',');
+  }).join('\n');
+  var blob = new global.Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' });
+  var a = global.document.createElement('a');
+  a.href = global.URL.createObjectURL(blob);
+  a.download = 'farooq-co-invoices-' + todayISO() + '.csv';
+  global.document.body.appendChild(a); a.click();
+  setTimeout(function () { global.URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+};
+
+ERP.BuilderUI = {
+  addLine: addLine, refreshTotals: refreshTotals, searchProducts: searchProducts,
+  resultRow: resultRow, matches: matches, LIST: LIST, MODES: MODES
+};
+})(typeof window !== 'undefined' ? window : globalThis);
