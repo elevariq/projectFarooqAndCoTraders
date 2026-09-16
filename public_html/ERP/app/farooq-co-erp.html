@@ -22320,7 +22320,11 @@ D.addEventListener('click', function (e) {
     }
   };
 
-  (ERP.bootPromise || Promise.resolve()).then(function () {
+  /* exposed so callers (and tests, after simulating a restart) can know
+     when the payroll stores have actually finished loading, rather than
+     guessing with a fixed delay — the same pattern 16-khata.js uses for
+     ERP.adjustmentsReady */
+  ERP.payrollReady = (ERP.bootPromise || Promise.resolve()).then(function () {
     return FDB.hydrate().then(function (d) {
       S.employees = d.employees || [];
       S.salaryPayments = d.salaryPayments || [];

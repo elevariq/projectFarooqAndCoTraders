@@ -179,7 +179,10 @@ async function main() {
   w.close();
   w = boot(store);
   for (let i = 0; i < 400 && !(w.ERP && w.ERP.ready); i++) await sleep(25);
-  await sleep(300);
+  /* wait for the payroll stores to finish loading rather than guessing at
+     a delay — matches how test-khata.mjs awaits ERP.adjustmentsReady */
+  await (w.ERP.payrollReady || Promise.resolve()).catch(() => {});
+  await sleep(200);
   ERP = w.ERP; D = w.document;
   check('R1 employees survive a restart', ERP.Employees.all().length === before.employees);
   check('R2 salary payments survive a restart', ERP.Payroll.paymentsFor(emp.id).length === before.payments);
