@@ -469,14 +469,17 @@ D.addEventListener('click', function (e) {
   }
 }, true);
 
-/* offer the link next to the existing sign-in chip, once it exists */
+/* offer the link next to the existing sign-in chip, once it exists — and
+   take it away again once a server identity is active, or it sits there
+   suggesting a sign-in that's already happened. */
 function ensureCompanyLink() {
   var chip = D.getElementById('fcUserChip');
-  if (!chip || D.getElementById('fcCompanyLink')) return;
+  var existing = D.getElementById('fcCompanyLink');
+  if (Auth.identity) { if (existing) existing.remove(); return; }
+  if (!chip || existing) return;
   var btn = D.createElement('button');
   btn.id = 'fcCompanyLink';
-  btn.textContent = Auth.identity ? '' : 'Company sign-in';
-  if (Auth.identity) return;              /* already have a server identity, nothing to offer */
+  btn.textContent = 'Company sign-in';
   chip.parentNode.insertBefore(btn, chip);
 }
 

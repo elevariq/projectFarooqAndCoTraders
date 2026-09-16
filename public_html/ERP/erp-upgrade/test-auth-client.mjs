@@ -123,10 +123,16 @@ async function main() {
     check('B5 CURRENT_USER is updated too (existing modules read this global)', w.CURRENT_USER === 'Farooq Ahmed');
     check('B6 an offline ticket was cached', !!store.ls[ERP.Auth._internal.TICKET_KEY]);
     check('B7 an offline password verifier was cached (PBKDF2)', !!store.ls[ERP.Auth._internal.VERIFIER_KEY]);
+    w.go('dashboard'); await sleep(150);
+    check('B7b the "Company sign-in" link disappears once actually signed in',
+      !w.document.getElementById('fcCompanyLink'));
 
     await ERP.Auth.logout();
     check('B8 signing out clears the identity', ERP.Auth.identity === null);
     check('B9 signing out clears the offline ticket too', !store.ls[ERP.Auth._internal.TICKET_KEY]);
+    w.go('dashboard'); await sleep(150);
+    check('B9b the "Company sign-in" link comes back after signing out',
+      !!w.document.getElementById('fcCompanyLink'));
     w.close();
   }
 
