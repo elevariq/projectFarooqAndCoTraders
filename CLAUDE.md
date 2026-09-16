@@ -372,6 +372,35 @@ minimal MVP rather than guessing at a real HR/accrual model:
 
 Covered by `test-payroll.mjs` (48 checks, including a full restart/persistence check).
 
+## Edge-case review of "Pay a shop" and Payroll, plus a live mobile bug (2026-09-16)
+
+Asked to review both features above for edge cases before moving on. Found and fixed:
+
+- **Button-style inconsistency**: on a shop's own account page (`16-khata.js`), "Receive payment"
+  was the prominent filled button while the new "Pay this shop" was a plain outline button, even
+  though they're meant to be equally available actions now. Both are `btn pri` now.
+- **Payroll**: "Pay salary" clicked from an *archived* employee's row silently pre-filled a
+  *different* employee instead, with no indication — the exact "wrong person paid" mistake the
+  Area-filter fixes were about. Archived employees now stay selectable (marked "(archived)") when
+  specifically pre-filled, instead of being silently swapped out. `test-payroll.mjs` grew to 50
+  checks.
+- **A live bug reported by the client mid-session, with a phone screenshot** (unrelated to either
+  new feature — module `10-mobile.js`, untouched until this fix, hadn't been touched all day): the
+  mobile bottom navigation ("Home / Sales / New / Stock / More") appeared cramped at bottom-left
+  with the desktop sidebar rail still visible on top of it, instead of a full-width bottom bar.
+  Root cause, two bugs stacking:
+  - The bar's hide-on-desktop rule lived only inside `@media(max-width:760px)`, so outside that
+    exact width there was no fallback default at all — fixed with an unconditional `display:none`
+    plus a higher-specificity override for the mobile+visible case.
+  - Nothing in `10-mobile.js` ever hid the desktop sidebar rail on mobile; it relied entirely on
+    the base app's own `max-width:900px` rule, which the sidebar's persisted collapsed/"mini"
+    state was defeating in practice. Reasserted with `!important`, scoped to `.fc-mobile`, and the
+    content area's margin is now reset to use the full width on mobile too.
+  - **This has no jsdom-testable surface** — jsdom does not render CSS/layout at all, only the DOM
+    structure (`test-mobile.mjs` already covers that the bar exists, has the right tabs, and
+    click-navigates correctly — all still passing). The actual visual fix was diagnosed by reading
+    the CSS cascade against the client's screenshot and needs a live phone to fully confirm.
+
 ## Where to look for more detail
 
 - `docs/OPERATIONS.md` — full access inventory, exact commands used, and the deploy checklist.
