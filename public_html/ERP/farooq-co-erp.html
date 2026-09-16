@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Farooq &amp; Co Traders — Warehouse ERP</title>
+<link rel="icon" type="image/png" href="logo.png">
+<link rel="apple-touch-icon" href="logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -72,6 +74,7 @@ svg{display:block}
 .mark::after{content:"";position:absolute;inset:0;border-radius:12px;border:1px solid rgba(255,255,255,.22)}
 .mark svg{width:19px;height:19px}
 .mark b{font-size:13.5px;font-weight:800;letter-spacing:-.04em;color:#fff;position:relative;text-shadow:0 1px 2px rgba(49,17,110,.35)}
+.mark img{width:82%;height:82%;object-fit:contain;position:relative}
 .brand-t{min-width:0}
 .brand-t b{display:block;font-size:15px;font-weight:800;letter-spacing:-.032em;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
@@ -599,6 +602,11 @@ table.dt tr.tot-row td,table.dt tr.open-row td{background:#F7F7F7;font-weight:70
   @page{size:A4;margin:12mm}
 }
 </style>
+
+
+
+
+
 
 
 
@@ -3036,7 +3044,7 @@ function paintTheme(){
   const d=document.documentElement.getAttribute('data-theme')==='dark';
   const b=document.getElementById('themeBtn'); if(b)b.innerHTML=I(d?'sun':'moon');
 }
-$('#markLogo').innerHTML='<b>F&amp;C</b>';
+$('#markLogo').innerHTML='<img src="logo.png" alt="Farooq &amp; Co Traders logo">';
 $('#sIco').innerHTML=I('search');
 $('#hamb').innerHTML=I('menu');
 $('#mini').innerHTML=I('panelL');
@@ -3337,6 +3345,12 @@ var STORES = {
   landedCosts:           { keyPath: 'id',    idx: { referenceNumber: ['referenceNumber', true], purchaseId: 'purchaseId', transferId: 'transferId', warehouseId: 'warehouseId', costDate: 'costDate', status: 'status' } },
   landedCostExpenses:    { keyPath: 'id',    idx: { landedCostId: 'landedCostId', category: 'category', expenseDate: 'expenseDate', paymentStatus: 'paymentStatus' } },
   inventoryCostAdjust:   { keyPath: 'id',    idx: { landedCostId: 'landedCostId', productId: 'productId', purchaseItemId: 'purchaseItemId', warehouseId: 'warehouseId' } },
+  /* ── payroll: employees and salary payments. Deliberately its own pair of
+     stores, separate from `salesmen` (area sales-coverage is a different
+     concern from who's on payroll) and from `payments` (a salary is never a
+     customer/supplier balance movement). ── */
+  employees:             { keyPath: 'id',    idx: { name: 'name', role: 'role', active: 'active' } },
+  salaryPayments:        { keyPath: 'id',    idx: { salaryNumber: ['salaryNumber', true], employeeId: 'employeeId', paymentDate: 'paymentDate' } },
   syncQueue:             { keyPath: 'opId',  idx: { state: 'state' } },
   legacy:                { keyPath: 'k' }   /* orders, dispatch, activity, rules, users, devices … */
 };
@@ -3347,7 +3361,8 @@ var STORE_NAMES = Object.keys(STORES);
    Opening that database under this schema would corrupt it, so this build
    uses its own name and adopts the old one on first run instead. */
 var DB_NAME = 'farooqco_erp_ledger';
-var DB_VER  = 9;   /* … v7 price history and approvals · v8 user accounts · v9 landed cost */
+var DB_VER  = 10;  /* … v7 price history and approvals · v8 user accounts · v9 landed cost ·
+                       v10 payroll (employees, salaryPayments) */
 var OLD_DB_NAME = 'farooqco_erp';
 var LS_KEY  = 'farooqco_erp_idb_mirror';
 var LEGACY_LS_KEY = 'farooqco_erp_v1';
@@ -4583,7 +4598,7 @@ var Payments = ERP.Payments = {
         if (a.invoiceId) Invoices.refreshPaymentState(api, a.invoiceId);
       });
       Audit.write(api, {
-        action: direction === 'IN' ? 'Payment received' : 'Payment made to supplier',
+        action: direction === 'IN' ? 'Payment received' : (partyType === 'CUSTOMER' ? 'Refund paid to shop' : 'Payment made to supplier'),
         entity: 'Payment', entityId: rec.id, ref: rec.receiptNumber,
         newValues: { amount: rec.amount, method: rec.method, party: rec.partyNameSnapshot }
       });
@@ -4618,6 +4633,23 @@ var Payments = ERP.Payments = {
         partyId: o.supplierId, amountP: amountP, method: o.method, reference: o.reference,
         date: o.date, note: o.note, description: o.description, allocations: o.allocations || []
       });
+    }).then(function (r) { Mirror.refresh(); return r; });
+  },
+  /* Money paid out to a shop that isn't tied to processing a return — a
+     refund, an adjustment, closing out a credit balance. The engine has
+     always supported this direction (a customer return with the REFUND
+     treatment already posts one, via _write with partyType forced to
+     CUSTOMER — see Returns.fromCustomer) but there was no way to do it on
+     its own; this is that same write, exposed as a direct action. */
+  refund: function (o) {
+    var amountP = M.toP(o.amount);
+    if (!(amountP > 0)) return Promise.reject({ validation: ['Enter an amount greater than zero.'] });
+    if (!global.custBy(o.customerId)) return Promise.reject({ validation: ['Choose a shop.'] });
+    return FDB.tx(['sequences', 'payments', 'paymentAllocations', 'auditLog'], function (api) {
+      return Payments._write(api, {
+        partyId: o.customerId, partyType: 'CUSTOMER', amountP: amountP, method: o.method,
+        reference: o.reference, date: o.date, note: o.note, description: o.description, allocations: []
+      }, 'OUT');
     }).then(function (r) { Mirror.refresh(); return r; });
   },
   autoAllocate: function (customerId, amountP) {
@@ -6333,8 +6365,13 @@ var DocModel = {
     var p = ERP.Payments.byId(paymentId);
     if (!p) return null;
     var incoming = p.direction === 'IN';
+    var isCustParty = p.partyType === 'CUSTOMER';
     var allocs = S.allocations.filter(function (a) { return a.paymentId === p.id; });
-    var closing = incoming ? ERP.Ledger.customerBalance(p.partyId) : ERP.Ledger.supplierBalance(p.partyId);
+    /* the balance to show is which party this payment is against — a
+       customer refund (direction OUT, partyType CUSTOMER) still needs the
+       shop's own balance, not the supplier ledger the direction alone
+       would suggest */
+    var closing = isCustParty ? ERP.Ledger.customerBalance(p.partyId) : ERP.Ledger.supplierBalance(p.partyId);
     return {
       kind: incoming ? 'RECEIPT' : 'VOUCHER', entityId: p.id,
       title: incoming ? 'PAYMENT RECEIPT' : 'PAYMENT VOUCHER',
@@ -6345,7 +6382,7 @@ var DocModel = {
       party: {
         label: incoming ? 'RECEIVED FROM' : 'PAID TO', shop: p.partyNameSnapshot,
         owner: p.partyOwnerSnapshot, region: p.regionSnapshot, id: p.partyId,
-        contact: incoming ? ((global.custBy(p.partyId) || {}).ph || '') : ''
+        contact: isCustParty ? ((global.custBy(p.partyId) || {}).ph || '') : ''
       },
       metaLabel: 'RECEIPT DETAILS',
       meta: [
@@ -6381,7 +6418,8 @@ var DocModel = {
       itemsFooter: allocs.length ? { description: 'Total applied', amount: M.fmtPlain(
         allocs.reduce(function (x, a) { return x + a.amount; }, 0)) } : null,
       totals: [
-        { label: 'Amount received', labelUr: 'وصول رقم', value: M.fmt(p.amount), big: true, rule: true },
+        { label: incoming ? 'Amount received' : 'Amount paid',
+          labelUr: incoming ? 'وصول رقم' : 'ادا شدہ رقم', value: M.fmt(p.amount), big: true, rule: true },
         { label: 'Previous balance', value: M.fmt(p.balanceBefore) },
         { label: 'Remaining balance', labelUr: 'بقایا رقم', value: M.fmt(closing), bold: true }
       ],
@@ -9104,6 +9142,52 @@ table.fcb-list .sub{font-size:12px;color:var(--muted)}
    ══════════════════════════════════════════════════════════════════════════ */
 var PAY_FOR = null, RETURN_FOR = null, SUPRET_FOR = null, STMT_FOR = null;
 ERP.setPayFor = function (id) { PAY_FOR = id; };
+var REFUND_FOR = null;
+ERP.setRefundFor = function (id) { REFUND_FOR = id; };
+
+/* Area filter for the "Receive payment" and "Pay a shop" pickers — same idea
+   as the Area filter already on the invoice builder (§ regionFilter in
+   05-ui-builder.js): picking an Area narrows the Shop list to just that
+   area's customers. Both panels keep independent area state (PAY_AREA /
+   REFUND_AREA) so opening one never disturbs the other's remembered filter,
+   built on one shared, single-source-of-truth pair of helpers. */
+var PAY_AREA = '', REFUND_AREA = '';
+function areaSelectOptionsFor(area) {
+  /* the region a pre-filled shop belongs to must stay selectable even if it
+     has since been switched off — otherwise the dropdown silently falls back
+     to "All areas" while the Shop list still shows just that one shop, which
+     is a confusing mismatch on a money screen */
+  var regions = (global.REGIONS || []).filter(function (r) { return r.active !== false || r.id === area; });
+  return '<option value=""' + (!area ? ' selected' : '') + '>All areas</option>' +
+    regions.map(function (r) {
+      return '<option value="' + esc(r.id) + '"' + (area === r.id ? ' selected' : '') + '>' +
+        esc(r.en) + (r.ur ? ' — ' + esc(r.ur) : '') + (r.active === false ? ' (inactive)' : '') + '</option>';
+    }).join('');
+}
+function customersInAreaFor(area) {
+  return (global.CUSTOMERS || []).filter(function (c) { return !area || (c.region || '') === area; });
+}
+function payAreaOptions() { return areaSelectOptionsFor(PAY_AREA); }
+function payCustomersInArea() { return customersInAreaFor(PAY_AREA); }
+function refundAreaOptions() { return areaSelectOptionsFor(REFUND_AREA); }
+function refundCustomersInArea() { return customersInAreaFor(REFUND_AREA); }
+/* Shared between the initial render and the live Area-change handler so the
+   two can never disagree. An area with genuinely no shops is shown as an
+   explicit empty state — it must NOT silently fall back to every shop, or
+   the Area dropdown and the Shop list would contradict each other. */
+function payShopOptionsHtml(custs, preId) {
+  if (!custs.length) return '<option value="" disabled selected>No shops in this area</option>';
+  return custs.map(function (c) {
+    return '<option value="' + c.id + '"' + (c.id === preId ? ' selected' : '') + '>' + esc(c.sh) + '</option>';
+  }).join('');
+}
+function payBalanceHtml(custs, preId) {
+  if (!custs.length) {
+    return I('alert') + '<div><b>No shops in this area</b><p>Pick a different area, or choose "All areas".</p></div>';
+  }
+  var id = (preId && custs.some(function (c) { return c.id === preId; })) ? preId : custs[0].id;
+  return I('wallet') + '<div><p>Outstanding balance: <b>' + M.fmt(ERP.Ledger.customerBalance(id)) + '</b></p></div>';
+}
 
 function openInvoicesForCustomer(cid) {
   return ERP.Invoices.all().filter(function (i) {
@@ -9117,16 +9201,17 @@ var PANELS = global.PANELS;
 PANELS.payment = {
   t: 'Receive payment', s: 'Money received from a shop', cta: 'Record payment & print receipt',
   f: function () {
-    var custs = (global.CUSTOMERS || []);
-    if (!custs.length) return '<div class="banner warn">' + I('alert') + '<div><b>No shops on file</b><p>Add a shop first.</p></div></div>';
-    var pre = PAY_FOR || custs[0].id;
-    var bal = ERP.Ledger.customerBalance(pre);
-    return '<label class="f"><span>Shop</span><select data-f="cust" id="fcPayCust">' +
-        custs.map(function (c) {
-          return '<option value="' + c.id + '"' + (c.id === pre ? ' selected' : '') + '>' + esc(c.sh) + '</option>';
-        }).join('') + '</select></label>' +
-      '<div class="banner info" id="fcPayBal">' + I('wallet') +
-        '<div><p>Outstanding balance: <b>' + M.fmt(bal) + '</b></p></div></div>' +
+    var all = (global.CUSTOMERS || []);
+    if (!all.length) return '<div class="banner warn">' + I('alert') + '<div><b>No shops on file</b><p>Add a shop first.</p></div></div>';
+    var preCust = PAY_FOR ? global.custBy(PAY_FOR) : null;
+    PAY_AREA = preCust ? (preCust.region || '') : '';
+    var custs = payCustomersInArea();
+    var pre = (PAY_FOR && custs.some(function (c) { return c.id === PAY_FOR; })) ? PAY_FOR : undefined;
+    return '<label class="f"><span>Area</span><select data-f="area" id="fcPayArea">' + payAreaOptions() +
+      '</select></label>' +
+      '<label class="f"><span>Shop</span><select data-f="cust" id="fcPayCust"' + (custs.length ? '' : ' disabled') + '>' +
+        payShopOptionsHtml(custs, pre) + '</select></label>' +
+      '<div class="banner ' + (custs.length ? 'info' : 'warn') + '" id="fcPayBal">' + payBalanceHtml(custs, pre) + '</div>' +
       '<div class="f2 fc-amtpaid"><label class="f"><span>Amount Paid</span>' +
         '<input data-f="amt" inputmode="decimal" placeholder="e.g. 100000"></label>' +
         '<label class="f"><span>Method</span><select data-f="method">' +
@@ -9177,7 +9262,14 @@ PANELS.paysup = {
   t: 'Pay supplier', s: 'Money paid to a mill', cta: 'Record payment & print voucher',
   f: function () {
     var sups = (global.SUPPLIERS || []).filter(function (s) { return s.active !== false; });
-    var pre = PAY_FOR || (sups[0] || {}).id;
+    /* the base app's own "Pay supplier" button (a supplier's profile page)
+       sets WATARGET, not PAY_FOR — this panel definition replaces the base
+       app's original one (which read WATARGET) but never picked up that
+       fallback, so opening it from a specific supplier's page silently
+       defaulted to the first supplier in the list instead. */
+    var watarget = typeof WATARGET !== 'undefined' ? WATARGET : null;
+    var pre = PAY_FOR || (watarget && sups.some(function (s) { return s.id === watarget; }) ? watarget : null) ||
+      (sups[0] || {}).id;
     return '<label class="f"><span>Supplier</span><select data-f="sup">' +
         sups.map(function (s) {
           return '<option value="' + s.id + '"' + (s.id === pre ? ' selected' : '') + '>' + esc(s.co) + '</option>';
@@ -9203,6 +9295,49 @@ PANELS.paysup = {
         global.paint(); say('Voucher ' + p.receiptNumber + ' recorded.');
         setTimeout(function () { ERP.Viewer.open(ERP.DocModel.receipt(p.id)); }, 220);
       }).catch(function (e) { say(e && e.validation ? e.validation[0] : 'The payment could not be saved.'); });
+    return { msg: 'Saving payment…' };
+  }
+};
+
+PANELS.refund = {
+  t: 'Pay a shop', s: 'Money paid out to a shop — a refund or adjustment, not tied to a return',
+  cta: 'Record payment & print voucher',
+  f: function () {
+    var all = (global.CUSTOMERS || []);
+    if (!all.length) return '<div class="banner warn">' + I('alert') + '<div><b>No shops on file</b><p>Add a shop first.</p></div></div>';
+    var preCust = REFUND_FOR ? global.custBy(REFUND_FOR) : null;
+    REFUND_AREA = preCust ? (preCust.region || '') : '';
+    var custs = refundCustomersInArea();
+    var pre = (REFUND_FOR && custs.some(function (c) { return c.id === REFUND_FOR; })) ? REFUND_FOR : undefined;
+    return '<label class="f"><span>Area</span><select data-f="area" id="fcRefundArea">' + refundAreaOptions() +
+      '</select></label>' +
+      '<label class="f"><span>Shop</span><select data-f="cust" id="fcRefundCust"' + (custs.length ? '' : ' disabled') + '>' +
+        payShopOptionsHtml(custs, pre) + '</select></label>' +
+      '<div class="banner ' + (custs.length ? 'info' : 'warn') + '" id="fcRefundBal">' + payBalanceHtml(custs, pre) + '</div>' +
+      '<div class="f2 fc-amtpaid"><label class="f"><span>Amount Paid</span>' +
+        '<input data-f="amt" inputmode="decimal" placeholder="e.g. 100000"></label>' +
+        '<label class="f"><span>Method</span><select data-f="method">' +
+          ERP.ENUM.methods.map(function (m) { return '<option>' + m + '</option>'; }).join('') + '</select></label></div>' +
+      '<div class="f2"><label class="f"><span>Date</span><input type="date" data-f="date" value="' + todayISO() + '"></label>' +
+        '<label class="f"><span>Reference</span><input data-f="ref" class="mono" placeholder="Optional"></label></div>' +
+      '<label class="f fc-desc"><span>Description / تفصیل</span>' +
+        '<input data-f="desc" maxlength="500" ' +
+        'placeholder="Appears on the statement — English or Urdu"></label>' +
+      '<label class="f"><span>Internal note</span><input data-f="note" placeholder="Optional"></label>';
+  },
+  save: function (v) {
+    var amount = String(v.amt || '').replace(/[^\d.]/g, '');
+    if (!amount || Number(amount) <= 0) return 'Enter the amount to pay.';
+    ERP.Payments.refund({
+      customerId: v.cust, amount: amount, method: v.method, reference: v.ref,
+      date: v.date || todayISO(), note: v.note, description: v.desc
+    }).then(function (p) {
+      global.paint();
+      say('Voucher ' + p.receiptNumber + ' recorded.');
+      setTimeout(function () { ERP.Viewer.open(ERP.DocModel.receipt(p.id)); }, 220);
+    }).catch(function (e) {
+      say(e && e.validation ? e.validation[0] : 'The payment could not be saved. Nothing was changed.');
+    });
     return { msg: 'Saving payment…' };
   }
 };
@@ -9673,6 +9808,50 @@ D.addEventListener('change', function (e) {
       M.fmt(ERP.Ledger.customerBalance(el.value)) + '</b></p></div>';
     renderAllocList(); return;
   }
+  if (el.id === 'fcPayArea') {
+    PAY_AREA = el.value;
+    var custSel = D.getElementById('fcPayCust');
+    if (custSel) {
+      var opts = payCustomersInArea();
+      custSel.disabled = !opts.length;
+      custSel.innerHTML = payShopOptionsHtml(opts);
+      var bbox = D.getElementById('fcPayBal');
+      if (bbox) {
+        bbox.className = 'banner ' + (opts.length ? 'info' : 'warn');
+        bbox.innerHTML = payBalanceHtml(opts);
+      }
+      if (opts.length) {
+        renderAllocList();
+      } else {
+        /* no shop is selected in this state — don't let renderAllocList()
+           overwrite this with a misleading "this shop has no unpaid
+           invoices" message, which implies a shop that isn't there */
+        var listHost = D.getElementById('fcPayList'); if (listHost) listHost.innerHTML = '';
+      }
+    }
+    return;
+  }
+  if (el.id === 'fcRefundCust') {
+    var rbox = D.getElementById('fcRefundBal');
+    if (rbox) rbox.innerHTML = I('wallet') + '<div><p>Outstanding balance: <b>' +
+      M.fmt(ERP.Ledger.customerBalance(el.value)) + '</b></p></div>';
+    return;
+  }
+  if (el.id === 'fcRefundArea') {
+    REFUND_AREA = el.value;
+    var refundSel = D.getElementById('fcRefundCust');
+    if (refundSel) {
+      var ropts = refundCustomersInArea();
+      refundSel.disabled = !ropts.length;
+      refundSel.innerHTML = payShopOptionsHtml(ropts);
+      var rbbox = D.getElementById('fcRefundBal');
+      if (rbbox) {
+        rbbox.className = 'banner ' + (ropts.length ? 'info' : 'warn');
+        rbbox.innerHTML = payBalanceHtml(ropts);
+      }
+    }
+    return;
+  }
   if (el.id === 'fcPayMode') { renderAllocList(); return; }
   if (el.id === 'fcRetInv') {
     var host = D.getElementById('fcRetLines');
@@ -10084,6 +10263,19 @@ var CSS = `
 .fcb-in,.fcb-mini,.fcb-search input,.fcb-fallback select{font-size:16px}
 .tw{-webkit-overflow-scrolling:touch}
 
+/* Hidden unconditionally by default — the version of this rule that only
+   hid it on desktop used to live inside the @media block below, so it
+   simply never fired outside that width and the bar could render as a
+   plain unstyled block at the end of the page. Found 2026-09-16 from a
+   client screenshot: on a real phone the bar WAS being fixed to the
+   bottom (so the media query was matching), but the desktop sidebar rail
+   was never being hidden alongside it and sat on top of it, cutting off
+   the first one or two tabs. Both fixed here, defensively, regardless of
+   the exact reason the base app's own 900px rail-hiding rule wasn't
+   enough on its own. */
+.fc-tabbar{display:none}
+body.fc-mobile:not(.fc-hidechrome) .fc-tabbar{display:grid}
+
 @media (max-width:760px){
   body.fc-mobile{--fc-on:1}
 
@@ -10091,8 +10283,17 @@ var CSS = `
   body.fc-mobile .page{padding:12px 12px calc(var(--fc-tab) + var(--fc-safe) + 12px)}
   body.fc-mobile.fc-builder .page{padding-bottom:calc(var(--fc-tab) + var(--fc-safe) + 132px)}
 
+  /* the desktop rail must stay off-screen unless the drawer is explicitly
+     open — the base app already does this at max-width:900px, but that
+     rule was losing to the sidebar's own collapsed/"mini" state in
+     practice, so it's reasserted here with !important, scoped to mobile */
+  body.fc-mobile:not(.drawer) .rail{transform:translateX(-100%) !important}
+  body.fc-mobile.drawer .rail{transform:none !important;width:250px !important;
+    flex-basis:250px !important;z-index:70}
+  body.fc-mobile .main{margin-left:0 !important}
+
   /* ── bottom navigation ── */
-  .fc-tabbar{position:fixed;left:0;right:0;bottom:0;z-index:80;display:grid;
+  .fc-tabbar{position:fixed;left:0;right:0;bottom:0;z-index:80;
     grid-auto-flow:column;grid-auto-columns:1fr;background:var(--surface);
     border-top:1px solid var(--line);padding-bottom:var(--fc-safe);
     box-shadow:0 -6px 20px rgba(18,17,26,.07)}
@@ -13802,6 +14003,7 @@ global.PAGES.khata = function (customerId) {
         '</div>' +
         '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">' +
           '<button class="btn pri" data-khpay="' + c.id + '">' + I('wallet') + 'Receive payment</button>' +
+          '<button class="btn pri" data-khrefund="' + c.id + '">' + I('wallet') + 'Pay this shop</button>' +
           '<button class="btn" data-khadjust="' + c.id + '">' + I('edit') + 'Adjustment</button>' +
           '<button class="btn" data-fcnew="sale">' + I('plus') + 'New invoice</button>' +
         '</div>' +
@@ -13886,6 +14088,7 @@ if (origProfile) {
     return '<div class="bar"><div class="grow"></div>' +
       '<button class="btn pri" data-khata="' + id + '">' + I('doc') + 'Account statement</button>' +
       '<button class="btn" data-khpay="' + id + '">' + I('wallet') + 'Receive payment</button>' +
+      '<button class="btn" data-khrefund="' + id + '">' + I('wallet') + 'Pay this shop</button>' +
       '</div>' + html;
   };
 }
@@ -14083,6 +14286,13 @@ D.addEventListener('click', function (e) {
     e.preventDefault();
     if (ERP.setPayFor) ERP.setPayFor(pay.dataset.khpay);
     global.openPanel('payment');
+    return;
+  }
+  var refund = e.target.closest('[data-khrefund]');
+  if (refund) {
+    e.preventDefault();
+    if (ERP.setRefundFor) ERP.setRefundFor(refund.dataset.khrefund);
+    global.openPanel('refund');
     return;
   }
   var adj = e.target.closest('[data-khadjust]');
@@ -21666,6 +21876,706 @@ D.addEventListener('click', function (e) {
   ERP.AreaWiseUI = { version: '2026-09-15' };
 
 })(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>/* ── 29-statement-of-account.js · STATEMENT OF ACCOUNT — one Finance screen for either party's ledger ── */
+/* ══════════════════════════════════════════════════════════════════════════
+   STATEMENT OF ACCOUNT — ONE SCREEN, EITHER PARTY
+
+   Client request (2026-09-16): a place under Finance to check the complete
+   khata of a Customer OR a Supplier — every purchase/sale, payment and the
+   outstanding balance, with dates — without having to first open that
+   shop's or mill's own profile page to find the "Statement" button.
+
+   This adds no new ledger math. It is a filter bar (party type, area, party,
+   date range) in front of the same ERP.Ledger.customer()/.supplier() figures
+   and the same ERP.DocModel.statement() used by the existing per-shop and
+   per-supplier "Statement" buttons, so this can never disagree with them.
+   ══════════════════════════════════════════════════════════════════════════ */
+(function (global) {
+  'use strict';
+  var ERP = global.ERP; if (!ERP) return;
+  var M = global.Money, D = global.document;
+  if (!M || !ERP.Ledger || !ERP.DocModel || !global.PAGES) return;
+
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function I(n) { return global.icon ? global.icon(n) : ''; }
+  function say(m) { try { global.say(m); } catch (e) {} }
+  function fmtDate(d) { return global.fmtDate ? global.fmtDate(d) : d; }
+
+  /* ════════════════════════════════════════════════════════════════════════
+     STATE
+     ════════════════════════════════════════════════════════════════════════ */
+  var SOA = { type: 'CUSTOMER', regionId: '', partyId: '', from: '', to: '' };
+
+  function customersInArea() {
+    return (global.CUSTOMERS || []).filter(function (c) {
+      return !SOA.regionId || (c.region || '') === SOA.regionId;
+    });
+  }
+  function partyList() {
+    if (SOA.type === 'SUPPLIER') {
+      return (global.SUPPLIERS || []).filter(function (s) { return s.active !== false; })
+        .slice().sort(function (a, b) {
+          return (a.co || '').toLowerCase() < (b.co || '').toLowerCase() ? -1 : 1;
+        });
+    }
+    return customersInArea().slice().sort(function (a, b) {
+      return (a.sh || '').toLowerCase() < (b.sh || '').toLowerCase() ? -1 : 1;
+    });
+  }
+  function partyName(p) { return SOA.type === 'SUPPLIER' ? (p.co || '') : (p.sh || ''); }
+  function ledgerFor(id) {
+    return SOA.type === 'SUPPLIER'
+      ? ERP.Ledger.supplier(id, SOA.from || null, SOA.to || null)
+      : ERP.Ledger.customer(id, SOA.from || null, SOA.to || null);
+  }
+  function partyById(id) {
+    return SOA.type === 'SUPPLIER' ? (global.supOf && global.supOf(id)) : (global.custBy && global.custBy(id));
+  }
+  function regionOptions() {
+    /* keep the currently selected area choosable even if it's since been
+       switched off, or the dropdown would silently jump to "All areas"
+       while the party list stayed filtered to the (now invisible) area */
+    var regions = (global.REGIONS || []).filter(function (r) { return r.active !== false || r.id === SOA.regionId; });
+    return '<option value="">All areas</option>' +
+      regions.map(function (r) {
+        return '<option value="' + esc(r.id) + '"' + (SOA.regionId === r.id ? ' selected' : '') +
+          '>' + esc(r.en) + (r.ur ? ' — ' + esc(r.ur) : '') + (r.active === false ? ' (inactive)' : '') + '</option>';
+      }).join('');
+  }
+  function card(cls, l, v, d) {
+    return '<div class="kh-card ' + cls + '"><i>' + l + '</i><b>' + v + '</b>' +
+      (d ? '<div class="d">' + d + '</div>' : '') + '</div>';
+  }
+  /* A zero-length party list (e.g. an area with no shops) must still leave
+     the filter bar on screen — an empty state with no way to change the
+     Area or Party type is a dead end the person can only escape by leaving
+     the page and losing the screen's remembered state anyway. */
+  function partyOptionsHtml(list) {
+    if (!list.length) {
+      return '<option value="" disabled selected>No ' +
+        (SOA.type === 'SUPPLIER' ? 'suppliers on file' : (SOA.regionId ? 'shops in this area' : 'shops on file')) +
+        '</option>';
+    }
+    return list.map(function (p) {
+      return '<option value="' + p.id + '"' + (p.id === SOA.partyId ? ' selected' : '') + '>' +
+        esc(partyName(p)) + '</option>';
+    }).join('');
+  }
+
+  /* ════════════════════════════════════════════════════════════════════════
+     THE SCREEN
+     ════════════════════════════════════════════════════════════════════════ */
+  global.PAGES.soa = function () {
+    var isCust = SOA.type !== 'SUPPLIER';
+    var list = partyList();
+
+    if (list.length) {
+      if (!list.some(function (p) { return p.id === SOA.partyId; })) SOA.partyId = list[0].id;
+    } else {
+      SOA.partyId = '';
+    }
+    var party = list.length ? list.filter(function (p) { return p.id === SOA.partyId; })[0] : null;
+
+    var filterBar = '<div class="bar">' +
+        '<label class="f"><span>Party type</span><select data-soaf="type">' +
+          '<option value="CUSTOMER"' + (isCust ? ' selected' : '') + '>Customer</option>' +
+          '<option value="SUPPLIER"' + (!isCust ? ' selected' : '') + '>Supplier</option>' +
+        '</select></label>' +
+        (isCust ? '<label class="f"><span>Area</span><select data-soaf="regionId">' + regionOptions() +
+          '</select></label>' : '') +
+        '<label class="f"><span>' + (isCust ? 'Shop' : 'Supplier') + '</span><select data-soaf="partyId"' +
+          (list.length ? '' : ' disabled') + '>' + partyOptionsHtml(list) + '</select></label>' +
+        '<label class="f"><span>From</span><input type="date" data-soaf="from" value="' + esc(SOA.from) + '"></label>' +
+        '<label class="f"><span>To</span><input type="date" data-soaf="to" value="' + esc(SOA.to) + '"></label>' +
+        '<div class="grow"></div>' +
+        (isCust
+          ? '<button class="btn" data-soapay>' + I('wallet') + 'Receive payment</button>' +
+            '<button class="btn" data-soarefund>' + I('wallet') + 'Pay this shop</button>'
+          : '<button class="btn" data-soapaysup>' + I('wallet') + 'Pay this supplier</button>') +
+        '<button class="btn" data-soaprint>' + I('print') + 'Print / PDF</button>' +
+        '<button class="btn pri" data-soaexcel>' + I('sheet') + 'Excel</button>' +
+      '</div>';
+
+    if (!list.length) {
+      return '<div class="card"><div class="card-h"><h3>Statement of Account</h3>' +
+          '<span class="pill neu">' + (isCust ? 'Customer' : 'Supplier') + ' ledger</span></div><div class="card-b">' +
+        filterBar +
+        '<div class="banner warn" style="margin-top:12px">' + I('alert') +
+          '<div><b>No ' + (isCust ? 'shops' : 'suppliers') + ' on file' +
+            (isCust && SOA.regionId ? ' in this area' : '') + '</b>' +
+          '<p>' + (isCust ? 'Pick a different area, or add a shop.' : 'Add a supplier first.') + '</p></div></div>' +
+      '</div></div>';
+    }
+
+    /* Ledger._roll() (02-services.js) treats an inverted range as "drop
+       everything after To, fold everything before From into opening" — with
+       From after To that silently discards transactions from both the
+       period AND the opening balance instead of raising an error. Every
+       other statement entry point in the app only ever offers preset
+       periods (always valid); this screen is the first to expose raw
+       From/To fields, so it's the first place that inversion is reachable
+       at all — caught here rather than showing a wrong balance. */
+    if (SOA.from && SOA.to && SOA.from > SOA.to) {
+      return '<div class="card"><div class="card-h"><h3>Statement of Account</h3>' +
+          '<span class="pill neu">' + (isCust ? 'Customer' : 'Supplier') + ' ledger</span></div><div class="card-b">' +
+        filterBar +
+        '<div class="banner warn" style="margin-top:12px">' + I('alert') +
+          '<div><b>The "From" date is after the "To" date</b>' +
+          '<p>Pick a From date on or before the To date.</p></div></div>' +
+      '</div></div>';
+    }
+
+    var L = ledgerFor(SOA.partyId);
+
+    var movementIn = isCust ? L.debit : L.credit;    /* invoiced / purchased  — adds to what they owe */
+    var movementOut = isCust ? L.credit : L.debit;   /* received / paid       — reduces it */
+
+    /* a long-lived account can carry thousands of entries; the on-screen
+       table shows the most recent MAX_ROWS_SHOWN (L.rows is oldest-first,
+       so the tail is the most recent) — Print/PDF and Excel are unaffected
+       and always cover the full period regardless of this cap */
+    var MAX_ROWS_SHOWN = 300;
+    var truncated = L.rows.length > MAX_ROWS_SHOWN;
+    var shownRows = truncated ? L.rows.slice(-MAX_ROWS_SHOWN) : L.rows;
+
+    var rows = shownRows.map(function (r) {
+      return '<tr>' +
+        '<td data-label="Date">' + esc(fmtDate(r.iso)) + '</td>' +
+        '<td data-label="Reference / Folio" class="mono">' + esc(r.ref || '—') + '</td>' +
+        '<td data-label="Description">' + esc(r.description || r.what) + '</td>' +
+        '<td data-label="Debit / بنام" class="r kh-dr">' + (r.dr ? M.fmtPlain(r.dr) : '—') + '</td>' +
+        '<td data-label="Credit / جمع" class="r kh-cr">' + (r.cr ? M.fmtPlain(r.cr) : '—') + '</td>' +
+        '<td data-label="Balance / بقایا" class="r kh-bal' + (r.balance < 0 ? ' neg' : '') + '">' +
+          M.fmtPlain(r.balance) + '</td>' +
+      '</tr>';
+    }).join('');
+
+    return '<div class="card"><div class="card-h"><h3>Statement of Account</h3>' +
+        '<span class="pill neu">' + (isCust ? 'Customer' : 'Supplier') + ' ledger</span></div><div class="card-b">' +
+      filterBar +
+
+      '<div class="kh-cards">' +
+        card('', 'Opening balance', M.fmt(L.opening)) +
+        card('sale', isCust ? 'Total invoiced' : 'Total purchased', M.fmt(movementIn)) +
+        card('credit', isCust ? 'Total received' : 'Total paid', M.fmt(movementOut)) +
+        card(L.closing > 0 ? 'due' : 'credit', 'Closing balance', M.fmt(L.closing),
+          L.closing > 0 ? (isCust ? 'Owed by the shop' : 'Payable to the supplier')
+            : L.closing < 0 ? 'In credit' : 'Settled') +
+      '</div>' +
+
+      (party ? '<p class="hint" style="margin:10px 0 0">' + esc(partyName(party)) +
+        (isCust && party.ow ? ' · ' + esc(party.ow) : (!isCust && party.cp ? ' · ' + esc(party.cp) : '')) +
+        (function () {
+          var region = isCust && party.region && global.regionOf ? global.regionOf(party.region) : null;
+          return region ? ' · ' + esc(region.en) : '';
+        })() +
+        '</p>' : '') +
+
+      (truncated ? '<p class="hint" style="margin-top:12px">Showing the most recent ' + MAX_ROWS_SHOWN +
+        ' of ' + L.rows.length + ' transactions. Use Print/PDF or Excel for the complete statement.</p>' : '') +
+
+      (L.rows.length
+        ? '<div class="tw" style="margin-top:' + (truncated ? '6' : '12') + 'px"><table class="kh-table"><thead><tr>' +
+            '<th>Date</th><th>Reference / Folio</th><th>Description</th>' +
+            '<th class="r">Debit / بنام</th><th class="r">Credit / جمع</th>' +
+            '<th class="r">Balance / بقایا</th>' +
+          '</tr></thead><tbody>' + rows + '</tbody>' +
+          '<tfoot><tr><td colspan="3"><b>Totals for this period</b></td>' +
+            '<td class="r kh-dr">' + M.fmtPlain(L.debit) + '</td>' +
+            '<td class="r kh-cr">' + M.fmtPlain(L.credit) + '</td>' +
+            '<td class="r kh-bal">' + M.fmtPlain(L.closing) + '</td></tr></tfoot>' +
+          '</table></div>'
+        : '<p class="hint" style="margin-top:12px">No transactions in this period.</p>') +
+    '</div></div>';
+  };
+
+  /* ════════════════════════════════════════════════════════════════════════
+     NAV — one entry under the existing Finance group, right after Payments
+     ════════════════════════════════════════════════════════════════════════ */
+  try {
+    var NAV = global.NAV, GROUPS = global.NAVGROUPS;
+    if (!NAV.some(function (n) { return n.id === 'soa'; })) {
+      var at = NAV.map(function (n) { return n.id; }).indexOf('payments');
+      NAV.splice(at < 0 ? NAV.length : at + 1, 0, { id: 'soa', l: 'Statement of Account', i: 'doc' });
+    }
+    GROUPS.forEach(function (g) {
+      if (g[0] === 'Finance' && g[1].indexOf('soa') === -1) {
+        var pos = g[1].indexOf('payments');
+        g[1].splice(pos < 0 ? g[1].length : pos + 1, 0, 'soa');
+      }
+    });
+    if (global.PAGEMETA) {
+      global.PAGEMETA.soa = ['Statement of Account',
+        'Pick a customer or supplier and see every invoice, payment and the balance, with dates.'];
+    }
+  } catch (e) {}
+
+  /* ════════════════════════════════════════════════════════════════════════
+     HANDLERS
+     ════════════════════════════════════════════════════════════════════════ */
+  D.addEventListener('change', function (e) {
+    var el = e.target; if (!el.dataset || el.dataset.soaf === undefined) return;
+    var k = el.dataset.soaf, v = el.value;
+    if (k === 'type') { SOA.type = v; SOA.regionId = ''; SOA.partyId = ''; }
+    else if (k === 'regionId') { SOA.regionId = v; SOA.partyId = ''; }
+    else { SOA[k] = v; }
+    global.paint();
+  });
+
+  function invalidRange() { return SOA.from && SOA.to && SOA.from > SOA.to; }
+
+  D.addEventListener('click', function (e) {
+    if (!e.target.closest) return;
+    if (e.target.closest('[data-soapay]')) {
+      e.preventDefault();
+      if (!SOA.partyId) return;
+      if (ERP.setPayFor) ERP.setPayFor(SOA.partyId);
+      global.openPanel('payment');
+      return;
+    }
+    if (e.target.closest('[data-soarefund]')) {
+      e.preventDefault();
+      if (!SOA.partyId) return;
+      if (ERP.setRefundFor) ERP.setRefundFor(SOA.partyId);
+      global.openPanel('refund');
+      return;
+    }
+    if (e.target.closest('[data-soapaysup]')) {
+      e.preventDefault();
+      if (!SOA.partyId) return;
+      if (ERP.setPayFor) ERP.setPayFor(SOA.partyId);
+      global.openPanel('paysup');
+      return;
+    }
+    if (e.target.closest('[data-soaprint]')) {
+      e.preventDefault();
+      if (!SOA.partyId) return;
+      if (invalidRange()) { say('The "From" date is after the "To" date — fix the range first.'); return; }
+      var m = ERP.DocModel.statement(SOA.partyId, SOA.type, SOA.from || null, SOA.to || null);
+      ERP.Viewer.open(m);
+      ERP.Audit.detached({ action: 'Statement of account opened', entity: 'Report', entityId: 'soa',
+        reason: SOA.type + ' ' + SOA.partyId });
+      return;
+    }
+    if (e.target.closest('[data-soaexcel]')) {
+      e.preventDefault();
+      if (!SOA.partyId) return;
+      if (invalidRange()) { say('The "From" date is after the "To" date — fix the range first.'); return; }
+      var L = ledgerFor(SOA.partyId);
+      var party = partyById(SOA.partyId);
+      var pname = party ? partyName(party) : '';
+      var head = ['Date', 'Reference', 'Description', 'Debit', 'Credit', 'Balance'];
+      var rows = L.rows.map(function (r) {
+        return [fmtDate(r.iso), r.ref || '', r.description || r.what, M.toR(r.dr), M.toR(r.cr), M.toR(r.balance)];
+      });
+      var title = ['Statement of Account — ' + pname];
+      var period = ['Period', (SOA.from ? fmtDate(SOA.from) : 'Beginning') + ' to ' + (SOA.to ? fmtDate(SOA.to) : 'Today')];
+      var sheet = { name: 'Statement', rows: [title, period, []].concat([head]).concat(rows) };
+      try {
+        var bytes = ERP.XLSX.build([sheet],
+          { title: 'Statement of Account', author: ERP.Settings.get().businessName });
+        var blob = new global.Blob([bytes],
+          { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        var a = D.createElement('a');
+        a.href = global.URL.createObjectURL(blob);
+        a.download = 'Statement-' + (pname || SOA.partyId).replace(/[^\w-]+/g, '_') + '.xlsx';
+        D.body.appendChild(a); a.click();
+        setTimeout(function () { global.URL.revokeObjectURL(a.href); a.remove(); }, 1200);
+        ERP.Audit.detached({ action: 'Statement of account exported to Excel', entity: 'Report', entityId: 'soa' });
+        say('Excel file downloaded.');
+      } catch (err) { say('Could not build the Excel file.'); }
+      return;
+    }
+  });
+})(typeof window !== 'undefined' ? window : this);
+
+</script>
+<script>/* ── 30-payroll.js · PAYROLL — employee list, monthly salary rate, and salary payments (MVP) ── */
+/* ══════════════════════════════════════════════════════════════════════════
+   PAYROLL — EMPLOYEE SALARY MANAGEMENT (MVP)
+
+   Client request (2026-09-16, clientNewReq/): "Payroll = Employee salary
+   management system." No fields, salary structure or screenshot were ever
+   given, even after a follow-up — so this deliberately stays a minimal,
+   honest MVP rather than guessing at a real HR/accrual data model:
+
+     - An employee list: name, role, phone, monthly salary rate, active/
+       archived.
+     - "Pay salary" — records a dated payment (amount, method, an optional
+       free-text period like "September 2026", reference, note). This is a
+       payment LOG, not an accrual/payable system — there is no "balance
+       owed" concept, because nothing was specified about pay periods,
+       proration, deductions or advances, and a wrong balance on a payroll
+       screen would be worse than no balance at all.
+     - A per-employee statement: the same dated-table-plus-summary-cards
+       shape as the customer/supplier ledger, showing every salary payment
+       made, when it was last paid, and whether this calendar month has
+       been paid yet.
+
+   Deliberately NOT built here (flagged for the client to specify before
+   any of this is attempted): attendance, deductions/advances, tax,
+   printable payslips, multi-currency, pay-period accrual.
+
+   Its own pair of IndexedDB stores (01-db.js, DB_VER 10) — separate from
+   `salesmen` (area sales-coverage is a different concern from who is on
+   payroll) and from `payments` (a salary is never a customer/supplier
+   balance movement).
+   ══════════════════════════════════════════════════════════════════════════ */
+(function (global) {
+  'use strict';
+  var ERP = global.ERP; if (!ERP) return;
+  var M = global.Money, FDB = global.FDB, D = global.document, S = ERP.S;
+  if (!M || !FDB || !S || !global.PAGES || !global.PANELS) return;
+
+  (function injectCss() {
+    var s = D.createElement('style');
+    s.id = 'fc-payroll-css';
+    s.textContent = 'table.tbl .sub{font-size:12px;color:var(--muted);margin-top:1px}' +
+      'table.tbl td.c,table.tbl th.c{text-align:center}';
+    D.head.appendChild(s);
+  })();
+
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function I(n) { return global.icon ? global.icon(n) : ''; }
+  function say(m) { try { global.say(m); } catch (e) {} }
+  function fmtDate(d) { return global.fmtDate ? global.fmtDate(d) : d; }
+  function nowISO() { return new Date().toISOString(); }
+  function today() { return global.FC_TODAY ? global.FC_TODAY() : new Date().toISOString().slice(0, 10); }
+  function pill(cls, label) { return global.pill ? global.pill(cls, label) : esc(label); }
+
+  /* ════════════════════════════════════════════════════════════════════════
+     EMPLOYEES
+     ════════════════════════════════════════════════════════════════════════ */
+  var Employees = ERP.Employees = {
+    all: function () { return S.employees || (S.employees = []); },
+    active: function () { return Employees.all().filter(function (e) { return e.active !== false; }); },
+    byId: function (id) { return Employees.all().filter(function (e) { return e.id === id; })[0] || null; },
+
+    save: function (o) {
+      var errs = [];
+      if (!o.name) errs.push('Enter the employee’s name.');
+      var salaryP = M.toP(o.monthlySalary || 0);
+      if (salaryP < 0) errs.push('Monthly salary can’t be negative.');
+      if (errs.length) return Promise.reject({ validation: errs });
+      var existing = o.id ? Employees.byId(o.id) : null;
+      var rec = Object.assign({
+        id: o.id || FDB.uid('emp'), createdAt: nowISO(), createdBy: global.CURRENT_USER || 'Owner'
+      }, existing || {}, {
+        name: o.name, role: o.role || '', phone: o.phone || '', notes: o.notes || '',
+        monthlySalaryP: salaryP,
+        active: o.active === undefined ? (existing ? existing.active !== false : true) : !!o.active,
+        updatedAt: nowISO()
+      });
+      return FDB.tx(['employees', 'auditLog'], function (api) {
+        api.put('employees', rec);
+        var ix = Employees.all().map(function (e) { return e.id; }).indexOf(rec.id);
+        if (ix > -1) Employees.all()[ix] = rec; else Employees.all().push(rec);
+        ERP.Audit.write(api, {
+          action: existing ? 'Employee updated' : 'Employee added', entity: 'Employee',
+          entityId: rec.id, ref: rec.name,
+          oldValues: existing ? { name: existing.name, role: existing.role, monthlySalary: M.toR(existing.monthlySalaryP) } : null,
+          newValues: { name: rec.name, role: rec.role, monthlySalary: M.toR(rec.monthlySalaryP), active: rec.active }
+        });
+        return rec;
+      });
+    },
+    archive: function (id, on) {
+      var e = Employees.byId(id);
+      if (!e) return Promise.resolve(null);
+      return FDB.tx(['employees', 'auditLog'], function (api) {
+        e.active = !on; e.updatedAt = nowISO();
+        api.put('employees', e);
+        ERP.Audit.write(api, { action: on ? 'Employee archived' : 'Employee restored',
+          entity: 'Employee', entityId: id, ref: e.name });
+        return e;
+      });
+    }
+  };
+
+  /* ════════════════════════════════════════════════════════════════════════
+     SALARY PAYMENTS
+     ════════════════════════════════════════════════════════════════════════ */
+  var Payroll = ERP.Payroll = {
+    paymentsFor: function (employeeId) {
+      return (S.salaryPayments || []).filter(function (p) {
+        return p.employeeId === employeeId && p.status !== 'REVERSED';
+      }).sort(function (a, b) { return a.paymentDate < b.paymentDate ? -1 : (a.paymentDate > b.paymentDate ? 1 : 0); });
+    },
+    totalPaid: function (employeeId) {
+      return Payroll.paymentsFor(employeeId).reduce(function (a, p) { return a + p.amount; }, 0);
+    },
+    lastPaymentDate: function (employeeId) {
+      var rows = Payroll.paymentsFor(employeeId);
+      return rows.length ? rows[rows.length - 1].paymentDate : null;
+    },
+    paidThisMonth: function (employeeId, monthKey) {
+      monthKey = monthKey || today().slice(0, 7);
+      return Payroll.paymentsFor(employeeId).some(function (p) { return (p.paymentDate || '').slice(0, 7) === monthKey; });
+    },
+    pay: function (o) {
+      var amountP = M.toP(o.amount);
+      if (!(amountP > 0)) return Promise.reject({ validation: ['Enter an amount greater than zero.'] });
+      var emp = Employees.byId(o.employeeId);
+      if (!emp) return Promise.reject({ validation: ['Choose an employee.'] });
+      return FDB.tx(['sequences', 'salaryPayments', 'auditLog'], function (api) {
+        return FDB.nextNumber(api, 'SAL').then(function (number) {
+          var rec = {
+            id: FDB.uid('sal'), salaryNumber: number, employeeId: o.employeeId,
+            employeeNameSnapshot: emp.name, employeeRoleSnapshot: emp.role || '',
+            amount: amountP, method: o.method || 'Cash', reference: o.reference || '',
+            period: o.period || '', paymentDate: o.date || today(), note: o.note || '',
+            status: 'POSTED', paidBy: global.CURRENT_USER || 'Owner',
+            createdAt: nowISO(), createdBy: global.CURRENT_USER || 'Owner'
+          };
+          api.put('salaryPayments', rec);
+          (S.salaryPayments || (S.salaryPayments = [])).unshift(rec);
+          ERP.Audit.write(api, {
+            action: 'Salary paid', entity: 'SalaryPayment', entityId: rec.id, ref: rec.salaryNumber,
+            newValues: { employee: rec.employeeNameSnapshot, amount: M.toR(rec.amount), period: rec.period }
+          });
+          return rec;
+        });
+      });
+    }
+  };
+
+  /* exposed so callers (and tests, after simulating a restart) can know
+     when the payroll stores have actually finished loading, rather than
+     guessing with a fixed delay — the same pattern 16-khata.js uses for
+     ERP.adjustmentsReady */
+  ERP.payrollReady = (ERP.bootPromise || Promise.resolve()).then(function () {
+    return FDB.hydrate().then(function (d) {
+      S.employees = d.employees || [];
+      S.salaryPayments = d.salaryPayments || [];
+    });
+  }).catch(function () {
+    S.employees = S.employees || []; S.salaryPayments = S.salaryPayments || [];
+  });
+
+  /* ════════════════════════════════════════════════════════════════════════
+     THE SCREEN
+     ════════════════════════════════════════════════════════════════════════ */
+  var PR = { selectedId: null };
+  var EMP_EDIT = null, PAYSAL_FOR = null;
+
+  function card(cls, l, v, d) {
+    return '<div class="kh-card ' + cls + '"><i>' + l + '</i><b>' + v + '</b>' +
+      (d ? '<div class="d">' + d + '</div>' : '') + '</div>';
+  }
+
+  global.PAGES.payroll = function () {
+    var rows = Employees.all().slice().sort(function (a, b) {
+      return (a.name || '').toLowerCase() < (b.name || '').toLowerCase() ? -1 : 1;
+    });
+    var monthKey = today().slice(0, 7);
+
+    var body = rows.map(function (e) {
+      var paid = Payroll.totalPaid(e.id);
+      var thisMonth = Payroll.paidThisMonth(e.id, monthKey);
+      return '<tr>' +
+        '<td data-label="Name"><b>' + esc(e.name) + '</b>' + (e.phone ? '<div class="sub">' + esc(e.phone) + '</div>' : '') + '</td>' +
+        '<td data-label="Role">' + esc(e.role || '—') + '</td>' +
+        '<td data-label="Monthly salary" class="r">' + M.fmtPlain(e.monthlySalaryP || 0) + '</td>' +
+        '<td data-label="This month">' + (thisMonth ? pill('ok', 'Paid') : pill('warn', 'Not yet')) + '</td>' +
+        '<td data-label="Total paid" class="r">' + M.fmtPlain(paid) + '</td>' +
+        '<td data-label="Status">' + (e.active !== false ? pill('ok', 'Active') : pill('neu', 'Archived')) + '</td>' +
+        '<td data-label="" class="c fcb-rowacts">' +
+          '<button class="btn sm pri" data-prpay="' + e.id + '">Pay salary</button>' +
+          '<button class="btn sm" data-prview="' + e.id + '">Statement</button>' +
+          '<button class="btn sm" data-predit="' + e.id + '">Edit</button>' +
+        '</td></tr>';
+    }).join('');
+
+    var listCard = '<div class="card"><div class="card-h"><h3>Employees</h3>' +
+        '<span class="pill neu">' + rows.length + '</span>' +
+        '<div class="grow"></div>' +
+        '<button class="btn pri" data-praddemp>' + I('plus') + 'Add employee</button>' +
+      '</div><div class="card-b" style="padding:0">' +
+      (rows.length
+        ? '<div class="tw"><table class="tbl"><thead><tr>' +
+            '<th>Name</th><th>Role</th><th class="r">Monthly salary</th><th>This month</th>' +
+            '<th class="r">Total paid</th><th>Status</th><th></th>' +
+          '</tr></thead><tbody>' + body + '</tbody></table></div>'
+        : '<div class="empty"><div class="ei">' + I('users') + '</div><b>No employees yet</b>' +
+          '<p>Add the people on payroll to start recording salaries.</p>' +
+          '<button class="btn pri" data-praddemp>' + I('plus') + 'Add employee</button></div>') +
+    '</div></div>';
+
+    var detail = '';
+    var emp = PR.selectedId ? Employees.byId(PR.selectedId) : null;
+    if (emp) {
+      var pays = Payroll.paymentsFor(emp.id).slice().reverse();
+      var payRows = pays.map(function (p) {
+        return '<tr><td data-label="Date">' + esc(fmtDate(p.paymentDate)) + '</td>' +
+          '<td data-label="Reference" class="mono">' + esc(p.salaryNumber) + '</td>' +
+          '<td data-label="Period">' + esc(p.period || '—') + '</td>' +
+          '<td data-label="Method">' + esc(p.method) + '</td>' +
+          '<td data-label="Note">' + esc(p.note || '—') + '</td>' +
+          '<td data-label="Amount" class="r">' + M.fmtPlain(p.amount) + '</td></tr>';
+      }).join('');
+      detail = '<div class="card" style="margin-top:14px"><div class="card-h">' +
+          '<h3>' + esc(emp.name) + '</h3><span class="pill neu">' + esc(emp.role || 'Employee') + '</span>' +
+          '<div class="grow"></div>' +
+          '<button class="btn pri" data-prpay="' + emp.id + '">' + I('wallet') + 'Pay salary</button>' +
+          '<button class="btn" data-prclose>Close</button>' +
+        '</div><div class="card-b">' +
+        '<div class="kh-cards">' +
+          card('', 'Monthly salary', M.fmt(emp.monthlySalaryP || 0)) +
+          card('credit', 'Total paid', M.fmt(Payroll.totalPaid(emp.id))) +
+          card('', 'Last payment', Payroll.lastPaymentDate(emp.id) ? fmtDate(Payroll.lastPaymentDate(emp.id)) : '—') +
+          card(Payroll.paidThisMonth(emp.id, monthKey) ? 'credit' : 'due', 'This month',
+            Payroll.paidThisMonth(emp.id, monthKey) ? 'Paid' : 'Not yet') +
+        '</div>' +
+        (pays.length
+          ? '<div class="tw" style="margin-top:12px"><table class="kh-table"><thead><tr>' +
+              '<th>Date</th><th>Reference</th><th>Period</th><th>Method</th><th>Note</th><th class="r">Amount</th>' +
+            '</tr></thead><tbody>' + payRows + '</tbody></table></div>'
+          : '<p class="hint" style="margin-top:12px">No salary payments recorded yet.</p>') +
+      '</div></div>';
+    }
+
+    return listCard + detail;
+  };
+
+  /* ════════════════════════════════════════════════════════════════════════
+     PANELS — add/edit an employee, pay a salary
+     ════════════════════════════════════════════════════════════════════════ */
+  var PANELS = global.PANELS;
+
+  PANELS.employee = {
+    t: 'Employee', s: 'Add or edit a person on payroll', cta: 'Save employee',
+    f: function () {
+      var emp = EMP_EDIT ? Employees.byId(EMP_EDIT) : null;
+      return '<label class="f"><span>Name</span><input data-f="name" value="' + esc(emp ? emp.name : '') + '"></label>' +
+        '<div class="f2"><label class="f"><span>Role</span>' +
+          '<input data-f="role" placeholder="e.g. Warehouse helper, Driver, Accountant" value="' + esc(emp ? emp.role : '') + '"></label>' +
+          '<label class="f"><span>Phone</span><input data-f="phone" value="' + esc(emp ? emp.phone : '') + '"></label></div>' +
+        '<label class="f"><span>Monthly salary</span>' +
+          '<input data-f="salary" inputmode="decimal" placeholder="e.g. 25000" value="' +
+          (emp ? M.toR(emp.monthlySalaryP || 0) : '') + '"></label>' +
+        '<label class="f"><span>Internal note</span><input data-f="notes" placeholder="Optional" value="' + esc(emp ? emp.notes : '') + '"></label>' +
+        (emp ? '<label class="f"><span><input type="checkbox" id="fcEmpActive"' +
+          (emp.active !== false ? ' checked' : '') + '> Active</span></label>' : '');
+    },
+    save: function (v) {
+      if (!v.name) return 'Enter the employee’s name.';
+      var activeBox = D.getElementById('fcEmpActive');
+      ERP.Employees.save({
+        id: EMP_EDIT || undefined, name: v.name, role: v.role, phone: v.phone,
+        monthlySalary: v.salary, notes: v.notes,
+        active: activeBox ? activeBox.checked : true
+      }).then(function () {
+        global.paint(); say('Employee saved.'); EMP_EDIT = null;
+      }).catch(function (e) { say(e && e.validation ? e.validation[0] : 'Could not save the employee.'); });
+      return { msg: 'Saving…' };
+    }
+  };
+
+  PANELS.paysalary = {
+    t: 'Pay salary', s: 'Record a salary payment for an employee', cta: 'Record payment',
+    f: function () {
+      var emps = Employees.active();
+      if (!emps.length) return '<div class="banner warn">' + I('alert') +
+        '<div><b>No employees on file</b><p>Add an employee first.</p></div></div>';
+      /* an archived employee can still be pre-filled here (e.g. a final
+         settlement) — they must stay visible in the dropdown, or the panel
+         would silently substitute a different employee with no warning,
+         which is exactly the "wrong person's salary paid" mistake this
+         whole feature exists to avoid on the customer/supplier side too */
+      var preEmpRec = PAYSAL_FOR ? Employees.byId(PAYSAL_FOR) : null;
+      if (preEmpRec && !emps.some(function (e) { return e.id === preEmpRec.id; })) {
+        emps = emps.concat([preEmpRec]);
+      }
+      var pre = (PAYSAL_FOR && emps.some(function (e) { return e.id === PAYSAL_FOR; })) ? PAYSAL_FOR : emps[0].id;
+      var emp = Employees.byId(pre);
+      return '<label class="f"><span>Employee</span><select data-f="emp" id="fcSalEmp">' +
+          emps.map(function (e) {
+            return '<option value="' + e.id + '"' + (e.id === pre ? ' selected' : '') + '>' +
+              esc(e.name) + (e.role ? ' — ' + esc(e.role) : '') + (e.active === false ? ' (archived)' : '') + '</option>';
+          }).join('') + '</select></label>' +
+        '<div class="banner info" id="fcSalRate">' + I('wallet') + '<div><p>Monthly salary: <b>' +
+          M.fmt(emp.monthlySalaryP || 0) + '</b></p></div></div>' +
+        '<div class="f2"><label class="f"><span>Amount</span>' +
+          '<input data-f="amt" inputmode="decimal" id="fcSalAmt" value="' + M.toR(emp.monthlySalaryP || 0) + '"></label>' +
+          '<label class="f"><span>Method</span><select data-f="method">' +
+            ERP.ENUM.methods.map(function (m) { return '<option>' + m + '</option>'; }).join('') + '</select></label></div>' +
+        '<div class="f2"><label class="f"><span>Date</span><input type="date" data-f="date" value="' + today() + '"></label>' +
+          '<label class="f"><span>Period</span><input data-f="period" placeholder="e.g. September 2026"></label></div>' +
+        '<label class="f"><span>Reference</span><input data-f="ref" class="mono" placeholder="Optional"></label>' +
+        '<label class="f"><span>Note</span><input data-f="note" placeholder="Optional"></label>';
+    },
+    save: function (v) {
+      var amount = String(v.amt || '').replace(/[^\d.]/g, '');
+      if (!amount || Number(amount) <= 0) return 'Enter the amount to pay.';
+      ERP.Payroll.pay({
+        employeeId: v.emp, amount: amount, method: v.method, reference: v.ref,
+        date: v.date || today(), period: v.period, note: v.note
+      }).then(function (p) {
+        global.paint();
+        say('Salary payment ' + p.salaryNumber + ' recorded.');
+      }).catch(function (e) { say(e && e.validation ? e.validation[0] : 'Could not save the payment.'); });
+      return { msg: 'Saving…' };
+    }
+  };
+
+  /* ════════════════════════════════════════════════════════════════════════
+     NAV — one entry under Finance
+     ════════════════════════════════════════════════════════════════════════ */
+  try {
+    var NAV = global.NAV, GROUPS = global.NAVGROUPS;
+    if (!NAV.some(function (n) { return n.id === 'payroll'; })) {
+      var at = NAV.map(function (n) { return n.id; }).indexOf('soa');
+      NAV.splice(at < 0 ? NAV.length : at + 1, 0, { id: 'payroll', l: 'Payroll', i: 'users' });
+    }
+    GROUPS.forEach(function (g) {
+      if (g[0] === 'Finance' && g[1].indexOf('payroll') === -1) {
+        var pos = g[1].indexOf('soa');
+        g[1].splice(pos < 0 ? g[1].length : pos + 1, 0, 'payroll');
+      }
+    });
+    if (global.PAGEMETA) {
+      global.PAGEMETA.payroll = ['Payroll',
+        'The people on payroll, their monthly rate, and every salary payment made to them.'];
+    }
+  } catch (e) {}
+
+  /* ════════════════════════════════════════════════════════════════════════
+     HANDLERS
+     ════════════════════════════════════════════════════════════════════════ */
+  D.addEventListener('change', function (e) {
+    var el = e.target;
+    if (el.id === 'fcSalEmp') {
+      var emp = Employees.byId(el.value);
+      var rate = D.getElementById('fcSalRate');
+      if (rate) rate.innerHTML = I('wallet') + '<div><p>Monthly salary: <b>' +
+        M.fmt(emp ? emp.monthlySalaryP || 0 : 0) + '</b></p></div>';
+      var amtF = D.getElementById('fcSalAmt');
+      if (amtF) amtF.value = M.toR(emp ? emp.monthlySalaryP || 0 : 0);
+    }
+  });
+
+  D.addEventListener('click', function (e) {
+    if (!e.target.closest) return;
+    var add = e.target.closest('[data-praddemp]');
+    if (add) { e.preventDefault(); EMP_EDIT = null; global.openPanel('employee'); return; }
+    var edit = e.target.closest('[data-predit]');
+    if (edit) { e.preventDefault(); EMP_EDIT = edit.dataset.predit; global.openPanel('employee'); return; }
+    var pay = e.target.closest('[data-prpay]');
+    if (pay) { e.preventDefault(); PAYSAL_FOR = pay.dataset.prpay; global.openPanel('paysalary'); return; }
+    var view = e.target.closest('[data-prview]');
+    if (view) { e.preventDefault(); PR.selectedId = view.dataset.prview; global.paint(); return; }
+    var close = e.target.closest('[data-prclose]');
+    if (close) { e.preventDefault(); PR.selectedId = null; global.paint(); return; }
+  });
+})(typeof window !== 'undefined' ? window : this);
 
 </script>
 
