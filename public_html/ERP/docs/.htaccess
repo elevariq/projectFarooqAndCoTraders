@@ -1,0 +1,10 @@
+# Farooq & Co Traders ERP — added 2026-09-16 (auth project, Phase 0)
+# This directory holds reference/build material, not app runtime files the
+# browser is meant to load. Deny all HTTP access to it.
+<IfModule mod_authz_core.c>
+  Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+  Order allow,deny
+  Deny from all
+</IfModule>
