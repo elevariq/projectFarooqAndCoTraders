@@ -56,16 +56,34 @@
     return SOA.type === 'SUPPLIER' ? (global.supOf && global.supOf(id)) : (global.custBy && global.custBy(id));
   }
   function regionOptions() {
+    /* keep the currently selected area choosable even if it's since been
+       switched off, or the dropdown would silently jump to "All areas"
+       while the party list stayed filtered to the (now invisible) area */
+    var regions = (global.REGIONS || []).filter(function (r) { return r.active !== false || r.id === SOA.regionId; });
     return '<option value="">All areas</option>' +
-      (global.REGIONS || []).filter(function (r) { return r.active !== false; })
-        .map(function (r) {
-          return '<option value="' + esc(r.id) + '"' + (SOA.regionId === r.id ? ' selected' : '') +
-            '>' + esc(r.en) + (r.ur ? ' — ' + esc(r.ur) : '') + '</option>';
-        }).join('');
+      regions.map(function (r) {
+        return '<option value="' + esc(r.id) + '"' + (SOA.regionId === r.id ? ' selected' : '') +
+          '>' + esc(r.en) + (r.ur ? ' — ' + esc(r.ur) : '') + (r.active === false ? ' (inactive)' : '') + '</option>';
+      }).join('');
   }
   function card(cls, l, v, d) {
     return '<div class="kh-card ' + cls + '"><i>' + l + '</i><b>' + v + '</b>' +
       (d ? '<div class="d">' + d + '</div>' : '') + '</div>';
+  }
+  /* A zero-length party list (e.g. an area with no shops) must still leave
+     the filter bar on screen — an empty state with no way to change the
+     Area or Party type is a dead end the person can only escape by leaving
+     the page and losing the screen's remembered state anyway. */
+  function partyOptionsHtml(list) {
+    if (!list.length) {
+      return '<option value="" disabled selected>No ' +
+        (SOA.type === 'SUPPLIER' ? 'suppliers on file' : (SOA.regionId ? 'shops in this area' : 'shops on file')) +
+        '</option>';
+    }
+    return list.map(function (p) {
+      return '<option value="' + p.id + '"' + (p.id === SOA.partyId ? ' selected' : '') + '>' +
+        esc(partyName(p)) + '</option>';
+    }).join('');
   }
 
   /* ════════════════════════════════════════════════════════════════════════
@@ -75,20 +93,72 @@
     var isCust = SOA.type !== 'SUPPLIER';
     var list = partyList();
 
-    if (!list.length) {
-      return '<div class="empty"><div class="ei">' + I('users') + '</div>' +
-        '<b>No ' + (isCust ? 'shops' : 'suppliers') + ' on file' +
-        (isCust && SOA.regionId ? ' in this area' : '') + '</b>' +
-        '<p>' + (isCust ? 'Add a shop, or clear the area filter.' : 'Add a supplier first.') + '</p></div>';
+    if (list.length) {
+      if (!list.some(function (p) { return p.id === SOA.partyId; })) SOA.partyId = list[0].id;
+    } else {
+      SOA.partyId = '';
     }
-    if (!list.some(function (p) { return p.id === SOA.partyId; })) SOA.partyId = list[0].id;
-    var party = list.filter(function (p) { return p.id === SOA.partyId; })[0];
+    var party = list.length ? list.filter(function (p) { return p.id === SOA.partyId; })[0] : null;
+
+    var filterBar = '<div class="bar">' +
+        '<label class="f"><span>Party type</span><select data-soaf="type">' +
+          '<option value="CUSTOMER"' + (isCust ? ' selected' : '') + '>Customer</option>' +
+          '<option value="SUPPLIER"' + (!isCust ? ' selected' : '') + '>Supplier</option>' +
+        '</select></label>' +
+        (isCust ? '<label class="f"><span>Area</span><select data-soaf="regionId">' + regionOptions() +
+          '</select></label>' : '') +
+        '<label class="f"><span>' + (isCust ? 'Shop' : 'Supplier') + '</span><select data-soaf="partyId"' +
+          (list.length ? '' : ' disabled') + '>' + partyOptionsHtml(list) + '</select></label>' +
+        '<label class="f"><span>From</span><input type="date" data-soaf="from" value="' + esc(SOA.from) + '"></label>' +
+        '<label class="f"><span>To</span><input type="date" data-soaf="to" value="' + esc(SOA.to) + '"></label>' +
+        '<div class="grow"></div>' +
+        '<button class="btn" data-soaprint>' + I('print') + 'Print / PDF</button>' +
+        '<button class="btn pri" data-soaexcel>' + I('sheet') + 'Excel</button>' +
+      '</div>';
+
+    if (!list.length) {
+      return '<div class="card"><div class="card-h"><h3>Statement of Account</h3>' +
+          '<span class="pill neu">' + (isCust ? 'Customer' : 'Supplier') + ' ledger</span></div><div class="card-b">' +
+        filterBar +
+        '<div class="banner warn" style="margin-top:12px">' + I('alert') +
+          '<div><b>No ' + (isCust ? 'shops' : 'suppliers') + ' on file' +
+            (isCust && SOA.regionId ? ' in this area' : '') + '</b>' +
+          '<p>' + (isCust ? 'Pick a different area, or add a shop.' : 'Add a supplier first.') + '</p></div></div>' +
+      '</div></div>';
+    }
+
+    /* Ledger._roll() (02-services.js) treats an inverted range as "drop
+       everything after To, fold everything before From into opening" — with
+       From after To that silently discards transactions from both the
+       period AND the opening balance instead of raising an error. Every
+       other statement entry point in the app only ever offers preset
+       periods (always valid); this screen is the first to expose raw
+       From/To fields, so it's the first place that inversion is reachable
+       at all — caught here rather than showing a wrong balance. */
+    if (SOA.from && SOA.to && SOA.from > SOA.to) {
+      return '<div class="card"><div class="card-h"><h3>Statement of Account</h3>' +
+          '<span class="pill neu">' + (isCust ? 'Customer' : 'Supplier') + ' ledger</span></div><div class="card-b">' +
+        filterBar +
+        '<div class="banner warn" style="margin-top:12px">' + I('alert') +
+          '<div><b>The "From" date is after the "To" date</b>' +
+          '<p>Pick a From date on or before the To date.</p></div></div>' +
+      '</div></div>';
+    }
+
     var L = ledgerFor(SOA.partyId);
 
     var movementIn = isCust ? L.debit : L.credit;    /* invoiced / purchased  — adds to what they owe */
     var movementOut = isCust ? L.credit : L.debit;   /* received / paid       — reduces it */
 
-    var rows = L.rows.map(function (r) {
+    /* a long-lived account can carry thousands of entries; the on-screen
+       table shows the most recent MAX_ROWS_SHOWN (L.rows is oldest-first,
+       so the tail is the most recent) — Print/PDF and Excel are unaffected
+       and always cover the full period regardless of this cap */
+    var MAX_ROWS_SHOWN = 300;
+    var truncated = L.rows.length > MAX_ROWS_SHOWN;
+    var shownRows = truncated ? L.rows.slice(-MAX_ROWS_SHOWN) : L.rows;
+
+    var rows = shownRows.map(function (r) {
       return '<tr>' +
         '<td data-label="Date">' + esc(fmtDate(r.iso)) + '</td>' +
         '<td data-label="Reference / Folio" class="mono">' + esc(r.ref || '—') + '</td>' +
@@ -102,24 +172,7 @@
 
     return '<div class="card"><div class="card-h"><h3>Statement of Account</h3>' +
         '<span class="pill neu">' + (isCust ? 'Customer' : 'Supplier') + ' ledger</span></div><div class="card-b">' +
-      '<div class="bar">' +
-        '<label class="f"><span>Party type</span><select data-soaf="type">' +
-          '<option value="CUSTOMER"' + (isCust ? ' selected' : '') + '>Customer</option>' +
-          '<option value="SUPPLIER"' + (!isCust ? ' selected' : '') + '>Supplier</option>' +
-        '</select></label>' +
-        (isCust ? '<label class="f"><span>Area</span><select data-soaf="regionId">' + regionOptions() +
-          '</select></label>' : '') +
-        '<label class="f"><span>' + (isCust ? 'Shop' : 'Supplier') + '</span><select data-soaf="partyId">' +
-          list.map(function (p) {
-            return '<option value="' + p.id + '"' + (p.id === SOA.partyId ? ' selected' : '') + '>' +
-              esc(partyName(p)) + '</option>';
-          }).join('') + '</select></label>' +
-        '<label class="f"><span>From</span><input type="date" data-soaf="from" value="' + esc(SOA.from) + '"></label>' +
-        '<label class="f"><span>To</span><input type="date" data-soaf="to" value="' + esc(SOA.to) + '"></label>' +
-        '<div class="grow"></div>' +
-        '<button class="btn" data-soaprint>' + I('print') + 'Print / PDF</button>' +
-        '<button class="btn pri" data-soaexcel>' + I('sheet') + 'Excel</button>' +
-      '</div>' +
+      filterBar +
 
       '<div class="kh-cards">' +
         card('', 'Opening balance', M.fmt(L.opening)) +
@@ -132,11 +185,17 @@
 
       (party ? '<p class="hint" style="margin:10px 0 0">' + esc(partyName(party)) +
         (isCust && party.ow ? ' · ' + esc(party.ow) : (!isCust && party.cp ? ' · ' + esc(party.cp) : '')) +
-        (isCust && party.region && global.regionOf ? ' · ' + esc(global.regionOf(party.region).en) : '') +
+        (function () {
+          var region = isCust && party.region && global.regionOf ? global.regionOf(party.region) : null;
+          return region ? ' · ' + esc(region.en) : '';
+        })() +
         '</p>' : '') +
 
+      (truncated ? '<p class="hint" style="margin-top:12px">Showing the most recent ' + MAX_ROWS_SHOWN +
+        ' of ' + L.rows.length + ' transactions. Use Print/PDF or Excel for the complete statement.</p>' : '') +
+
       (L.rows.length
-        ? '<div class="tw" style="margin-top:12px"><table class="kh-table"><thead><tr>' +
+        ? '<div class="tw" style="margin-top:' + (truncated ? '6' : '12') + 'px"><table class="kh-table"><thead><tr>' +
             '<th>Date</th><th>Reference / Folio</th><th>Description</th>' +
             '<th class="r">Debit / بنام</th><th class="r">Credit / جمع</th>' +
             '<th class="r">Balance / بقایا</th>' +
@@ -183,11 +242,14 @@
     global.paint();
   });
 
+  function invalidRange() { return SOA.from && SOA.to && SOA.from > SOA.to; }
+
   D.addEventListener('click', function (e) {
     if (!e.target.closest) return;
     if (e.target.closest('[data-soaprint]')) {
       e.preventDefault();
       if (!SOA.partyId) return;
+      if (invalidRange()) { say('The "From" date is after the "To" date — fix the range first.'); return; }
       var m = ERP.DocModel.statement(SOA.partyId, SOA.type, SOA.from || null, SOA.to || null);
       ERP.Viewer.open(m);
       ERP.Audit.detached({ action: 'Statement of account opened', entity: 'Report', entityId: 'soa',
@@ -197,6 +259,7 @@
     if (e.target.closest('[data-soaexcel]')) {
       e.preventDefault();
       if (!SOA.partyId) return;
+      if (invalidRange()) { say('The "From" date is after the "To" date — fix the range first.'); return; }
       var L = ledgerFor(SOA.partyId);
       var party = partyById(SOA.partyId);
       var pname = party ? partyName(party) : '';

@@ -168,6 +168,79 @@ async function main() {
   D.createElement = origCreate;
   check('S15 the Excel export downloads a .xlsx file', /\.xlsx$/.test(downloaded || ''), String(downloaded));
 
+  /* ══════════════════════════════════════════════════════════════════════
+     EDGE CASES found on review (2026-09-16) — each guards a real regression
+     ══════════════════════════════════════════════════════════════════════ */
+
+  /* an area with genuinely zero shops must show an explicit empty state,
+     not silently fall back to listing every shop while the Area dropdown
+     still shows the (empty) area selected */
+  const emptyRegionId = 'rg-empty-test-region';
+  w.REGIONS.push({ id: emptyRegionId, en: 'Empty Test Region', ur: '', active: true });
+  ERP.setPayFor && ERP.setPayFor(null);
+  w.openPanel('payment'); await sleep(120);
+  change($('#fcPayArea'), emptyRegionId); await sleep(60);
+  check('F10 an area with zero shops shows an explicit empty state, not every shop',
+    $('#fcPayCust').options.length === 1 && $('#fcPayCust').options[0].disabled,
+    `${$('#fcPayCust').options.length} options, disabled=${$('#fcPayCust').options[0] && $('#fcPayCust').options[0].disabled}`);
+  check('F11 the Shop select itself is disabled in that state', $('#fcPayCust').disabled);
+  check('F12 the balance banner switches to a warning, not a stale balance',
+    $('#fcPayBal').className.includes('warn') && /No shops in this area/.test($('#fcPayBal').textContent));
+  const cbEmpty = $('#panel .x') || $('[data-close]') || $('#scrim'); if (cbEmpty) click(cbEmpty);
+  await sleep(80);
+
+  w.go('soa'); await sleep(120);
+  change($('[data-soaf="type"]'), 'CUSTOMER'); await sleep(60);
+  change($('[data-soaf="regionId"]'), emptyRegionId); await sleep(100);
+  check('S16 the statement screen also shows an explicit empty state for a zero-shop area',
+    /No shops on file/.test($('#view').textContent) && /in this area/.test($('#view').textContent),
+    $('#view').textContent.slice(0, 200));
+
+  /* a region that's been switched off must stay visible in the dropdown if
+     a pre-filled shop still belongs to it — otherwise the picker silently
+     shows "All areas" while the Shop list stays filtered to just one shop */
+  const regionToDisable = w.REGIONS.find(r => r.id !== emptyRegionId && r.active !== false);
+  const custInThatRegion = w.CUSTOMERS.find(c => c.region === regionToDisable.id);
+  regionToDisable.active = false;
+  ERP.setPayFor && ERP.setPayFor(custInThatRegion.id);
+  w.openPanel('payment'); await sleep(120);
+  check('F13 a pre-filled shop\'s own (now inactive) area still shows as selected, not "All areas"',
+    $('#fcPayArea').value === regionToDisable.id, $('#fcPayArea').value);
+  check('F14 that inactive area is still present as a real option, marked inactive',
+    $$('#fcPayArea option').some(o => o.value === regionToDisable.id && /inactive/.test(o.textContent)));
+  const cbInactive = $('#panel .x') || $('[data-close]') || $('#scrim'); if (cbInactive) click(cbInactive);
+  await sleep(80);
+  ERP.setPayFor && ERP.setPayFor(null);
+  regionToDisable.active = true;
+
+  /* a customer pointing at a region id that no longer exists at all must not
+     crash the Statement of Account page (every other call site in the app
+     guards ERP.regionOf()'s possible null return; this screen didn't) */
+  const orphanCust = w.CUSTOMERS.find(c => c.id !== custInThatRegion.id);
+  const savedRegion = orphanCust.region;
+  orphanCust.region = 'rg-does-not-exist-anywhere';
+  w.go('soa'); await sleep(100);
+  change($('[data-soaf="regionId"]'), ''); await sleep(60);
+  change($('[data-soaf="partyId"]'), orphanCust.id); await sleep(100);
+  check('S17 a shop with an orphaned region id renders without throwing',
+    /Statement of Account/.test($('#view').textContent) && !!$('.kh-card'));
+  orphanCust.region = savedRegion;
+
+  /* an inverted From/To range must be refused, not silently produce a wrong
+     balance (Ledger._roll treats From-after-To as "drop everything after
+     To, fold everything before From into opening" with no warning) */
+  w.go('soa'); await sleep(100);
+  change($('[data-soaf="partyId"]'), c1.id); await sleep(60);
+  change($('[data-soaf="from"]'), '2026-09-20'); await sleep(40);
+  change($('[data-soaf="to"]'), '2026-09-01'); await sleep(60);
+  check('S18 an inverted date range shows a warning instead of a ledger',
+    /From.*is after.*To/i.test($('#view').textContent) && !$('.kh-table'));
+  const toastBefore = $('#toast') ? $('#toast').textContent : '';
+  click($('[data-soaprint]')); await sleep(100);
+  check('S19 Print is refused too, with a message, instead of opening a wrongly-scoped statement',
+    !$('#fcviewer.on') && $('#toast') && $('#toast').textContent !== toastBefore &&
+    /after.*To/i.test($('#toast').textContent));
+
   console.log('\n' + out.join('\n') + `\n\n${pass} passed, ${fail} failed\n`);
   w.close();
   process.exit(fail ? 1 : 0);

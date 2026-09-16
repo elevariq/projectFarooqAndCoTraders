@@ -159,18 +159,38 @@ ERP.setPayFor = function (id) { PAY_FOR = id; };
    picking an Area narrows the Shop list to just that area's customers. */
 var PAY_AREA = '';
 function payAreaOptions() {
+  /* the region a pre-filled shop belongs to must stay selectable even if it
+     has since been switched off — otherwise the dropdown silently falls back
+     to "All areas" while the Shop list still shows just that one shop, which
+     is a confusing mismatch on a money screen */
+  var regions = (global.REGIONS || []).filter(function (r) { return r.active !== false || r.id === PAY_AREA; });
   return '<option value=""' + (!PAY_AREA ? ' selected' : '') + '>All areas</option>' +
-    (global.REGIONS || []).filter(function (r) { return r.active !== false; }).map(function (r) {
-      return '<option value="' + r.id + '"' + (PAY_AREA === r.id ? ' selected' : '') + '>' +
-        esc(r.en) + (r.ur ? ' — ' + esc(r.ur) : '') + '</option>';
+    regions.map(function (r) {
+      return '<option value="' + esc(r.id) + '"' + (PAY_AREA === r.id ? ' selected' : '') + '>' +
+        esc(r.en) + (r.ur ? ' — ' + esc(r.ur) : '') + (r.active === false ? ' (inactive)' : '') + '</option>';
     }).join('');
 }
 function payCustomersInArea() {
-  var custs = (global.CUSTOMERS || []).filter(function (c) {
+  return (global.CUSTOMERS || []).filter(function (c) {
     return !PAY_AREA || (c.region || '') === PAY_AREA;
   });
-  /* an area with no shops on file is not a dead end — fall back to everyone */
-  return custs.length ? custs : (global.CUSTOMERS || []);
+}
+/* Shared between the initial render and the live Area-change handler so the
+   two can never disagree. An area with genuinely no shops is shown as an
+   explicit empty state — it must NOT silently fall back to every shop, or
+   the Area dropdown and the Shop list would contradict each other. */
+function payShopOptionsHtml(custs, preId) {
+  if (!custs.length) return '<option value="" disabled selected>No shops in this area</option>';
+  return custs.map(function (c) {
+    return '<option value="' + c.id + '"' + (c.id === preId ? ' selected' : '') + '>' + esc(c.sh) + '</option>';
+  }).join('');
+}
+function payBalanceHtml(custs, preId) {
+  if (!custs.length) {
+    return I('alert') + '<div><b>No shops in this area</b><p>Pick a different area, or choose "All areas".</p></div>';
+  }
+  var id = (preId && custs.some(function (c) { return c.id === preId; })) ? preId : custs[0].id;
+  return I('wallet') + '<div><p>Outstanding balance: <b>' + M.fmt(ERP.Ledger.customerBalance(id)) + '</b></p></div>';
 }
 
 function openInvoicesForCustomer(cid) {
@@ -190,16 +210,12 @@ PANELS.payment = {
     var preCust = PAY_FOR ? global.custBy(PAY_FOR) : null;
     PAY_AREA = preCust ? (preCust.region || '') : '';
     var custs = payCustomersInArea();
-    var pre = (PAY_FOR && custs.some(function (c) { return c.id === PAY_FOR; })) ? PAY_FOR : custs[0].id;
-    var bal = ERP.Ledger.customerBalance(pre);
+    var pre = (PAY_FOR && custs.some(function (c) { return c.id === PAY_FOR; })) ? PAY_FOR : undefined;
     return '<label class="f"><span>Area</span><select data-f="area" id="fcPayArea">' + payAreaOptions() +
       '</select></label>' +
-      '<label class="f"><span>Shop</span><select data-f="cust" id="fcPayCust">' +
-        custs.map(function (c) {
-          return '<option value="' + c.id + '"' + (c.id === pre ? ' selected' : '') + '>' + esc(c.sh) + '</option>';
-        }).join('') + '</select></label>' +
-      '<div class="banner info" id="fcPayBal">' + I('wallet') +
-        '<div><p>Outstanding balance: <b>' + M.fmt(bal) + '</b></p></div></div>' +
+      '<label class="f"><span>Shop</span><select data-f="cust" id="fcPayCust"' + (custs.length ? '' : ' disabled') + '>' +
+        payShopOptionsHtml(custs, pre) + '</select></label>' +
+      '<div class="banner ' + (custs.length ? 'info' : 'warn') + '" id="fcPayBal">' + payBalanceHtml(custs, pre) + '</div>' +
       '<div class="f2 fc-amtpaid"><label class="f"><span>Amount Paid</span>' +
         '<input data-f="amt" inputmode="decimal" placeholder="e.g. 100000"></label>' +
         '<label class="f"><span>Method</span><select data-f="method">' +
@@ -751,14 +767,21 @@ D.addEventListener('change', function (e) {
     var custSel = D.getElementById('fcPayCust');
     if (custSel) {
       var opts = payCustomersInArea();
-      custSel.innerHTML = opts.map(function (c) {
-        return '<option value="' + c.id + '">' + esc(c.sh) + '</option>';
-      }).join('');
+      custSel.disabled = !opts.length;
+      custSel.innerHTML = payShopOptionsHtml(opts);
       var bbox = D.getElementById('fcPayBal');
-      var firstId = opts.length ? opts[0].id : '';
-      if (bbox) bbox.innerHTML = I('wallet') + '<div><p>Outstanding balance: <b>' +
-        M.fmt(firstId ? ERP.Ledger.customerBalance(firstId) : 0) + '</b></p></div>';
-      renderAllocList();
+      if (bbox) {
+        bbox.className = 'banner ' + (opts.length ? 'info' : 'warn');
+        bbox.innerHTML = payBalanceHtml(opts);
+      }
+      if (opts.length) {
+        renderAllocList();
+      } else {
+        /* no shop is selected in this state — don't let renderAllocList()
+           overwrite this with a misleading "this shop has no unpaid
+           invoices" message, which implies a shop that isn't there */
+        var listHost = D.getElementById('fcPayList'); if (listHost) listHost.innerHTML = '';
+      }
     }
     return;
   }

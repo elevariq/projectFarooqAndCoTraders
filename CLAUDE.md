@@ -278,6 +278,45 @@ locally" above — and isn't a decision the user needs to make.)
   scoped review rather than being bundled into an infra/deployment session. Flagged for the user
   to decide whether/how to scope that separately.
 
+**2026-09-16, deploy target bug** — the client reported the Area-filter and Statement-of-Account
+features (added earlier the same day) weren't visible live. Root cause and fix are written up in
+full under "These are NOT two separate filesystems" above (`ERP/app/` was never the served path);
+summary: `scripts/deploy-erp.sh` was uploading only to the unused `ERP/app/` copy, so real deploys
+never reached the site. Fixed the script, corrected the docs, and manually pushed the missed
+changes to the real path as an immediate fix before the script fix was verified.
+
+**2026-09-16, edge-case review of the same two features** — asked to review `06-wiring.js`'s
+payment Area filter and `29-statement-of-account.js` for edge cases before moving on. Found and
+fixed, each covered by a new regression check in `test-statement-of-account.mjs` (33 checks now):
+- **An area/party-type combination with zero matches silently fell back to showing every
+  shop/supplier** (both screens) — the Area/Party dropdown looked filtered while the list
+  underneath wasn't, a real correctness risk on a money screen. Now shows an explicit empty state
+  instead of the wrong list.
+- **That empty state was a dead end on the Statement of Account screen** — the first version
+  replaced the whole filter bar with a plain message, so there was no control left on screen to
+  pick a different Area or Party type. Fixed by always keeping the filter bar present.
+- **A crash**: `29-statement-of-account.js` was the only call site in the whole codebase that
+  chained `.en` straight onto `global.regionOf(...)` without checking the result first; every
+  other of the dozen call sites guards it, because it returns falsy for a region id that no
+  longer exists (e.g. a shop still pointing at a deleted region). Would have blanked the whole
+  page for that shop. Fixed to match the established guarded pattern.
+- **An inactive region, if it was the one a pre-filled shop belonged to, silently became "All
+  areas" in the dropdown** while the shop list stayed filtered to just that one shop — a visible
+  mismatch. Now the currently-selected region stays choosable (marked "(inactive)") even if it's
+  been switched off, on both screens.
+- **An inverted From/To range on the Statement of Account screen produced a wrong balance with no
+  warning** — `ERP.Ledger._roll()` (02-services.js) silently drops transactions between the two
+  dates instead of erroring when From is after To. Every other statement entry point in the app
+  only offers preset periods (always valid); this was the first screen to expose raw date fields.
+  Now refused with a clear message, both on screen and if Print/Excel is clicked while invalid.
+- **No cap on the on-screen ledger table** — unlike the existing customer khata page (paginated),
+  the new screen rendered the entire history in one unbounded table. A long-lived account with
+  thousands of entries could freeze the tab. Capped the on-screen table at the most recent 300
+  rows with a note; Print/PDF and Excel are unaffected and always cover the full period.
+- One inconsistency (not a functional bug): `payAreaOptions()` in `06-wiring.js` didn't escape
+  the region id in the `value=` attribute, unlike the matching helper already in
+  `28-areawise.js` and in the new `29-statement-of-account.js`. Fixed for consistency.
+
 ## Where to look for more detail
 
 - `docs/OPERATIONS.md` — full access inventory, exact commands used, and the deploy checklist.
