@@ -476,17 +476,20 @@ account), and a voluntary "Change password" link next to the account chip otherw
 PBKDF2 verifier, since it was derived from the old password. Covered by 10 new checks in
 `test-auth-client.mjs` (35 total in that file now).
 
-**A pre-existing flake found and diagnosed, not caused by this work**: while stress-testing (running
-the full suite repeatedly to rule out flakiness from the new module), `test-users.mjs`'s U23 check
-("an account with a PIN asks for it") intermittently fails — roughly 1 run in 3-4 when the same
-file is run many times back to back. Confirmed by rebuilding **without** `31-auth.js` in the bundle
-and reproducing the identical failure at a similar rate: this is a pre-existing timing race in
-`test-users.mjs` itself (a `Session.signIn()` promise from an earlier step occasionally resolves
-late and its `closeSignin()` callback wipes the `#fcSignin` dialog's freshly-rendered PIN input out
-from under the next step), not something this session's changes introduced. It has not been seen
-to fail when each test file is run once, standalone, the way CI actually runs them — flagged here
-rather than fixed, since it's an existing file outside this session's scope and deserves its own
-look rather than a rushed change to a working, well-established test.
+**The `test-users.mjs` flake noted in the auth-rollout session above is now fixed (2026-09-16/17)**.
+It resurfaced during the Milling Jobs deploy — this time failing **consistently** (every standalone
+run on this machine, not the "1 in 3-4" rate originally seen; confirmed by the milling work's own
+git-stash isolation that it was still present with zero milling-related changes in the tree, so it
+remained a pre-existing issue, just now hitting a much higher rate under local machine load). Since
+it was now reliably blocking `scripts/deploy-erp.sh`'s test gate, it was fixed rather than deferred
+again. Root cause matched the diagnosis already on file: U22's click on a no-PIN account fires an
+async `Session.signIn()` whose `closeSignin()` completion could resolve after a fixed `sleep(300)`
+had already moved on to U23's PIN-account click, wiping that freshly-rendered `#siPin` input out
+from under it. Fixed in the test only (no application code touched) by replacing that fixed sleep
+with a small `waitUntil(condition, timeoutMs)` poll that waits for the actual settled state —
+session id changed and the dialog closed — before proceeding, so a slow resolve can no longer leak
+into the next step regardless of machine speed. Verified with 8 consecutive standalone runs, all
+clean, plus a full-suite rerun (26/26 harnesses green).
 
 ## Milling jobs — toll milling (2026-09-16)
 

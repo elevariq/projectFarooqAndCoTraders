@@ -4,6 +4,10 @@ import FDBFactory from 'fake-indexeddb/lib/FDBFactory';
 import FDBKeyRange from 'fake-indexeddb/lib/FDBKeyRange';
 const HTML=fs.readFileSync('dist/farooq-co-erp.html','utf8');
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+/* polls for an actual settled condition instead of guessing a fixed delay —
+   used where a click fires an async signIn() whose resolve time isn't
+   guaranteed, so a slow resolve can't leak into and corrupt the next step */
+const waitUntil=async(fn,timeoutMs=1500,stepMs=20)=>{const start=Date.now();while(Date.now()-start<timeoutMs){if(fn())return true;await sleep(stepMs);}return fn();};
 let pass=0,fail=0;const out=[];
 const check=(n,c,d)=>{if(c){pass++;out.push('  ✔ '+n);}else{fail++;out.push('  ✘ '+n+(d?'   → '+d:''));}};
 const errors=[];
@@ -111,11 +115,18 @@ const run=async()=>{
   click($('#fcUserChip')); await sleep(200);
   check('U21 tapping it offers the other accounts',
     !!$('#fcSignin.on') && $$('[data-siuser]').length===3);
-  click($$('[data-siuser]').find(b=>b.dataset.siuser===acct.id)); await sleep(300);
+  /* the pre-existing flake this fixes: that earlier no-PIN switch's own
+     signIn() can occasionally resolve late, and its closeSignin() callback
+     then wipes the PIN dialog the very next step just rendered. Waiting for
+     the actual settled state — not a fixed delay — means a late resolve
+     here can never leak into and corrupt the next step. */
+  click($$('[data-siuser]').find(b=>b.dataset.siuser===acct.id));
+  await waitUntil(()=>ERP.Session.id()===acct.id && !$('#fcSignin.on'));
   check('U22 an account without a PIN switches straight over',
     ERP.Session.id()===acct.id && !$('#fcSignin.on'));
   click($('#fcUserChip')); await sleep(150);
-  click($$('[data-siuser]').find(b=>b.dataset.siuser===sales.id)); await sleep(200);
+  click($$('[data-siuser]').find(b=>b.dataset.siuser===sales.id));
+  await waitUntil(()=>!!D.getElementById('siPin'));
   check('U23 an account with a PIN asks for it', !!D.getElementById('siPin'));
   const pinEl=D.getElementById('siPin'); pinEl.value='1234';
   click($('[data-si="go"]')); await sleep(300);
