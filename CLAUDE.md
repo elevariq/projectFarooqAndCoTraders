@@ -488,6 +488,48 @@ to fail when each test file is run once, standalone, the way CI actually runs th
 rather than fixed, since it's an existing file outside this session's scope and deserves its own
 look rather than a rushed change to a working, well-established test.
 
+## Milling jobs — toll milling (2026-09-16)
+
+A new client requirement, analysed from `clientNewReq/` (a gitignored working folder — see commit
+`d0f6d50`): Farooq & Co hand wheat to a flour mill and get flour bags plus chokar (bran) back, with
+some grain lost in grinding, and settle the difference in the mill's own account. This was a
+**second-hand reading** of the client's message (the photo it referenced, `new.jpeg`, was never
+actually in that folder) — confirmed against the ERP's own data rather than guessed: 25 of 32
+suppliers are flour mills, there is a `گندم 49 کلو` (wheat) product and two `چوکر` (chokar/bran)
+products, and a supplier record is literally named "Zam Zam chokar khata" with `categoryInferred:
+"Bran ledger account"` and a running balance. Deliberately **not** built: saved yield recipes /
+enforced conversion ratios (loss is calculated and shown, never enforced), an in-house/no-mill
+production mode, and editing a posted job (only Cancel, which reverses the stock — same as every
+other posted document in this app). Flagged for the client to confirm: whether the mill genuinely
+*buys* the wheat (net settlement, the default) or only charges a grinding fee while the wheat stays
+Farooq & Co's property (the job's own `settle: 'FEE_ONLY'` toggle covers this without a rebuild).
+
+New module `erp-upgrade/32-milling.js`, `DB_VER` 10 → 11 (`millingJobs`, `millingJobItems`). A
+"Milling job" is entered on its own screen ("Milling" under Inventory & supply): pick a mill (an
+existing supplier), list wheat issued and flour/chokar received back, each line in bags **and**
+kilograms — weight auto-fills from the product's existing `kg` field (already set on 100 of 136
+products) and stays editable for the real weighbridge figure. Four new stock-movement kinds
+(`MILL_ISSUE_OUT`, `MILL_RECEIPT_IN`, and their reversal pair) go through the one existing
+`ERP.Inventory.apply` write path — nothing new invented there. The only change to shared core logic
+in the whole feature: `Inventory.apply`'s moving-average-cost condition now also fires on
+`MILL_RECEIPT_IN`, not just `PURCHASE_IN`, since flour arriving from a mill is genuinely new costed
+stock; covered by a regression check that an ordinary purchase's moving average is bit-identical to
+before that change.
+
+**The real architectural gap this closed**: `ERP.Ledger.supplier` previously derived a mill's
+balance from exactly four sources (purchases, payments out, supplier returns, opening balance) —
+there was no way to debit or credit a mill's account for anything else, even though customers
+already had this via `ERP.Adjustments` (`16-khata.js`). `32-milling.js` patches
+`ERP.Ledger.supplier` the same way `16-khata.js` patches `ERP.Ledger.customer`, adding up to three
+rows per posted job (wheat issued reduces payable, flour/chokar received and the milling fee
+increase it) so the mill's Statement of Account, the payables total and printed statements all pick
+up milling jobs automatically, with no changes needed to any of those screens.
+
+Covered by `test-milling.mjs` (73 checks: validation, the full posting cycle, stock movements, the
+ledger patch including a `FEE_ONLY` job and a cancellation, the moving-average-cost regression, the
+printable document, and a full DOM-driven entry-screen walkthrough including the "mill goes inactive
+mid-draft stays selectable" edge case). Full existing suite (25 other harnesses) reruns clean.
+
 ## Where to look for more detail
 
 - `docs/OPERATIONS.md` — full access inventory, exact commands used, and the deploy checklist.

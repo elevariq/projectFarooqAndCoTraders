@@ -29,7 +29,7 @@ data, sample documents, and the written reports.
 
 ### `erp-upgrade/` — the source
 
-The upgrade is written as twenty-five modules that load after the original app and extend it. They are
+The upgrade is written as thirty-two modules that load after the original app and extend it. They are
 here in readable form, with the build script that injects them and the test harnesses that check
 them.
 
@@ -60,6 +60,15 @@ them.
 | `21-settings.js` | Product prices with history and approval, and the settings control panel |
 | `22-users.js` | User accounts, sign-in, and approvals attributable to a person |
 | `23-workbench.js` | Editing every product, shop and supplier detail — singly, in bulk, or by spreadsheet |
+| `24-client-changes.js` | Amount Paid, WhatsApp invoice, larger Qty/Rate fields, Description/تفصیل |
+| `25-options.js` | Every business setting and dropdown list editable, owner only |
+| `26-landed-cost.js` | Landed cost — operational expenses on inventory, never on the supplier |
+| `27-landed-ui.js` | Finance UI for landed costs, expenses and profit analysis |
+| `28-areawise.js` | Area-wise collection: sales, collection and balance per shop, grouped by area |
+| `29-statement-of-account.js` | One Finance screen for either party's full ledger |
+| `30-payroll.js` | Employee list, monthly salary rate, and salary payments (MVP) |
+| `31-auth.js` | Server-checked accounts, sessions and permissions (Phase 2: observe mode) |
+| `32-milling.js` | Milling jobs — toll milling: wheat out, flour + chokar back, net settled into the mill's khata |
 
 To rebuild `app/farooq-co-erp.html` and `app/index.html` after changing a module:
 

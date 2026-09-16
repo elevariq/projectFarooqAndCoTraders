@@ -45,6 +45,7 @@ MODULES = [
     ("29-statement-of-account.js", "STATEMENT OF ACCOUNT — one Finance screen for either party's ledger"),
     ("30-payroll.js",        "PAYROLL — employee list, monthly salary rate, and salary payments (MVP)"),
     ("31-auth.js",           "AUTH — server-checked accounts, sessions and permissions (Phase 2: observe mode)"),
+    ("32-milling.js",        "MILLING JOBS — toll milling: wheat out, flour + chokar back, net settled into the mill's khata"),
 ]
 
 MARKER = "<!-- FAROOQ & CO ERP — INVOICE, RECEIPT & DATABASE UPGRADE -->"

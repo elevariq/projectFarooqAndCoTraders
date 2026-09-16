@@ -33,7 +33,8 @@ var ENUM = ERP.ENUM = {
   movement: ['OPENING_STOCK', 'PURCHASE_IN', 'SALE_OUT', 'CUSTOMER_RETURN_IN', 'CUSTOMER_RETURN_DAMAGED_IN',
              'SUPPLIER_RETURN_OUT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT',
              'SALE_REVERSAL_IN', 'PURCHASE_REVERSAL_OUT', 'REPLACEMENT_OUT', 'SUPPLIER_REPLACEMENT_IN',
-             'STOCK_WRITE_OFF', 'DISPATCH_OUT'],
+             'STOCK_WRITE_OFF', 'DISPATCH_OUT',
+             'MILL_ISSUE_OUT', 'MILL_RECEIPT_IN', 'MILL_ISSUE_REVERSAL_IN', 'MILL_RECEIPT_REVERSAL_OUT'],
   /* what physically happens to a returned bag */
   returnCondition: ['SELLABLE', 'DAMAGED', 'DEFECTIVE', 'WRONG_ITEM', 'EXPIRED', 'OTHER'],
   /* what happens to the money */
@@ -139,7 +140,7 @@ var Inventory = ERP.Inventory = {
     if (mv.bucket === 'damaged') r.damagedQty = Math.round((r.damagedQty + delta) * 1000) / 1000;
     else r.qty = Math.round((r.qty + delta) * 1000) / 1000;
 
-    if (mv.kind === 'PURCHASE_IN' && mv.unitCostP) {          // moving average cost (§41)
+    if ((mv.kind === 'PURCHASE_IN' || mv.kind === 'MILL_RECEIPT_IN') && mv.unitCostP) {  // moving average cost (§41)
       var before = r.qty - delta, prev = r.avgCostP || 0;
       r.avgCostP = before > 0
         ? Math.round((before * prev + delta * mv.unitCostP) / (before + delta))
@@ -184,7 +185,9 @@ var Movements = ERP.Movements = {
       ADJUSTMENT_IN: 'Adjustment in', ADJUSTMENT_OUT: 'Adjustment out', ADJUSTMENT: 'Adjustment',
       SALE_REVERSAL_IN: 'Sale reversal', PURCHASE_REVERSAL_OUT: 'Purchase reversal',
       REPLACEMENT_OUT: 'Replacement issued', SUPPLIER_REPLACEMENT_IN: 'Replacement from supplier',
-      DISPATCH_OUT: 'Dispatch', OPENING_STOCK: 'Opening stock', OPENING: 'Opening stock'
+      DISPATCH_OUT: 'Dispatch', OPENING_STOCK: 'Opening stock', OPENING: 'Opening stock',
+      MILL_ISSUE_OUT: 'Issued for milling', MILL_RECEIPT_IN: 'Received from mill',
+      MILL_ISSUE_REVERSAL_IN: 'Milling issue reversed', MILL_RECEIPT_REVERSAL_OUT: 'Milling receipt reversed'
     })[k] || k;
   }
 };
