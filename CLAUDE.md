@@ -33,17 +33,31 @@ second one for `erp.*`. Confirmed via `hosting_listWebsiteSubdomainsV1` and DNS:
 └── public_html/                        <- document root for farooqandcotraders.online
     ├── index.html                      <- the homepage
     └── ERP/                            <- document root for erp.farooqandcotraders.online
-        ├── app/            (what's actually served — index.html, farooq-co-erp.html, etc.)
+        ├── index.html, farooq-co-erp.html   <- what's ACTUALLY served (see correction below)
+        ├── farooq-erp-data.js               <- required by farooq-co-erp.html at this level
+        ├── app/            (a legacy duplicate — nothing on the server links to it, see below)
         ├── erp-upgrade/    (source modules + build tooling — also web-exposed, but unlinked)
         ├── database/, data-exports/, docs/, samples/   (reference files, also web-exposed)
 ```
 
+- **CORRECTION (found 2026-09-16, via a client report that shipped changes weren't showing up)**:
+  an earlier session's note above — that `ERP/app/` is "what's actually served" — was wrong. The
+  live document root for `erp.farooqandcotraders.online` is `public_html/ERP/` itself: Apache
+  serves `ERP/index.html` and `ERP/farooq-co-erp.html` directly (no `.htaccess`, no redirect).
+  `ERP/app/` was part of the very first live-server pull (it predates this project) and nothing
+  on the server references it — it's an orphaned duplicate. `scripts/deploy-erp.sh` was uploading
+  only to `ERP/app/`, so every deploy through it was landing on files nobody's browser ever
+  loads, while the real root copy sat untouched since the initial import. Fixed 2026-09-16: the
+  script now uploads to the real root first, and to `app/` second only for parity (harmless,
+  since nothing serves from there). **If you ever add a new top-level file the app needs at
+  runtime (there's already `farooq-erp-data.js`, required alongside `farooq-co-erp.html`), it
+  must exist at `ERP/` root, not just under `app/`.**
 - **DNS**: `@` and `erp` are both `ALIAS` records pointing at Hostinger's CDN
   (`*.cdn.hstgr.net`), which routes by hostname to the right document root on this one account.
   `erp` is not a different server or a different account — it's the same SSH login, same
   filesystem, same git repo.
 - **Consequence for deploys**: uploading to `public_html/index.html` only affects the homepage;
-  uploading to `public_html/ERP/app/*` only affects the ERP. They're independent *document roots*
+  uploading to `public_html/ERP/*` only affects the ERP. They're independent *document roots*
   sharing one *account*, so a script that gets a path wrong could touch the wrong site — always
   double-check the target path.
 - **Consequence for caching**: both sites sit behind Hostinger's CDN. After deploying, call
@@ -186,9 +200,12 @@ Back up the live file first if it's not a brand-new page (`ssh ... cp index.html
 2. Reconstructs `mod/` and the build inputs, runs `python3 build.py`.
 3. Runs every `test-*.mjs` harness; **aborts if any test fails** — nothing broken ever reaches
    the backup/upload steps.
-4. Backs up the live `app/` folder to `/home/u943531942/backups/erp-deploy-<timestamp>/` on the
-   server before touching anything.
-5. Uploads the freshly built `dist/*` files over the live `app/` folder.
+4. Backs up the live files to `/home/u943531942/backups/erp-deploy-<timestamp>/` on the server
+   before touching anything.
+5. Uploads the freshly built `index.html`, `farooq-co-erp.html` and `farooq-erp-data.js` to the
+   **ERP document root** (`public_html/ERP/`, what the site actually serves — see the correction
+   under "These are NOT two separate filesystems" above), then uploads the same build to the
+   legacy `app/` folder too, for parity only.
 6. Reminds you to clear the Hostinger cache (the script itself can't call the MCP tool — from a
    Claude session, call `hosting_clearWebsiteCacheV1` for `erp.farooqandcotraders.online` right
    after; from a plain terminal, clear it in hPanel).
@@ -228,6 +245,14 @@ git push
 4. Suppliers 204/494/575/614 — account type to confirm; 575 is currently switched off.
 5. Roles are advisory only (hidden actions, not server-enforced) — there is no server.
 6. SMS/WhatsApp are configured but not connected to a provider.
+7. Client message (2026-09-16, `clientNewReq/clientMesseges.txt`): "Add amount paid here" —
+   Amount Paid already appears on the invoice screen and both payment panels (from an earlier
+   client change round, `24-client-changes.js`), so this must mean somewhere it's currently
+   missing, but the message doesn't say where and no screenshot was attached this time. Waiting
+   on the user to check with the client before building anything.
+8. Client message (2026-09-16, same file): "Payroll = Employee salary management system" — a new
+   feature area with no real requirements yet (no fields, no salary structure, no screenshot).
+   Not started — waiting on the client for scope before touching this.
 
 (The build-pipeline question from earlier sessions is resolved — see "How to build the ERP
 locally" above — and isn't a decision the user needs to make.)

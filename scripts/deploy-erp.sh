@@ -5,10 +5,18 @@
 #   1. Refuses to run with uncommitted changes (forces you to commit first).
 #   2. Reconstructs the local build-staging area and rebuilds via build.py.
 #   3. Runs every test-*.mjs harness; aborts the deploy if any fails.
-#   4. Backs up the live app/ files it's about to overwrite (timestamped, on the server).
-#   5. Uploads the rebuilt app/ files (and, if changed, this erp-upgrade/ source folder).
+#   4. Backs up the live files it's about to overwrite (timestamped, on the server).
+#   5. Uploads the rebuilt files to the ERP document root (what erp.farooqandcotraders.online
+#      actually serves) and, for parity, to the legacy app/ copy nothing else links to.
 #   6. Clears the Hostinger CDN/server cache so the change is visible immediately.
 #   7. Curls both live URLs to confirm a 200 after deploy.
+#
+# IMPORTANT (found 2026-09-16): the live document root for erp.farooqandcotraders.online is
+# public_html/ERP/ itself — index.html and farooq-co-erp.html sitting directly in that folder,
+# not public_html/ERP/app/. The app/ folder was part of the original site pull and nothing on
+# the server links to it; it was mistakenly treated as the deploy target in an earlier session,
+# so real feature deploys were landing there while the site kept serving the untouched root
+# copy. This script now uploads to both, with the root copy as the one that matters.
 #
 # Usage: scripts/deploy-erp.sh
 # Run from the repo root. Requires: git, python3, node, ssh, scp, curl.
@@ -51,12 +59,20 @@ for f in test-*.mjs; do
   node "$f"
 done
 
-echo "==> All tests passed. Backing up live app/ before overwrite"
+echo "==> All tests passed. Backing up live files before overwrite"
 TS="$(date +%Y%m%d%H%M%S)"
 ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_HOST" \
-  "mkdir -p /home/u943531942/backups/erp-deploy-$TS && cp -r '$REMOTE_ERP/app' /home/u943531942/backups/erp-deploy-$TS/app"
+  "mkdir -p /home/u943531942/backups/erp-deploy-$TS && \
+   cp '$REMOTE_ERP/index.html' '$REMOTE_ERP/farooq-co-erp.html' '$REMOTE_ERP/farooq-erp-data.js' \
+     /home/u943531942/backups/erp-deploy-$TS/ 2>/dev/null; \
+   cp -r '$REMOTE_ERP/app' /home/u943531942/backups/erp-deploy-$TS/app"
 
-echo "==> Uploading rebuilt app/"
+echo "==> Uploading rebuilt files to the ERP document root (what the live site actually serves)"
+scp -P "$SSH_PORT" -o BatchMode=yes \
+  dist/index.html dist/farooq-co-erp.html dist/farooq-erp-data.js \
+  "$SSH_HOST:$REMOTE_ERP/"
+
+echo "==> Uploading the same build to app/ too (legacy copy, kept in sync for parity)"
 scp -P "$SSH_PORT" -o BatchMode=yes \
   dist/farooq-co-erp.html dist/index.html dist/farooq-co-warehouse-pwa.html \
   dist/farooq-and-co-homepage.html dist/farooq-erp-data.js \
@@ -73,4 +89,4 @@ for url in "https://farooqandcotraders.online/" "https://erp.farooqandcotraders.
   echo "  $url -> $code"
 done
 
-echo "==> Done. Backup of the previous app/ is at /home/u943531942/backups/erp-deploy-$TS on the server."
+echo "==> Done. Backup of the previous live files is at /home/u943531942/backups/erp-deploy-$TS on the server."
