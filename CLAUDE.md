@@ -462,10 +462,31 @@ trip as the bootstrapped OWNER worked end-to-end and correctly rebound `ERP.Sess
 and a real bug found in that same smoke test (the "Company sign-in" link didn't disappear once
 signed in) was fixed and redeployed before this was called done.
 
-**Open decision, not resolved**: `LANDED_COST_MANAGE`, `LANDED_COST_VIEW` and `EXPENSE_MANAGE`
-are used in `27-landed-ui.js` but appear in no role's permission list client-side today, so only
-OWNER effectively has them. `auth-schema.sql` preserves that (grants them to nobody but OWNER)
-rather than guessing whether Manager/Accountant should get them — flagged for the user.
+**Open decisions from this rollout — both confirmed by the user, 2026-09-16, no change needed**:
+`LANDED_COST_MANAGE`/`LANDED_COST_VIEW`/`EXPENSE_MANAGE` stay OWNER-only in
+`auth_role_permissions`, matching today's client-side behavior exactly. Phase 3 (mandatory
+sign-in) stays deferred — Phase 2 should run clean for a few days first before it's revisited.
+
+**Password-change screen added (2026-09-16, same day as Phase 2)**: the gap flagged right after
+Phase 2 shipped — a `must_change_password` flag existed with no UI to act on it — is closed.
+`31-auth.js` now shows a mandatory, non-dismissable "Change your password" overlay right after
+signing in when the server says the account must change it (set on every bootstrapped/owner-reset
+account), and a voluntary "Change password" link next to the account chip otherwise (replacing
+"Company sign-in" once actually signed in). Changing the password also clears the cached offline
+PBKDF2 verifier, since it was derived from the old password. Covered by 10 new checks in
+`test-auth-client.mjs` (35 total in that file now).
+
+**A pre-existing flake found and diagnosed, not caused by this work**: while stress-testing (running
+the full suite repeatedly to rule out flakiness from the new module), `test-users.mjs`'s U23 check
+("an account with a PIN asks for it") intermittently fails — roughly 1 run in 3-4 when the same
+file is run many times back to back. Confirmed by rebuilding **without** `31-auth.js` in the bundle
+and reproducing the identical failure at a similar rate: this is a pre-existing timing race in
+`test-users.mjs` itself (a `Session.signIn()` promise from an earlier step occasionally resolves
+late and its `closeSignin()` callback wipes the `#fcSignin` dialog's freshly-rendered PIN input out
+from under the next step), not something this session's changes introduced. It has not been seen
+to fail when each test file is run once, standalone, the way CI actually runs them — flagged here
+rather than fixed, since it's an existing file outside this session's scope and deserves its own
+look rather than a rushed change to a working, well-established test.
 
 ## Where to look for more detail
 

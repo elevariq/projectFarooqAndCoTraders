@@ -70,18 +70,27 @@ function api(path) {
   return API_BASE + path;
 }
 
+var REQUEST_TIMEOUT_MS = 4000;    /* bounds how long a dead/slow connection can stall a call —
+                                      without this, a shop with no signal waits on the OS's own
+                                      DNS/connect timeout (which can be much longer) before this
+                                      module falls back to the offline ticket. */
+
 function request(path, opts) {
   opts = opts || {};
   try {
     if (typeof global.fetch !== 'function') return Promise.reject(new Error('fetch unavailable'));
     var headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
     if (Auth.csrf && opts.method && opts.method !== 'GET') headers['X-CSRF-Token'] = Auth.csrf;
-    return global.fetch(api(path), {
+    var fetchOpts = {
       method: opts.method || 'GET',
       credentials: 'same-origin',
       headers: headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined
-    }).then(function (res) {
+    };
+    if (typeof global.AbortSignal !== 'undefined' && global.AbortSignal.timeout) {
+      fetchOpts.signal = global.AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    }
+    return global.fetch(api(path), fetchOpts).then(function (res) {
       return res.json().catch(function () { return {}; }).then(function (data) {
         return { ok: res.status, status: res.status, data: data };
       });
@@ -207,6 +216,7 @@ function applyIdentity(resp) {
   Auth.role = resp.role;
   Auth.permissions = resp.permissions || [];
   Auth.csrf = resp.csrf || null;
+  Auth.mustChangePassword = !!resp.mustChangePassword;
   if (resp.offlineTicket) storeTicket(resp.offlineTicket);
 
   if (ERP.Session) {
@@ -260,6 +270,7 @@ Auth.login = function (username, password) {
       startIdleWatch();
       return storeVerifier(password).then(function () {
         try { global.paint(); } catch (e) {}
+        if (Auth.mustChangePassword) openChangePw(true);
         return r.data;
       });
     });
@@ -282,6 +293,12 @@ Auth.changePassword = function (currentPassword, newPassword) {
       var msg = (r.data && r.data.error) || (r.data && r.data.validation && r.data.validation[0]) || 'Could not change the password.';
       return Promise.reject({ validation: [msg] });
     }
+    Auth.mustChangePassword = false;
+    /* the offline verifier was derived from the old password — a fresh
+       online sign-in is needed before it can be trusted again, so it's
+       safer to drop it now than to leave a verifier that no longer matches
+       what unlocks the account */
+    try { global.localStorage.removeItem(VERIFIER_KEY); } catch (e) {}
     return r.data;
   });
 };
@@ -469,18 +486,94 @@ D.addEventListener('click', function (e) {
   }
 }, true);
 
-/* offer the link next to the existing sign-in chip, once it exists — and
-   take it away again once a server identity is active, or it sits there
-   suggesting a sign-in that's already happened. */
+/* ══════════════════════════════════════════════════════════════════════════
+   CHANGE PASSWORD
+   Reachable voluntarily via the link next to the account chip once signed
+   in, and shown automatically — with no way to dismiss it — when the
+   server says this account must change its password (set on the account
+   the owner bootstrap script creates, and whenever an owner resets someone
+   else's password from api/auth/users.php).
+   ══════════════════════════════════════════════════════════════════════════ */
+var PW_CSS = `
+#fcChangePw{position:fixed;inset:0;z-index:195;display:none;align-items:center;justify-content:center;
+  padding:16px;background:rgba(12,10,20,.6)}
+#fcChangePw.on{display:flex}
+#fcChangePw .box{max-width:360px;width:100%;background:var(--surface);border-radius:16px;padding:20px}
+#fcChangePw input{width:100%;padding:10px;border:1.5px solid var(--line);border-radius:var(--r-sm);margin-top:10px}
+#fcChangePw .err{color:#C0392B;font-size:12.5px;margin-top:8px;min-height:16px}
+#fcChangePw .ok{color:#1E7A34;font-size:12.5px;margin-top:8px;min-height:16px}
+#fcChangePwLink{font-size:12px;color:var(--muted);background:none;border:none;cursor:pointer;text-decoration:underline;padding:4px}
+`;
+(function () { var s = D.createElement('style'); s.id = 'fc-changepw-css'; s.textContent = PW_CSS; D.head.appendChild(s); })();
+
+function openChangePw(forced) {
+  var host = D.getElementById('fcChangePw');
+  if (!host) { host = D.createElement('div'); host.id = 'fcChangePw'; D.body.appendChild(host); }
+  host.dataset.forced = forced ? '1' : '';
+  host.innerHTML =
+    '<div class="box"><b>Change your password</b>' +
+    '<p style="color:var(--muted);font-size:13px">' +
+    (forced ? 'This account was set up with a temporary password. Choose your own before continuing.'
+            : 'You can change your password any time.') + '</p>' +
+    '<input id="fcPwCur" type="password" placeholder="Current password" autocomplete="current-password">' +
+    '<input id="fcPwNew" type="password" placeholder="New password (at least 8 characters)" autocomplete="new-password">' +
+    '<input id="fcPwConf" type="password" placeholder="Confirm new password" autocomplete="new-password">' +
+    '<div class="err" id="fcPwErr"></div><div class="ok" id="fcPwOk"></div>' +
+    '<button class="btn pri" id="fcPwGo" style="width:100%;margin-top:10px">Change password</button>' +
+    (forced ? '' : '<button class="btn" id="fcPwCancel" style="width:100%;margin-top:8px">Cancel</button>') +
+    '</div>';
+  host.classList.add('on');
+}
+function closeChangePw() {
+  var h = D.getElementById('fcChangePw');
+  if (h) { h.classList.remove('on'); h.innerHTML = ''; }
+}
+
+D.addEventListener('click', function (e) {
+  if (!e.target.closest) return;
+  if (e.target.id === 'fcChangePwLink') { e.preventDefault(); openChangePw(false); return; }
+  if (e.target.id === 'fcPwCancel') { closeChangePw(); return; }
+  if (e.target.id === 'fcPwGo') {
+    var cur = D.getElementById('fcPwCur'), nw = D.getElementById('fcPwNew'), conf = D.getElementById('fcPwConf');
+    var errEl = D.getElementById('fcPwErr'), okEl = D.getElementById('fcPwOk');
+    if (errEl) errEl.textContent = ''; if (okEl) okEl.textContent = '';
+    if (nw && conf && nw.value !== conf.value) { if (errEl) errEl.textContent = 'The new passwords do not match.'; return; }
+    if (nw && nw.value.length < 8) { if (errEl) errEl.textContent = 'The new password must be at least 8 characters.'; return; }
+    Auth.changePassword(cur ? cur.value : '', nw ? nw.value : '').then(function () {
+      if (okEl) okEl.textContent = 'Password changed.';
+      say('Password changed.');
+      setTimeout(closeChangePw, 700);
+    }).catch(function (err) {
+      if (errEl) errEl.textContent = (err && err.validation && err.validation[0]) || 'Could not change the password.';
+    });
+  }
+}, true);
+
+/* offer the link next to the existing sign-in chip, once it exists —
+   "Company sign-in" while nobody has a server identity, "Change password"
+   once someone does, never both. */
 function ensureCompanyLink() {
   var chip = D.getElementById('fcUserChip');
-  var existing = D.getElementById('fcCompanyLink');
-  if (Auth.identity) { if (existing) existing.remove(); return; }
-  if (!chip || existing) return;
-  var btn = D.createElement('button');
-  btn.id = 'fcCompanyLink';
-  btn.textContent = 'Company sign-in';
-  chip.parentNode.insertBefore(btn, chip);
+  if (!chip) return;
+  var signInBtn = D.getElementById('fcCompanyLink');
+  var pwBtn = D.getElementById('fcChangePwLink');
+  if (Auth.identity) {
+    if (signInBtn) signInBtn.remove();
+    if (!pwBtn) {
+      pwBtn = D.createElement('button');
+      pwBtn.id = 'fcChangePwLink';
+      pwBtn.textContent = 'Change password';
+      chip.parentNode.insertBefore(pwBtn, chip);
+    }
+  } else {
+    if (pwBtn) pwBtn.remove();
+    if (!signInBtn) {
+      signInBtn = D.createElement('button');
+      signInBtn.id = 'fcCompanyLink';
+      signInBtn.textContent = 'Company sign-in';
+      chip.parentNode.insertBefore(signInBtn, chip);
+    }
+  }
 }
 
 var origPaint = global.paint;
@@ -497,7 +590,8 @@ Auth._internal = {
   TICKET_KEY: TICKET_KEY, VERIFIER_KEY: VERIFIER_KEY,
   decodeTicketPayload: decodeTicketPayload, validCachedTicket: validCachedTicket,
   lockScreen: lockScreen, unlockWith: unlockWith,
-  startIdleWatch: startIdleWatch, stopIdleWatch: stopIdleWatch
+  startIdleWatch: startIdleWatch, stopIdleWatch: stopIdleWatch,
+  openChangePw: openChangePw, closeChangePw: closeChangePw
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -507,6 +601,7 @@ Auth._internal = {
   return Auth.refresh().then(function (signedIn) {
     if (signedIn) startIdleWatch();
     try { global.paint(); } catch (e) {}
+    if (signedIn && Auth.mustChangePassword) openChangePw(true);
   });
 }).catch(function () { /* observe mode: never block boot on this */ });
 

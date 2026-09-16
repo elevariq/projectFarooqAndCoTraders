@@ -233,6 +233,64 @@ async function main() {
     w.close();
   }
 
+  /* ── G: change password — forced on a must-change account, voluntary otherwise ── */
+  {
+    const store = { idb: new FDBFactory() };
+    let currentHash = 'temp-pw-123';
+    const w = boot(store, mockFetch({
+      'me.php': () => ({ status: 401, data: {} }),
+      'login.php': (body) => body.password === currentHash
+        ? { status: 200, data: {
+            user: { id: 'usr_6', username: 'owner4', displayName: 'Owner Four' }, role: 'OWNER',
+            permissions: OWNER_PERMS, csrf: 'c6', mustChangePassword: true,
+          } }
+        : { status: 401, data: { error: 'That username or password is not right.' } },
+      'change-password.php': (body) => {
+        if (body.currentPassword !== currentHash) return { status: 401, data: { error: 'Your current password is not right.' } };
+        currentHash = body.newPassword;
+        return { status: 200, data: { ok: true } };
+      },
+    }));
+    const ERP = await ready(w);
+    await ERP.Auth.login('owner4', 'temp-pw-123');
+    await sleep(50);
+    check('G1 a must-change account is prompted automatically on login',
+      !!w.document.getElementById('fcChangePw') && w.document.getElementById('fcChangePw').classList.contains('on'));
+    check('G2 the forced prompt offers no Cancel — it cannot be dismissed without changing it',
+      !w.document.getElementById('fcPwCancel'));
+
+    const setVal = (id, v) => { const el = w.document.getElementById(id); el.value = v; };
+    setVal('fcPwCur', 'temp-pw-123'); setVal('fcPwNew', 'short'); setVal('fcPwConf', 'short');
+    w.document.getElementById('fcPwGo').click();
+    await sleep(50);
+    check('G3 a too-short new password is refused client-side before any request',
+      /at least 8/i.test(w.document.getElementById('fcPwErr').textContent));
+
+    setVal('fcPwNew', 'brand-new-password'); setVal('fcPwConf', 'does-not-match');
+    w.document.getElementById('fcPwGo').click();
+    await sleep(50);
+    check('G4 mismatched confirmation is refused client-side', /do not match/i.test(w.document.getElementById('fcPwErr').textContent));
+
+    setVal('fcPwConf', 'brand-new-password');
+    w.document.getElementById('fcPwGo').click();
+    await sleep(50);
+    check('G5 the right current password and a valid new one succeed',
+      /changed/i.test(w.document.getElementById('fcPwOk').textContent));
+    check('G6 Auth.mustChangePassword clears once changed', ERP.Auth.mustChangePassword === false);
+    await sleep(750);
+    check('G7 the overlay closes itself shortly after success', !w.document.getElementById('fcChangePw').classList.contains('on'));
+
+    // voluntary access once not forced: the "Change password" link, with Cancel offered
+    w.go('dashboard'); await sleep(150);
+    check('G8 a "Change password" link replaces "Company sign-in" once signed in',
+      !!w.document.getElementById('fcChangePwLink') && !w.document.getElementById('fcCompanyLink'));
+    w.document.getElementById('fcChangePwLink').click();
+    check('G9 opening it voluntarily DOES offer Cancel', !!w.document.getElementById('fcPwCancel'));
+    w.document.getElementById('fcPwCancel').click();
+    check('G10 Cancel closes it without changing anything', !w.document.getElementById('fcChangePw').classList.contains('on'));
+    w.close();
+  }
+
   check('Z1 nothing threw during the whole session', errors.length === 0, errors.slice(0, 3).join(' | '));
   console.log('\n' + out.join('\n') + '\n\n' + pass + ' passed, ' + fail + ' failed\n');
   process.exit(fail ? 1 : 0);
