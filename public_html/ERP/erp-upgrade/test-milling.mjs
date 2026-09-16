@@ -303,6 +303,22 @@ async function main() {
   click(rmBtn); await sleep(80);
   check('U5 removing a line takes it back out', $$('[data-millside="receive"][data-millf="product"]').length === beforeAddCount);
 
+  /* removing the only line on a side must not leave a dead-end empty
+     table — a fresh blank row takes its place, same rule 27-landed-ui.js
+     follows for its own line list */
+  check('U5b the issue side has exactly one row before removing it', $$('[data-millside="issue"][data-millf="product"]').length === 1);
+  const issueRmBtn = $(`[data-millrmline="issue:${issueRowId}"]`);
+  click(issueRmBtn); await sleep(80);
+  check('U5c a blank row takes its place instead of the table going empty',
+    $$('[data-millside="issue"][data-millf="product"]').length === 1 &&
+    $('[data-millside="issue"][data-millf="product"]').value === '');
+  /* put a real product back so the save just below still succeeds */
+  change($('[data-millside="issue"][data-millf="product"]'), wheat.id); await sleep(60);
+  const newIssueRowId = $('[data-millside="issue"][data-millf="product"]').dataset.millrow;
+  change($(`[data-millrow="${newIssueRowId}"][data-millf="qty"]`), '20'); await sleep(60);
+  change($(`[data-millrow="${newIssueRowId}"][data-millf="rate"]`), '10');
+  change($(`[data-millrow="${newIssueRowId}"][data-millf="basis"]`), 'KG');
+
   const jobsBeforeSave = ERP.Milling.all().length;
   click($('[data-millsave]')); await sleep(250);
   check('U6 saving from the screen posts a new job', ERP.Milling.all().length === jobsBeforeSave + 1);
@@ -331,6 +347,51 @@ async function main() {
   click($('[data-millcancel="' + lastJob.id + '"]')); await sleep(150);
   check('U9 cancelling from the list marks it cancelled', ERP.Milling.byId(lastJob.id).status === 'CANCELLED');
   check('U10 and its value leaves the mill\'s balance', ERP.Ledger.supplierBalance(lastJob.millId) === balBeforeListCancel - lastJob.netAmount);
+
+  /* the primary NET job (still posted) is reachable from the detail card
+     with its own Cancel action, not only from the list row */
+  click($('[data-millview="' + job.id + '"]')); await sleep(120);
+  check('U11 the detail card offers its own Cancel action alongside the list row\'s',
+    $$('[data-millcancel="' + job.id + '"]').length === 2);
+  click($('[data-millclose]')); await sleep(80);
+
+  /* a save still in flight must not let a second, later draft get wiped
+     out from under the person filling it in when the first one resolves */
+  click($('[data-millnew]')); await sleep(100);
+  change($('[data-millh="mill"]'), mill);
+  change($('[data-millh="wh"]'), wh);
+  const raceIssueSel = $('[data-millside="issue"][data-millf="product"]');
+  change(raceIssueSel, wheat.id); await sleep(50);
+  const raceIssueRow = raceIssueSel.dataset.millrow;
+  change($(`[data-millrow="${raceIssueRow}"][data-millf="qty"]`), '5'); await sleep(50);
+  change($(`[data-millrow="${raceIssueRow}"][data-millf="rate"]`), '10');
+  change($(`[data-millrow="${raceIssueRow}"][data-millf="basis"]`), 'KG');
+  const raceRecvSel = $('[data-millside="receive"][data-millf="product"]');
+  change(raceRecvSel, flour.id); await sleep(50);
+  const raceRecvRow = raceRecvSel.dataset.millrow;
+  change($(`[data-millrow="${raceRecvRow}"][data-millf="qty"]`), '4'); await sleep(50);
+  change($(`[data-millrow="${raceRecvRow}"][data-millf="rate"]`), '10');
+  change($(`[data-millrow="${raceRecvRow}"][data-millf="basis"]`), 'KG');
+
+  /* the realistic version of this race: Save is clicked, then — before it
+     resolves — the entry is abandoned (Cancel) and a fresh second draft is
+     started from the list. Once inside the entry screen there is no "New
+     milling job" button to race against (it only exists on the list), so
+     Cancel-then-New is the actual path a person takes into a second draft
+     while the first save is still in flight. */
+  const jobsBeforeRace = ERP.Milling.all().length;
+  click($('[data-millsave]'));                          // fired, deliberately not awaited
+  click($('[data-millentrycancel]'));                   // abandon this entry before the save lands
+  click($('[data-millnew]')); await sleep(30);           // and start a second, different draft
+  check('RACE1 starting a second draft mid-save does not get bounced back to the list',
+    !!$('[data-millh="mill"]'));
+  check('RACE2 the second draft is a genuinely fresh one, not the first draft\'s leftover values',
+    $('[data-millh="mill"]') && $('[data-millh="mill"]').value === '');
+  await sleep(300);                                     // let the first save resolve
+  check('RACE3 the first draft\'s save still completed in the background', ERP.Milling.all().length === jobsBeforeRace + 1);
+  check('RACE4 the screen is still on the (now second) draft, not silently reset to the list',
+    !!$('[data-millh="mill"]'));
+  click($('[data-millentrycancel]')); await sleep(80);
 
   /* ══════════════════════════════════════════════════════════════════════
      PERSISTENCE

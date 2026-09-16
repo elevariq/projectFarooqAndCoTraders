@@ -518,6 +518,8 @@
           '<h3>' + esc(job.jobNumber) + '</h3><span class="pill neu">' + esc(job.millSnapshot) + '</span>' +
           '<div class="grow"></div>' +
           '<button class="btn" data-millprint="' + job.id + '">' + I('print') + 'Print / PDF</button>' +
+          (job.status !== 'CANCELLED' && can('PURCHASE_CREATE')
+            ? '<button class="btn" data-millcancel="' + job.id + '">Cancel</button>' : '') +
           '<button class="btn" data-millclose>Close</button>' +
         '</div><div class="card-b">' +
         '<div class="kh-cards">' +
@@ -611,14 +613,26 @@
     if ((t = e.target.closest('[data-millrmline]'))) {
       e.preventDefault();
       var parts = t.dataset.millrmline.split(':');
-      if (DRAFT) DRAFT[parts[0]] = DRAFT[parts[0]].filter(function (l) { return l.rid !== parts[1]; });
+      if (DRAFT) {
+        DRAFT[parts[0]] = DRAFT[parts[0]].filter(function (l) { return l.rid !== parts[1]; });
+        /* never leave a side with no rows at all — same rule 27-landed-ui.js
+           uses for its own dynamic line list, so there is always a row to
+           type into rather than a dead-end empty table */
+        if (!DRAFT[parts[0]].length) DRAFT[parts[0]].push(blankLine());
+      }
       global.paint(); return;
     }
     if (e.target.closest('[data-millsave]')) {
       e.preventDefault();
       if (!DRAFT) return;
-      Milling.save(DRAFT).then(function (job) {
-        DRAFT = null; MILL.view = 'list'; MILL.selectedId = job.id;
+      /* captured so a slower save that resolves after the person has
+         already moved on to a second draft (e.g. clicked "New milling job"
+         again before this one finished) cannot wipe that second draft out
+         from under them */
+      var savingDraft = DRAFT;
+      Milling.save(savingDraft).then(function (job) {
+        if (DRAFT === savingDraft) { DRAFT = null; MILL.view = 'list'; }
+        MILL.selectedId = job.id;
         global.paint(); say('Milling job ' + job.jobNumber + ' posted.');
         setTimeout(function () {
           var m = ERP.DocModel && ERP.DocModel.millingJob ? ERP.DocModel.millingJob(job.id) : null;
