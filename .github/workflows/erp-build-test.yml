@@ -5,10 +5,12 @@ on:
     paths:
       - "public_html/ERP/erp-upgrade/**"
       - "public_html/ERP/app/**"
+      - "public_html/ERP/api/**"
   pull_request:
     paths:
       - "public_html/ERP/erp-upgrade/**"
       - "public_html/ERP/app/**"
+      - "public_html/ERP/api/**"
 
 jobs:
   build-and-test:
@@ -26,6 +28,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+
+      - name: Lint the PHP API (matches the live server's PHP 8.3)
+        run: |
+          fail=0
+          for f in $(find ../api -name '*.php'); do
+            php -l "$f" || fail=1
+          done
+          exit $fail
 
       - name: Reconstruct local build inputs (gitignored on purpose, see CLAUDE.md)
         run: |

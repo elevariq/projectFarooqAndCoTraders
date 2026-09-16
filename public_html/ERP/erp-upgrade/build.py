@@ -44,6 +44,7 @@ MODULES = [
     ("28-areawise.js",       "AREA-WISE COLLECTION — sales, collection and balance per shop by area"),
     ("29-statement-of-account.js", "STATEMENT OF ACCOUNT — one Finance screen for either party's ledger"),
     ("30-payroll.js",        "PAYROLL — employee list, monthly salary rate, and salary payments (MVP)"),
+    ("31-auth.js",           "AUTH — server-checked accounts, sessions and permissions (Phase 2: observe mode)"),
 ]
 
 MARKER = "<!-- FAROOQ & CO ERP — INVOICE, RECEIPT & DATABASE UPGRADE -->"
