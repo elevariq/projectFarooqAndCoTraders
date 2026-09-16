@@ -525,10 +525,44 @@ rows per posted job (wheat issued reduces payable, flour/chokar received and the
 increase it) so the mill's Statement of Account, the payables total and printed statements all pick
 up milling jobs automatically, with no changes needed to any of those screens.
 
-Covered by `test-milling.mjs` (73 checks: validation, the full posting cycle, stock movements, the
+Covered by `test-milling.mjs` (80 checks: validation, the full posting cycle, stock movements, the
 ledger patch including a `FEE_ONLY` job and a cancellation, the moving-average-cost regression, the
 printable document, and a full DOM-driven entry-screen walkthrough including the "mill goes inactive
 mid-draft stays selectable" edge case). Full existing suite (25 other harnesses) reruns clean.
+
+**Client's own paper ledger seen and cross-checked (2026-09-16, `clientNewReq/new.jpeg`, gitignored —
+real business figures)**: a stock-book page headed for a named flour mill, with the same four-column
+شکل (تعداد/وزن/ریٹ/رقم) rows summing to a large total, a deduction, and a net payable — confirming
+Net Settlement as the right default over a grinding-fee-only model (the totals are commodity-value
+figures in the tens of millions, not service-charge figures). Two things flagged for the client
+rather than guessed from the photo: some تفصیل product names on that page weren't confidently
+legible (byproduct grades — broken grain, sweepings — rather than clean SKU matches), and the top
+half of that page is a continuous آمد/نکاس/باقی (in/out/running-balance) weight ledger per mill,
+which the job-by-job model here doesn't reproduce as a single running column (each job carries its
+own weights; the mill's Statement of Account rolls them up, but not as one balance line the way the
+paper page shows it) — a scoped follow-up if the client specifically wants that view, not a rebuild.
+
+**Edge-case review (2026-09-16, same day)**: reviewed the module for the same class of edge cases
+the Area-filter/Statement-of-Account and Payroll reviews earlier this session found real bugs in.
+Two found and fixed:
+- **Removing every line on a side left a dead-end empty table**, with no row left to type into
+  except a separate "Add line" click — inconsistent with `27-landed-ui.js`'s own dynamic line list,
+  which always keeps at least one row present after a removal. Now does the same.
+- **A save-in-flight race**: Save is clicked (async), the entry is then abandoned (Cancel) and a
+  second, different draft started before the first save resolves. The save's completion handler was
+  unconditionally resetting the screen back to the list — which would have silently discarded
+  whatever had already been typed into that second draft. Now captures the specific draft object
+  being saved and only clears it from the screen if it is still the live one when the save lands.
+  Verified this matters by reverting the fix and confirming the new regression check fails, then
+  restoring it.
+
+Also added a Cancel action to the job detail card itself (previously only on the list row),
+matching how `30-payroll.js` duplicates its primary action in both places. Reviewed and confirmed
+**not** bugs, matching existing house precedent: a cancelled job's stock reversal is unguarded
+against going negative if the goods were already resold onward — same as `PURCHASE_REVERSAL_OUT` on
+a purchase edit; a zero rate is accepted on a NET job's line the same way `needRate` validation
+allows it everywhere else in the app (a deliberate free/promotional line, not a milling-specific
+gap).
 
 ## Where to look for more detail
 
