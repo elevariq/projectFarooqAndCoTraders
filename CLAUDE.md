@@ -401,6 +401,72 @@ Asked to review both features above for edge cases before moving on. Found and f
     click-navigates correctly — all still passing). The actual visual fix was diagnosed by reading
     the CSS cascade against the client's screenshot and needs a live phone to fully confirm.
 
+## Server-side authentication & authorization (2026-09-16)
+
+The client-side-only account system (`22-users.js`'s PIN accounts, `19-collection-rbac.js`'s
+`ERP.RBAC`) was never a real security boundary — no login was mandatory, an account with no
+PIN was a free pass, `Session.role()` fell back to `'OWNER'` with nobody signed in, and the
+whole business database was **world-readable with no credentials at all**
+(`database/fresh-install-backup.json`, `data-exports/*.csv`, etc. — all `200`, no auth).
+Branch `feature/auth-server-enforced`, PR #1. Rolled out in phases, of which the first three
+are done and live:
+
+- **Phase 0 (live)**: per-directory `.htaccess` denies on `database/`, `data-exports/`, `docs/`,
+  `samples/`, `erp-upgrade/`, the orphaned `app/` duplicate, and `*.md`/`*.json`/`*.sql`/`*.prisma`
+  at the ERP root. The app's own runtime files (`index.html`, `farooq-co-erp.html`,
+  `farooq-erp-data.js`, `logo.png`) are untouched and still served — each directory got its own
+  deny file specifically so a mistake there couldn't take down the app root.
+- **Phase 1 (deployed)**: a PHP 8.3 API under `public_html/ERP/api/` (same-origin with the ERP,
+  works transparently through the base64 `srcdoc` launcher). Backed by a **new, dedicated**
+  MySQL database `u943531942_erpauth` — deliberately separate from `u943531942_facotraders`,
+  which stays empty and reserved for the eventual IndexedDB→MySQL business-data migration (see
+  below). Schema in `database/auth-schema.sql`: `auth_users`, `auth_sessions`,
+  `auth_login_attempts`, `auth_role_permissions` (seeded from the exact `ROLES` map in
+  `19-collection-rbac.js`, so the server is now the source of truth for what each role can do),
+  `auth_audit`. Endpoints: `login.php` (bcrypt, per-username+per-IP rate limiting, account
+  lockout after 5 failures, one generic error message so accounts can't be enumerated),
+  `logout.php`, `me.php`, `ticket.php` (offline grace-period reissue), `change-password.php`,
+  `users.php` (owner-only account CRUD). Every response sends `Cache-Control: no-store` — the
+  Hostinger CDN in front of this domain must never cache an authenticated response.
+  `scripts/auth-bootstrap.php` creates the first OWNER account over SSH only (refuses to run over
+  HTTP, refuses if any account already exists).
+- **Phase 2 (live)**: new module `erp-upgrade/31-auth.js` (`AUTH_MODE = 'observe'`). A server
+  sign-in becomes the source of truth for `ERP.Session`/`ERP.RBAC` — permission checks fail
+  **closed** once a server identity exists — but nobody is forced to sign in yet; with no server
+  session the app renders exactly as it did before this module existed. A "Company sign-in" link
+  sits next to the existing account chip. Includes an offline grace-period ticket (HMAC-signed
+  server-side, but the signature can't be verified client-side since the secret never reaches
+  the browser — only the ticket's own claimed expiry is enforced; documented in the module header
+  as the same category of limit as `22-users.js`'s own PIN comment) and a 15-minute idle lock
+  (re-verifies against the server if online, or a cached PBKDF2 password verifier if offline).
+- **Phase 3 (not done, deliberately)**: moving the app files behind `index.php`/`erp.php` so
+  sign-in becomes mandatory. Not attempted this session — flipping that gate risks locking the
+  client out of live billing software if anything is wrong, and needs Phase 2 to run clean for a
+  few days first, then a deliberate go-ahead.
+
+**Credentials**: the DB password for `u943531942_erpauth` and the ticket-signing secret are
+generated fresh (never extracted from the existing `dbhub` MCP credential) and live only in
+`private/erp-config.php` on the server and locally, gitignored — `private/erp-config.sample.php`
+is the committed template. The bootstrapped OWNER account (`username: owner`) has
+`must_change_password` set — the client should change it and this is a real gap: **no UI for
+changing a password was built yet**, only the `api/auth/change-password.php` endpoint and
+`ERP.Auth.changePassword()` exist. Adding that screen is unstarted follow-up work.
+
+**Verified this session**: full existing test suite (24 harnesses, 1,196 checks) unaffected;
+new `test-auth-client.mjs` (25 checks) covers observe-mode fallback, login/logout, fail-closed
+permissions, a valid vs. an expired offline ticket, and both idle-lock unlock paths — all via a
+mocked `fetch`, never depending on the live server. All 8 PHP files linted against the live
+server's actual PHP 8.3 binary before upload. Live smoke test via a real browser: public data
+now `403`, `_bootstrap.php`/`_session.php` return `403` on direct request, a full login round
+trip as the bootstrapped OWNER worked end-to-end and correctly rebound `ERP.Session`/`CURRENT_USER`,
+and a real bug found in that same smoke test (the "Company sign-in" link didn't disappear once
+signed in) was fixed and redeployed before this was called done.
+
+**Open decision, not resolved**: `LANDED_COST_MANAGE`, `LANDED_COST_VIEW` and `EXPENSE_MANAGE`
+are used in `27-landed-ui.js` but appear in no role's permission list client-side today, so only
+OWNER effectively has them. `auth-schema.sql` preserves that (grants them to nobody but OWNER)
+rather than guessing whether Manager/Accountant should get them — flagged for the user.
+
 ## Where to look for more detail
 
 - `docs/OPERATIONS.md` — full access inventory, exact commands used, and the deploy checklist.
