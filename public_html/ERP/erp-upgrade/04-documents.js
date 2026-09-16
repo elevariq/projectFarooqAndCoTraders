@@ -150,8 +150,13 @@ var DocModel = {
     var p = ERP.Payments.byId(paymentId);
     if (!p) return null;
     var incoming = p.direction === 'IN';
+    var isCustParty = p.partyType === 'CUSTOMER';
     var allocs = S.allocations.filter(function (a) { return a.paymentId === p.id; });
-    var closing = incoming ? ERP.Ledger.customerBalance(p.partyId) : ERP.Ledger.supplierBalance(p.partyId);
+    /* the balance to show is which party this payment is against — a
+       customer refund (direction OUT, partyType CUSTOMER) still needs the
+       shop's own balance, not the supplier ledger the direction alone
+       would suggest */
+    var closing = isCustParty ? ERP.Ledger.customerBalance(p.partyId) : ERP.Ledger.supplierBalance(p.partyId);
     return {
       kind: incoming ? 'RECEIPT' : 'VOUCHER', entityId: p.id,
       title: incoming ? 'PAYMENT RECEIPT' : 'PAYMENT VOUCHER',
@@ -162,7 +167,7 @@ var DocModel = {
       party: {
         label: incoming ? 'RECEIVED FROM' : 'PAID TO', shop: p.partyNameSnapshot,
         owner: p.partyOwnerSnapshot, region: p.regionSnapshot, id: p.partyId,
-        contact: incoming ? ((global.custBy(p.partyId) || {}).ph || '') : ''
+        contact: isCustParty ? ((global.custBy(p.partyId) || {}).ph || '') : ''
       },
       metaLabel: 'RECEIPT DETAILS',
       meta: [
@@ -198,7 +203,8 @@ var DocModel = {
       itemsFooter: allocs.length ? { description: 'Total applied', amount: M.fmtPlain(
         allocs.reduce(function (x, a) { return x + a.amount; }, 0)) } : null,
       totals: [
-        { label: 'Amount received', labelUr: 'وصول رقم', value: M.fmt(p.amount), big: true, rule: true },
+        { label: incoming ? 'Amount received' : 'Amount paid',
+          labelUr: incoming ? 'وصول رقم' : 'ادا شدہ رقم', value: M.fmt(p.amount), big: true, rule: true },
         { label: 'Previous balance', value: M.fmt(p.balanceBefore) },
         { label: 'Remaining balance', labelUr: 'بقایا رقم', value: M.fmt(closing), bold: true }
       ],

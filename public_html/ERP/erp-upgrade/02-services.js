@@ -857,7 +857,7 @@ var Payments = ERP.Payments = {
         if (a.invoiceId) Invoices.refreshPaymentState(api, a.invoiceId);
       });
       Audit.write(api, {
-        action: direction === 'IN' ? 'Payment received' : 'Payment made to supplier',
+        action: direction === 'IN' ? 'Payment received' : (partyType === 'CUSTOMER' ? 'Refund paid to shop' : 'Payment made to supplier'),
         entity: 'Payment', entityId: rec.id, ref: rec.receiptNumber,
         newValues: { amount: rec.amount, method: rec.method, party: rec.partyNameSnapshot }
       });
@@ -892,6 +892,23 @@ var Payments = ERP.Payments = {
         partyId: o.supplierId, amountP: amountP, method: o.method, reference: o.reference,
         date: o.date, note: o.note, description: o.description, allocations: o.allocations || []
       });
+    }).then(function (r) { Mirror.refresh(); return r; });
+  },
+  /* Money paid out to a shop that isn't tied to processing a return — a
+     refund, an adjustment, closing out a credit balance. The engine has
+     always supported this direction (a customer return with the REFUND
+     treatment already posts one, via _write with partyType forced to
+     CUSTOMER — see Returns.fromCustomer) but there was no way to do it on
+     its own; this is that same write, exposed as a direct action. */
+  refund: function (o) {
+    var amountP = M.toP(o.amount);
+    if (!(amountP > 0)) return Promise.reject({ validation: ['Enter an amount greater than zero.'] });
+    if (!global.custBy(o.customerId)) return Promise.reject({ validation: ['Choose a shop.'] });
+    return FDB.tx(['sequences', 'payments', 'paymentAllocations', 'auditLog'], function (api) {
+      return Payments._write(api, {
+        partyId: o.customerId, partyType: 'CUSTOMER', amountP: amountP, method: o.method,
+        reference: o.reference, date: o.date, note: o.note, description: o.description, allocations: []
+      }, 'OUT');
     }).then(function (r) { Mirror.refresh(); return r; });
   },
   autoAllocate: function (customerId, amountP) {

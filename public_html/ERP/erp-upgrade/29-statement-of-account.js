@@ -112,6 +112,10 @@
         '<label class="f"><span>From</span><input type="date" data-soaf="from" value="' + esc(SOA.from) + '"></label>' +
         '<label class="f"><span>To</span><input type="date" data-soaf="to" value="' + esc(SOA.to) + '"></label>' +
         '<div class="grow"></div>' +
+        (isCust
+          ? '<button class="btn" data-soapay>' + I('wallet') + 'Receive payment</button>' +
+            '<button class="btn" data-soarefund>' + I('wallet') + 'Pay this shop</button>'
+          : '<button class="btn" data-soapaysup>' + I('wallet') + 'Pay this supplier</button>') +
         '<button class="btn" data-soaprint>' + I('print') + 'Print / PDF</button>' +
         '<button class="btn pri" data-soaexcel>' + I('sheet') + 'Excel</button>' +
       '</div>';
@@ -246,6 +250,27 @@
 
   D.addEventListener('click', function (e) {
     if (!e.target.closest) return;
+    if (e.target.closest('[data-soapay]')) {
+      e.preventDefault();
+      if (!SOA.partyId) return;
+      if (ERP.setPayFor) ERP.setPayFor(SOA.partyId);
+      global.openPanel('payment');
+      return;
+    }
+    if (e.target.closest('[data-soarefund]')) {
+      e.preventDefault();
+      if (!SOA.partyId) return;
+      if (ERP.setRefundFor) ERP.setRefundFor(SOA.partyId);
+      global.openPanel('refund');
+      return;
+    }
+    if (e.target.closest('[data-soapaysup]')) {
+      e.preventDefault();
+      if (!SOA.partyId) return;
+      if (ERP.setPayFor) ERP.setPayFor(SOA.partyId);
+      global.openPanel('paysup');
+      return;
+    }
     if (e.target.closest('[data-soaprint]')) {
       e.preventDefault();
       if (!SOA.partyId) return;

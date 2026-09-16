@@ -365,6 +365,7 @@ global.PAGES.khata = function (customerId) {
         '</div>' +
         '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">' +
           '<button class="btn pri" data-khpay="' + c.id + '">' + I('wallet') + 'Receive payment</button>' +
+          '<button class="btn" data-khrefund="' + c.id + '">' + I('wallet') + 'Pay this shop</button>' +
           '<button class="btn" data-khadjust="' + c.id + '">' + I('edit') + 'Adjustment</button>' +
           '<button class="btn" data-fcnew="sale">' + I('plus') + 'New invoice</button>' +
         '</div>' +
@@ -449,6 +450,7 @@ if (origProfile) {
     return '<div class="bar"><div class="grow"></div>' +
       '<button class="btn pri" data-khata="' + id + '">' + I('doc') + 'Account statement</button>' +
       '<button class="btn" data-khpay="' + id + '">' + I('wallet') + 'Receive payment</button>' +
+      '<button class="btn" data-khrefund="' + id + '">' + I('wallet') + 'Pay this shop</button>' +
       '</div>' + html;
   };
 }
@@ -646,6 +648,13 @@ D.addEventListener('click', function (e) {
     e.preventDefault();
     if (ERP.setPayFor) ERP.setPayFor(pay.dataset.khpay);
     global.openPanel('payment');
+    return;
+  }
+  var refund = e.target.closest('[data-khrefund]');
+  if (refund) {
+    e.preventDefault();
+    if (ERP.setRefundFor) ERP.setRefundFor(refund.dataset.khrefund);
+    global.openPanel('refund');
     return;
   }
   var adj = e.target.closest('[data-khadjust]');

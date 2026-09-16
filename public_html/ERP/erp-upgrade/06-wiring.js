@@ -153,28 +153,35 @@ table.fcb-list .sub{font-size:12px;color:var(--muted)}
    ══════════════════════════════════════════════════════════════════════════ */
 var PAY_FOR = null, RETURN_FOR = null, SUPRET_FOR = null, STMT_FOR = null;
 ERP.setPayFor = function (id) { PAY_FOR = id; };
+var REFUND_FOR = null;
+ERP.setRefundFor = function (id) { REFUND_FOR = id; };
 
-/* Area filter for the "Receive payment" shop picker — same idea as the Area
-   filter already on the invoice builder (§ regionFilter in 05-ui-builder.js):
-   picking an Area narrows the Shop list to just that area's customers. */
-var PAY_AREA = '';
-function payAreaOptions() {
+/* Area filter for the "Receive payment" and "Pay a shop" pickers — same idea
+   as the Area filter already on the invoice builder (§ regionFilter in
+   05-ui-builder.js): picking an Area narrows the Shop list to just that
+   area's customers. Both panels keep independent area state (PAY_AREA /
+   REFUND_AREA) so opening one never disturbs the other's remembered filter,
+   built on one shared, single-source-of-truth pair of helpers. */
+var PAY_AREA = '', REFUND_AREA = '';
+function areaSelectOptionsFor(area) {
   /* the region a pre-filled shop belongs to must stay selectable even if it
      has since been switched off — otherwise the dropdown silently falls back
      to "All areas" while the Shop list still shows just that one shop, which
      is a confusing mismatch on a money screen */
-  var regions = (global.REGIONS || []).filter(function (r) { return r.active !== false || r.id === PAY_AREA; });
-  return '<option value=""' + (!PAY_AREA ? ' selected' : '') + '>All areas</option>' +
+  var regions = (global.REGIONS || []).filter(function (r) { return r.active !== false || r.id === area; });
+  return '<option value=""' + (!area ? ' selected' : '') + '>All areas</option>' +
     regions.map(function (r) {
-      return '<option value="' + esc(r.id) + '"' + (PAY_AREA === r.id ? ' selected' : '') + '>' +
+      return '<option value="' + esc(r.id) + '"' + (area === r.id ? ' selected' : '') + '>' +
         esc(r.en) + (r.ur ? ' — ' + esc(r.ur) : '') + (r.active === false ? ' (inactive)' : '') + '</option>';
     }).join('');
 }
-function payCustomersInArea() {
-  return (global.CUSTOMERS || []).filter(function (c) {
-    return !PAY_AREA || (c.region || '') === PAY_AREA;
-  });
+function customersInAreaFor(area) {
+  return (global.CUSTOMERS || []).filter(function (c) { return !area || (c.region || '') === area; });
 }
+function payAreaOptions() { return areaSelectOptionsFor(PAY_AREA); }
+function payCustomersInArea() { return customersInAreaFor(PAY_AREA); }
+function refundAreaOptions() { return areaSelectOptionsFor(REFUND_AREA); }
+function refundCustomersInArea() { return customersInAreaFor(REFUND_AREA); }
 /* Shared between the initial render and the live Area-change handler so the
    two can never disagree. An area with genuinely no shops is shown as an
    explicit empty state — it must NOT silently fall back to every shop, or
@@ -266,7 +273,14 @@ PANELS.paysup = {
   t: 'Pay supplier', s: 'Money paid to a mill', cta: 'Record payment & print voucher',
   f: function () {
     var sups = (global.SUPPLIERS || []).filter(function (s) { return s.active !== false; });
-    var pre = PAY_FOR || (sups[0] || {}).id;
+    /* the base app's own "Pay supplier" button (a supplier's profile page)
+       sets WATARGET, not PAY_FOR — this panel definition replaces the base
+       app's original one (which read WATARGET) but never picked up that
+       fallback, so opening it from a specific supplier's page silently
+       defaulted to the first supplier in the list instead. */
+    var watarget = typeof WATARGET !== 'undefined' ? WATARGET : null;
+    var pre = PAY_FOR || (watarget && sups.some(function (s) { return s.id === watarget; }) ? watarget : null) ||
+      (sups[0] || {}).id;
     return '<label class="f"><span>Supplier</span><select data-f="sup">' +
         sups.map(function (s) {
           return '<option value="' + s.id + '"' + (s.id === pre ? ' selected' : '') + '>' + esc(s.co) + '</option>';
@@ -292,6 +306,49 @@ PANELS.paysup = {
         global.paint(); say('Voucher ' + p.receiptNumber + ' recorded.');
         setTimeout(function () { ERP.Viewer.open(ERP.DocModel.receipt(p.id)); }, 220);
       }).catch(function (e) { say(e && e.validation ? e.validation[0] : 'The payment could not be saved.'); });
+    return { msg: 'Saving payment…' };
+  }
+};
+
+PANELS.refund = {
+  t: 'Pay a shop', s: 'Money paid out to a shop — a refund or adjustment, not tied to a return',
+  cta: 'Record payment & print voucher',
+  f: function () {
+    var all = (global.CUSTOMERS || []);
+    if (!all.length) return '<div class="banner warn">' + I('alert') + '<div><b>No shops on file</b><p>Add a shop first.</p></div></div>';
+    var preCust = REFUND_FOR ? global.custBy(REFUND_FOR) : null;
+    REFUND_AREA = preCust ? (preCust.region || '') : '';
+    var custs = refundCustomersInArea();
+    var pre = (REFUND_FOR && custs.some(function (c) { return c.id === REFUND_FOR; })) ? REFUND_FOR : undefined;
+    return '<label class="f"><span>Area</span><select data-f="area" id="fcRefundArea">' + refundAreaOptions() +
+      '</select></label>' +
+      '<label class="f"><span>Shop</span><select data-f="cust" id="fcRefundCust"' + (custs.length ? '' : ' disabled') + '>' +
+        payShopOptionsHtml(custs, pre) + '</select></label>' +
+      '<div class="banner ' + (custs.length ? 'info' : 'warn') + '" id="fcRefundBal">' + payBalanceHtml(custs, pre) + '</div>' +
+      '<div class="f2 fc-amtpaid"><label class="f"><span>Amount Paid</span>' +
+        '<input data-f="amt" inputmode="decimal" placeholder="e.g. 100000"></label>' +
+        '<label class="f"><span>Method</span><select data-f="method">' +
+          ERP.ENUM.methods.map(function (m) { return '<option>' + m + '</option>'; }).join('') + '</select></label></div>' +
+      '<div class="f2"><label class="f"><span>Date</span><input type="date" data-f="date" value="' + todayISO() + '"></label>' +
+        '<label class="f"><span>Reference</span><input data-f="ref" class="mono" placeholder="Optional"></label></div>' +
+      '<label class="f fc-desc"><span>Description / تفصیل</span>' +
+        '<input data-f="desc" maxlength="500" ' +
+        'placeholder="Appears on the statement — English or Urdu"></label>' +
+      '<label class="f"><span>Internal note</span><input data-f="note" placeholder="Optional"></label>';
+  },
+  save: function (v) {
+    var amount = String(v.amt || '').replace(/[^\d.]/g, '');
+    if (!amount || Number(amount) <= 0) return 'Enter the amount to pay.';
+    ERP.Payments.refund({
+      customerId: v.cust, amount: amount, method: v.method, reference: v.ref,
+      date: v.date || todayISO(), note: v.note, description: v.desc
+    }).then(function (p) {
+      global.paint();
+      say('Voucher ' + p.receiptNumber + ' recorded.');
+      setTimeout(function () { ERP.Viewer.open(ERP.DocModel.receipt(p.id)); }, 220);
+    }).catch(function (e) {
+      say(e && e.validation ? e.validation[0] : 'The payment could not be saved. Nothing was changed.');
+    });
     return { msg: 'Saving payment…' };
   }
 };
@@ -781,6 +838,27 @@ D.addEventListener('change', function (e) {
            overwrite this with a misleading "this shop has no unpaid
            invoices" message, which implies a shop that isn't there */
         var listHost = D.getElementById('fcPayList'); if (listHost) listHost.innerHTML = '';
+      }
+    }
+    return;
+  }
+  if (el.id === 'fcRefundCust') {
+    var rbox = D.getElementById('fcRefundBal');
+    if (rbox) rbox.innerHTML = I('wallet') + '<div><p>Outstanding balance: <b>' +
+      M.fmt(ERP.Ledger.customerBalance(el.value)) + '</b></p></div>';
+    return;
+  }
+  if (el.id === 'fcRefundArea') {
+    REFUND_AREA = el.value;
+    var refundSel = D.getElementById('fcRefundCust');
+    if (refundSel) {
+      var ropts = refundCustomersInArea();
+      refundSel.disabled = !ropts.length;
+      refundSel.innerHTML = payShopOptionsHtml(ropts);
+      var rbbox = D.getElementById('fcRefundBal');
+      if (rbbox) {
+        rbbox.className = 'banner ' + (ropts.length ? 'info' : 'warn');
+        rbbox.innerHTML = payBalanceHtml(ropts);
       }
     }
     return;

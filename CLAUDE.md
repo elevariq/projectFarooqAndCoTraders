@@ -245,14 +245,11 @@ git push
 4. Suppliers 204/494/575/614 — account type to confirm; 575 is currently switched off.
 5. Roles are advisory only (hidden actions, not server-enforced) — there is no server.
 6. SMS/WhatsApp are configured but not connected to a provider.
-7. Client message (2026-09-16, `clientNewReq/clientMesseges.txt`): "Add amount paid here" —
-   Amount Paid already appears on the invoice screen and both payment panels (from an earlier
-   client change round, `24-client-changes.js`), so this must mean somewhere it's currently
-   missing, but the message doesn't say where and no screenshot was attached this time. Waiting
-   on the user to check with the client before building anything.
-8. Client message (2026-09-16, same file): "Payroll = Employee salary management system" — a new
-   feature area with no real requirements yet (no fields, no salary structure, no screenshot).
-   Not started — waiting on the client for scope before touching this.
+7. ~~Client message (2026-09-16): "Add amount paid here"~~ — **Resolved 2026-09-16.** The client
+   clarified: shops could receive money but never be *paid* money directly (only via the Customer
+   Return flow). Implemented as "Pay a shop" — see "Pay a shop / Payroll (2026-09-16)" below.
+8. ~~Client message (2026-09-16): "Payroll = Employee salary management system"~~ — **Resolved
+   2026-09-16** as a deliberately minimal MVP (no real requirements were ever given). See below.
 
 (The build-pipeline question from earlier sessions is resolved — see "How to build the ERP
 locally" above — and isn't a decision the user needs to make.)
@@ -316,6 +313,64 @@ fixed, each covered by a new regression check in `test-statement-of-account.mjs`
 - One inconsistency (not a functional bug): `payAreaOptions()` in `06-wiring.js` didn't escape
   the region id in the `value=` attribute, unlike the matching helper already in
   `28-areawise.js` and in the new `29-statement-of-account.js`. Fixed for consistency.
+
+## Pay a shop / Payroll (2026-09-16)
+
+Two more client-requested items, resolved the same day as the edge-case review above.
+
+**"Pay a shop"** — client clarified item 1 ("amount paid isn't here"): a shop could always
+*receive* a payment, but could only ever be *paid* money via the Customer Return flow (tied to
+processing a product return, treatment=REFUND) — there was no direct "pay this shop money" action,
+even though suppliers already had one ("Pay supplier"). The data model already fully supported it
+(`isRefund: partyType==='CUSTOMER' && direction==='OUT'`, already used internally by the return
+flow) — it just had no standalone entry point. Added:
+- `ERP.Payments.refund(o)` (`02-services.js`) — a thin, validated wrapper around the same
+  `Payments._write(..., 'OUT')` the return-refund path already used. No new ledger math.
+- `PANELS.refund` ("Pay a shop", `06-wiring.js`) — same shape as "Receive payment", including its
+  own independent Area filter (reusing the shared `areaSelectOptionsFor`/`customersInAreaFor`
+  helpers, refactored out of the Area-filter fix above so both panels share one implementation).
+- Wired in next to "Receive payment" on the shop's own khata page, the customer profile page, and
+  as a quick action on the Statement of Account screen (which also gained a matching "Receive
+  payment" quick action, and "Pay this supplier" for the supplier side).
+- Two real bugs found and fixed while tracing this, both in code paths this feature newly
+  exercises for the first time:
+  - `ERP.DocModel.receipt()` (`04-documents.js`) computed the closing balance and contact info
+    from payment *direction* alone (`incoming = direction==='IN'`), so a customer refund
+    (direction OUT) looked up a *supplier* balance using the customer's id, and dropped the
+    phone number. Fixed to branch on `partyType` instead. Also: the totals block unconditionally
+    said "Amount received" even on a "PAYMENT VOUCHER" for an outgoing payment (paying a
+    supplier, now also a shop) — fixed to say "Amount paid" / "ادا شدہ رقم" for OUT payments.
+  - `PANELS.paysup` ("Pay supplier"), opened from a *specific* supplier's own profile page, never
+    pre-selected that supplier — the base app's own button sets `WATARGET` (a `let` binding
+    lexically scoped to the base script, not a `window` property), but this panel definition
+    (added by the upgrade, replacing the base app's original one) only ever read `PAY_FOR`.
+    Fixed to fall back to `WATARGET` when `PAY_FOR` isn't set. (A test that tried to reproduce
+    this by setting `window.WATARGET` from outside the page proved nothing, since that only
+    creates an unrelated shadow property — the real bug had to be reproduced via the actual
+    button click, which is what the regression test now does.)
+
+Covered by `test-pay-a-shop.mjs` (37 checks).
+
+**Payroll** — client's item 4 was one line ("Payroll = Employee salary management system") with
+no fields, salary structure, or screenshot, even after a follow-up. Built as a deliberately
+minimal MVP rather than guessing at a real HR/accrual model:
+- Two new IndexedDB stores (`employees`, `salaryPayments` — `01-db.js`, `DB_VER` 9→10),
+  deliberately separate from `salesmen` (area sales-coverage is a different concern from who's on
+  payroll) and from `payments` (a salary is never a customer/supplier balance movement).
+- `ERP.Employees` (CRUD, archive-not-delete, same shape as `ERP.Staff`/salesmen) and `ERP.Payroll`
+  (`pay()`, `paymentsFor()`, `totalPaid()`, `lastPaymentDate()`, `paidThisMonth()`) in the new
+  `30-payroll.js`.
+- **Deliberately a payment log, not a balance/liability system** — there is no "amount owed"
+  concept anywhere in it. Nothing was specified about pay periods, proration, deductions or
+  advances, and a wrong balance on a payroll screen would be worse than no balance at all.
+- One screen (`PAGES.payroll`, new "Payroll" entry under Finance): an employee table (name, role,
+  monthly salary, paid-this-month status, total paid, active/archived) with Add/Edit/Pay
+  salary/Statement actions; selecting "Statement" expands a detail card below with summary cards
+  and the full dated payment history — the same shape as the customer/supplier ledger, by design.
+- **Explicitly not built** — flagged for the client to specify before any of it is attempted:
+  attendance, deductions/advances, tax, printable payslips, pay-period accrual.
+
+Covered by `test-payroll.mjs` (48 checks, including a full restart/persistence check).
 
 ## Where to look for more detail
 

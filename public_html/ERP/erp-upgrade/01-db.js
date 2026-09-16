@@ -88,6 +88,12 @@ var STORES = {
   landedCosts:           { keyPath: 'id',    idx: { referenceNumber: ['referenceNumber', true], purchaseId: 'purchaseId', transferId: 'transferId', warehouseId: 'warehouseId', costDate: 'costDate', status: 'status' } },
   landedCostExpenses:    { keyPath: 'id',    idx: { landedCostId: 'landedCostId', category: 'category', expenseDate: 'expenseDate', paymentStatus: 'paymentStatus' } },
   inventoryCostAdjust:   { keyPath: 'id',    idx: { landedCostId: 'landedCostId', productId: 'productId', purchaseItemId: 'purchaseItemId', warehouseId: 'warehouseId' } },
+  /* ── payroll: employees and salary payments. Deliberately its own pair of
+     stores, separate from `salesmen` (area sales-coverage is a different
+     concern from who's on payroll) and from `payments` (a salary is never a
+     customer/supplier balance movement). ── */
+  employees:             { keyPath: 'id',    idx: { name: 'name', role: 'role', active: 'active' } },
+  salaryPayments:        { keyPath: 'id',    idx: { salaryNumber: ['salaryNumber', true], employeeId: 'employeeId', paymentDate: 'paymentDate' } },
   syncQueue:             { keyPath: 'opId',  idx: { state: 'state' } },
   legacy:                { keyPath: 'k' }   /* orders, dispatch, activity, rules, users, devices … */
 };
@@ -98,7 +104,8 @@ var STORE_NAMES = Object.keys(STORES);
    Opening that database under this schema would corrupt it, so this build
    uses its own name and adopts the old one on first run instead. */
 var DB_NAME = 'farooqco_erp_ledger';
-var DB_VER  = 9;   /* … v7 price history and approvals · v8 user accounts · v9 landed cost */
+var DB_VER  = 10;  /* … v7 price history and approvals · v8 user accounts · v9 landed cost ·
+                       v10 payroll (employees, salaryPayments) */
 var OLD_DB_NAME = 'farooqco_erp';
 var LS_KEY  = 'farooqco_erp_idb_mirror';
 var LEGACY_LS_KEY = 'farooqco_erp_v1';
