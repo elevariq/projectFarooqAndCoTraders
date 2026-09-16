@@ -154,6 +154,25 @@ table.fcb-list .sub{font-size:12px;color:var(--muted)}
 var PAY_FOR = null, RETURN_FOR = null, SUPRET_FOR = null, STMT_FOR = null;
 ERP.setPayFor = function (id) { PAY_FOR = id; };
 
+/* Area filter for the "Receive payment" shop picker — same idea as the Area
+   filter already on the invoice builder (§ regionFilter in 05-ui-builder.js):
+   picking an Area narrows the Shop list to just that area's customers. */
+var PAY_AREA = '';
+function payAreaOptions() {
+  return '<option value=""' + (!PAY_AREA ? ' selected' : '') + '>All areas</option>' +
+    (global.REGIONS || []).filter(function (r) { return r.active !== false; }).map(function (r) {
+      return '<option value="' + r.id + '"' + (PAY_AREA === r.id ? ' selected' : '') + '>' +
+        esc(r.en) + (r.ur ? ' — ' + esc(r.ur) : '') + '</option>';
+    }).join('');
+}
+function payCustomersInArea() {
+  var custs = (global.CUSTOMERS || []).filter(function (c) {
+    return !PAY_AREA || (c.region || '') === PAY_AREA;
+  });
+  /* an area with no shops on file is not a dead end — fall back to everyone */
+  return custs.length ? custs : (global.CUSTOMERS || []);
+}
+
 function openInvoicesForCustomer(cid) {
   return ERP.Invoices.all().filter(function (i) {
     return i.customerId === cid && i.status !== 'DRAFT' && i.status !== 'CANCELLED' &&
@@ -166,11 +185,16 @@ var PANELS = global.PANELS;
 PANELS.payment = {
   t: 'Receive payment', s: 'Money received from a shop', cta: 'Record payment & print receipt',
   f: function () {
-    var custs = (global.CUSTOMERS || []);
-    if (!custs.length) return '<div class="banner warn">' + I('alert') + '<div><b>No shops on file</b><p>Add a shop first.</p></div></div>';
-    var pre = PAY_FOR || custs[0].id;
+    var all = (global.CUSTOMERS || []);
+    if (!all.length) return '<div class="banner warn">' + I('alert') + '<div><b>No shops on file</b><p>Add a shop first.</p></div></div>';
+    var preCust = PAY_FOR ? global.custBy(PAY_FOR) : null;
+    PAY_AREA = preCust ? (preCust.region || '') : '';
+    var custs = payCustomersInArea();
+    var pre = (PAY_FOR && custs.some(function (c) { return c.id === PAY_FOR; })) ? PAY_FOR : custs[0].id;
     var bal = ERP.Ledger.customerBalance(pre);
-    return '<label class="f"><span>Shop</span><select data-f="cust" id="fcPayCust">' +
+    return '<label class="f"><span>Area</span><select data-f="area" id="fcPayArea">' + payAreaOptions() +
+      '</select></label>' +
+      '<label class="f"><span>Shop</span><select data-f="cust" id="fcPayCust">' +
         custs.map(function (c) {
           return '<option value="' + c.id + '"' + (c.id === pre ? ' selected' : '') + '>' + esc(c.sh) + '</option>';
         }).join('') + '</select></label>' +
@@ -721,6 +745,22 @@ D.addEventListener('change', function (e) {
     if (box) box.innerHTML = I('wallet') + '<div><p>Outstanding balance: <b>' +
       M.fmt(ERP.Ledger.customerBalance(el.value)) + '</b></p></div>';
     renderAllocList(); return;
+  }
+  if (el.id === 'fcPayArea') {
+    PAY_AREA = el.value;
+    var custSel = D.getElementById('fcPayCust');
+    if (custSel) {
+      var opts = payCustomersInArea();
+      custSel.innerHTML = opts.map(function (c) {
+        return '<option value="' + c.id + '">' + esc(c.sh) + '</option>';
+      }).join('');
+      var bbox = D.getElementById('fcPayBal');
+      var firstId = opts.length ? opts[0].id : '';
+      if (bbox) bbox.innerHTML = I('wallet') + '<div><p>Outstanding balance: <b>' +
+        M.fmt(firstId ? ERP.Ledger.customerBalance(firstId) : 0) + '</b></p></div>';
+      renderAllocList();
+    }
+    return;
   }
   if (el.id === 'fcPayMode') { renderAllocList(); return; }
   if (el.id === 'fcRetInv') {

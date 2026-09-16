@@ -42,6 +42,7 @@ MODULES = [
     ("26-landed-cost.js",    "LANDED COST — operational expenses on inventory, true profit, never on the supplier"),
     ("27-landed-ui.js",      "FINANCE UI — Landed costs, Expenses and Profit analysis screens"),
     ("28-areawise.js",       "AREA-WISE COLLECTION — sales, collection and balance per shop by area"),
+    ("29-statement-of-account.js", "STATEMENT OF ACCOUNT — one Finance screen for either party's ledger"),
 ]
 
 MARKER = "<!-- FAROOQ & CO ERP — INVOICE, RECEIPT & DATABASE UPGRADE -->"
