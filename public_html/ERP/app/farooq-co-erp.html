@@ -67,14 +67,10 @@ svg{display:block}
   position:fixed;inset:0 auto 0 0;height:100vh;z-index:60;transition:width .18s ease
 }
 .rail-head{display:flex;align-items:center;gap:11px;padding:18px 16px 16px;border-bottom:1px solid var(--line-2)}
-.mark{width:38px;height:38px;flex:0 0 38px;border-radius:12px;color:#fff;display:grid;place-items:center;
-  background:linear-gradient(155deg,#A78BFA 0%,#7C3AED 46%,#5B21B6 100%);
-  box-shadow:0 6px 16px rgba(109,40,217,.34), inset 0 1px 0 rgba(255,255,255,.42);
-  position:relative;overflow:hidden}
-.mark::after{content:"";position:absolute;inset:0;border-radius:12px;border:1px solid rgba(255,255,255,.22)}
+.mark{width:38px;height:38px;flex:0 0 38px;display:grid;place-items:center;position:relative;background:#fff;border-radius:50%}
 .mark svg{width:19px;height:19px}
 .mark b{font-size:13.5px;font-weight:800;letter-spacing:-.04em;color:#fff;position:relative;text-shadow:0 1px 2px rgba(49,17,110,.35)}
-.mark img{width:82%;height:82%;object-fit:contain;position:relative}
+.mark img{width:100%;height:100%;object-fit:contain;position:relative;border-radius:50%}
 .brand-t{min-width:0}
 .brand-t b{display:block;font-size:15px;font-weight:800;letter-spacing:-.032em;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;color:var(--ink)}
@@ -528,8 +524,8 @@ input.ur,select.ur,textarea.ur{font-family:'Noto Nastaliq Urdu',var(--font);line
 .docsheet .dim{color:#777}
 .dh{display:flex;justify-content:space-between;gap:20px;border-bottom:2px solid #111;padding-bottom:10px}
 .dh-l{display:flex;gap:11px}
-.dh-mark{width:44px;height:44px;flex:0 0 44px;border:1.5px solid #111;border-radius:8px;display:grid;
-  place-items:center;font-weight:800;font-size:12pt}
+.dh-mark{width:44px;height:44px;flex:0 0 44px;display:grid;place-items:center;font-weight:800;font-size:12pt}
+.dh-mark img{width:100%;height:100%;object-fit:contain}
 .dh-name{font-size:15pt;font-weight:800;letter-spacing:-.02em;line-height:1.2}
 .dh-meta{font-size:8.5pt;color:#444;line-height:1.5;margin-top:3px}
 .dh-r{text-align:right}
@@ -602,6 +598,7 @@ table.dt tr.tot-row td,table.dt tr.open-row td{background:#F7F7F7;font-weight:70
   @page{size:A4;margin:12mm}
 }
 </style>
+
 
 
 
@@ -2228,7 +2225,7 @@ const docStatusPill=s=>({Paid:'ok','Partially Paid':'low',Unpaid:'bad',Credit:'i
 const docHead=(d,title)=>`
   <div class="dh">
     <div class="dh-l">
-      <div class="dh-mark">F&amp;C</div>
+      <div class="dh-mark"><img src="logo.png" alt="Farooq &amp; Co Traders logo"></div>
       <div>
         <div class="dh-name">${BIZ.name}</div>
         <div class="dh-meta">${[BIZ.addr,BIZ.phone&&'Phone: '+BIZ.phone,BIZ.wa&&'WhatsApp: '+BIZ.wa,
