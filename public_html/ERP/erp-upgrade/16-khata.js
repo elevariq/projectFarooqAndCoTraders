@@ -365,7 +365,7 @@ global.PAGES.khata = function (customerId) {
         '</div>' +
         '<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">' +
           '<button class="btn pri" data-khpay="' + c.id + '">' + I('wallet') + 'Receive payment</button>' +
-          '<button class="btn" data-khrefund="' + c.id + '">' + I('wallet') + 'Pay this shop</button>' +
+          '<button class="btn pri" data-khrefund="' + c.id + '">' + I('wallet') + 'Pay this shop</button>' +
           '<button class="btn" data-khadjust="' + c.id + '">' + I('edit') + 'Adjustment</button>' +
           '<button class="btn" data-fcnew="sale">' + I('plus') + 'New invoice</button>' +
         '</div>' +

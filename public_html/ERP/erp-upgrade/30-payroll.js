@@ -287,12 +287,21 @@
       var emps = Employees.active();
       if (!emps.length) return '<div class="banner warn">' + I('alert') +
         '<div><b>No employees on file</b><p>Add an employee first.</p></div></div>';
+      /* an archived employee can still be pre-filled here (e.g. a final
+         settlement) — they must stay visible in the dropdown, or the panel
+         would silently substitute a different employee with no warning,
+         which is exactly the "wrong person's salary paid" mistake this
+         whole feature exists to avoid on the customer/supplier side too */
+      var preEmpRec = PAYSAL_FOR ? Employees.byId(PAYSAL_FOR) : null;
+      if (preEmpRec && !emps.some(function (e) { return e.id === preEmpRec.id; })) {
+        emps = emps.concat([preEmpRec]);
+      }
       var pre = (PAYSAL_FOR && emps.some(function (e) { return e.id === PAYSAL_FOR; })) ? PAYSAL_FOR : emps[0].id;
       var emp = Employees.byId(pre);
       return '<label class="f"><span>Employee</span><select data-f="emp" id="fcSalEmp">' +
           emps.map(function (e) {
             return '<option value="' + e.id + '"' + (e.id === pre ? ' selected' : '') + '>' +
-              esc(e.name) + (e.role ? ' — ' + esc(e.role) : '') + '</option>';
+              esc(e.name) + (e.role ? ' — ' + esc(e.role) : '') + (e.active === false ? ' (archived)' : '') + '</option>';
           }).join('') + '</select></label>' +
         '<div class="banner info" id="fcSalRate">' + I('wallet') + '<div><p>Monthly salary: <b>' +
           M.fmt(emp.monthlySalaryP || 0) + '</b></p></div></div>' +

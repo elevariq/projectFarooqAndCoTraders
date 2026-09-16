@@ -33,6 +33,19 @@ var CSS = `
 .fcb-in,.fcb-mini,.fcb-search input,.fcb-fallback select{font-size:16px}
 .tw{-webkit-overflow-scrolling:touch}
 
+/* Hidden unconditionally by default — the version of this rule that only
+   hid it on desktop used to live inside the @media block below, so it
+   simply never fired outside that width and the bar could render as a
+   plain unstyled block at the end of the page. Found 2026-09-16 from a
+   client screenshot: on a real phone the bar WAS being fixed to the
+   bottom (so the media query was matching), but the desktop sidebar rail
+   was never being hidden alongside it and sat on top of it, cutting off
+   the first one or two tabs. Both fixed here, defensively, regardless of
+   the exact reason the base app's own 900px rail-hiding rule wasn't
+   enough on its own. */
+.fc-tabbar{display:none}
+body.fc-mobile:not(.fc-hidechrome) .fc-tabbar{display:grid}
+
 @media (max-width:760px){
   body.fc-mobile{--fc-on:1}
 
@@ -40,8 +53,17 @@ var CSS = `
   body.fc-mobile .page{padding:12px 12px calc(var(--fc-tab) + var(--fc-safe) + 12px)}
   body.fc-mobile.fc-builder .page{padding-bottom:calc(var(--fc-tab) + var(--fc-safe) + 132px)}
 
+  /* the desktop rail must stay off-screen unless the drawer is explicitly
+     open — the base app already does this at max-width:900px, but that
+     rule was losing to the sidebar's own collapsed/"mini" state in
+     practice, so it's reasserted here with !important, scoped to mobile */
+  body.fc-mobile:not(.drawer) .rail{transform:translateX(-100%) !important}
+  body.fc-mobile.drawer .rail{transform:none !important;width:250px !important;
+    flex-basis:250px !important;z-index:70}
+  body.fc-mobile .main{margin-left:0 !important}
+
   /* ── bottom navigation ── */
-  .fc-tabbar{position:fixed;left:0;right:0;bottom:0;z-index:80;display:grid;
+  .fc-tabbar{position:fixed;left:0;right:0;bottom:0;z-index:80;
     grid-auto-flow:column;grid-auto-columns:1fr;background:var(--surface);
     border-top:1px solid var(--line);padding-bottom:var(--fc-safe);
     box-shadow:0 -6px 20px rgba(18,17,26,.07)}

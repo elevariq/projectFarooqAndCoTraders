@@ -164,6 +164,24 @@ async function main() {
   check('PS3 switching employee refreshes the pre-filled amount to the new one\'s rate',
     Number($('#fcSalAmt').value) === 30000);
 
+  /* an edge case found on review: "Pay salary" clicked from an archived
+     employee's row must not silently substitute a different employee —
+     that's exactly the "paid the wrong person" mistake this panel exists
+     to prevent on the customer/supplier side too */
+  const cbPs = $('#panel .x') || $('[data-close]') || $('#scrim'); if (cbPs) click(cbPs);
+  await sleep(80);
+  await ERP.Employees.archive(newEmp.id, true);
+  click($('[data-prpay="' + newEmp.id + '"]')); await sleep(120);
+  check('PS3b an archived employee stays pre-selected, not silently swapped for another',
+    $('#fcSalEmp').value === newEmp.id, $('#fcSalEmp').value + ' vs ' + newEmp.id);
+  check('PS3c they are marked archived in the dropdown so it\'s not mistaken for an active one',
+    /archived/i.test($('#fcSalEmp option:checked').textContent));
+  const cbPs2 = $('#panel .x') || $('[data-close]') || $('#scrim'); if (cbPs2) click(cbPs2);
+  await sleep(80);
+  await ERP.Employees.archive(newEmp.id, false);
+
+  w.go('payroll'); await sleep(100);
+  click($('[data-prpay="' + emp.id + '"]')); await sleep(120);
   type($('[data-f="period"]'), 'October advance');
   click($('[data-save="1"]')); await sleep(250);
   check('PS4 saving records a second payment for the first employee',
