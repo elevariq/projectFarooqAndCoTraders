@@ -29,7 +29,7 @@ APP_FILES=(index.html farooq-co-erp.html farooq-erp-data.js)
 
 rssh() { ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_HOST" "$@"; }
 rscp() { scp -P "$SSH_PORT" -o BatchMode=yes "$@"; }
-code() { curl -s -m 60 -o /dev/null -w '%{http_code}' "$1"; }
+code() { curl -s -I -m 90 -o /dev/null -w '%{http_code}' "$1"; }   # HEAD: status only, never downloads the 3 MB body
 die()  { echo "ERROR: $*" >&2; exit 1; }
 
 show_urls() {
@@ -87,12 +87,16 @@ cmd_migrate() {
   for f in "${APP_FILES[@]}"; do
     url="/$f"
     want="$(rssh "md5sum '$REMOTE_ERP/_app/$f' | cut -d' ' -f1")"
-    got="$(curl -s -m 120 "$SITE$url?verify=$RANDOM" | md5sum | cut -d' ' -f1)"
+    got="$(curl -s -m 300 "$SITE$url?verify=$RANDOM" | md5sum | cut -d' ' -f1)"
     if [ "$want" = "$got" ]; then echo "  OK    $url"; else echo "  FAIL  $url (bytes differ)"; bad=1; fi
   done
   want="$(rssh "md5sum '$REMOTE_ERP/_app/index.html' | cut -d' ' -f1")"
-  got="$(curl -s -m 120 "$SITE/?verify=$RANDOM" | md5sum | cut -d' ' -f1)"
+  got="$(curl -s -m 300 "$SITE/?verify=$RANDOM" | md5sum | cut -d' ' -f1)"
   if [ "$want" = "$got" ]; then echo "  OK    /"; else echo "  FAIL  / (bytes differ)"; bad=1; fi
+  # informational: does the gate's output still get compressed on the wire (static files were)?
+  local wire; wire="$(curl -s -m 300 -H 'Accept-Encoding: gzip' -o /dev/null -w '%{size_download}' "$SITE/?sz=$RANDOM")"
+  if [ "${wire:-0}" -gt 0 ] && [ "$wire" -lt 1500000 ]; then echo "  OK    / travels compressed (${wire} bytes on the wire)"
+  else echo "  WARN  / is ${wire} bytes on the wire — not compressed. Works, but slow on mobile data; tell Claude to add gzip to api/gate.php."; fi
   [ "$(code "$SITE/_app/index.html")" = "403" ] && echo "  OK    /_app/index.html is 403" || { echo "  FAIL  /_app/index.html is not 403"; bad=1; }
   [ "$(code "$SITE/api/auth/me.php")" = "401" ] && echo "  OK    /api/auth/me.php still answers 401 (API healthy)" || { echo "  FAIL  me.php not 401"; bad=1; }
 

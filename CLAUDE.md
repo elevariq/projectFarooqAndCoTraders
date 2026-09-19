@@ -488,7 +488,7 @@ are done and live:
     Checklist: `docs/OPERATIONS.md` → "Phase 3 rollout (login gate)".
   - **Tests**: `test-gate.mjs` (48 checks — the real PHP under `php -S` against SQLite: signed-in/out,
     session expiry/idle/deactivation, fail-closed, kill-switch, `If-None-Match` bypass; mutation-
-    verified) and 23 new checks in `test-auth-client.mjs` (section H/I). It skips itself (exit 0) if
+    verified) and 27 new checks in `test-auth-client.mjs` (section H/I). It skips itself (exit 0) if
     there is no `php` on the machine; CI has PHP. **Not covered by any test**: the `.htaccess`
     rewrites under real Apache/LiteSpeed and the Hostinger CDN — `gate-rollout.sh migrate` and the
     checklist verify those live.
