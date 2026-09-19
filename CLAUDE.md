@@ -458,8 +458,19 @@ are done and live:
   the browser — only the ticket's own claimed expiry is enforced; documented in the module header
   as the same category of limit as `22-users.js`'s own PIN comment) and a 15-minute idle lock
   (re-verifies against the server if online, or a cached PBKDF2 password verifier if offline).
-- **Phase 3 — the login gate: INSTALLED on the live server, DORMANT (2026-09-20). `enforce_login` is
-  NOT set, so nobody is required to sign in yet.** Live state, verified in a real Chrome session:
+- **Phase 3 — the login gate: ENFORCING on the live server since 2026-09-20 (`enforce_login => true`
+  in the server's `private/erp-config.php`, turned on by `scripts/gate-rollout.sh enforce-on`).
+  Sign-in is MANDATORY.** Verified right after, from a real Chrome session: a signed-in session
+  loads the app (Auth mode enforce, heartbeat running, Sign out shown, user-switch chip disabled);
+  a request with NO cookie — repeated, with cache-busting, and immediately after a signed-in load —
+  gets `401` + the sign-in page (4,419 bytes) for `/`, `/index.html`, `/farooq-co-erp.html`, `401 "Sign in
+  required."` for `/farooq-erp-data.js`, `403` for `/_app/…`, and none of the app or its data, so the
+  CDN is not sharing signed-in copies. **Not yet tested by anyone:** a fresh signed-OUT sign-in through
+  the sign-in page with a real password (the tester's browser was already signed in) — do it once in a
+  private window. **Only two server accounts exist (`owner`, and a `test` Manager created 2026-09-19/20);
+  everyone else who used the ERP is locked out until the owner adds them under Admin → Company
+  accounts.** Emergency exit: `scripts/gate-rollout.sh enforce-off`. Earlier state, kept for history —
+  it was DORMANT until then. Verified in a real Chrome session while dormant:
   the app + its master data are served through `api/gate.php` from `ERP/_app/` (the root static
   copies are removed — `finalize` done), byte-identical to the local build (SHA-256 checked in the
   browser), brotli-compressed, ERP boots, `/_app/` is 403, `me.php` is 401, and the new client
