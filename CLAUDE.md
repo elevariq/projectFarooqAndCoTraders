@@ -458,8 +458,17 @@ are done and live:
   the browser — only the ticket's own claimed expiry is enforced; documented in the module header
   as the same category of limit as `22-users.js`'s own PIN comment) and a 15-minute idle lock
   (re-verifies against the server if online, or a cached PBKDF2 password verifier if offline).
-- **Phase 3 — the login gate (BUILT and tested 2026-09-20; install ATTEMPTED and ROLLED BACK the
-  same day; NOT installed, NOT enabled)**. **Incident, 2026-09-20 ~00:45 PKT:** `gate-rollout.sh
+- **Phase 3 — the login gate: INSTALLED on the live server, DORMANT (2026-09-20). `enforce_login` is
+  NOT set, so nobody is required to sign in yet.** Live state, verified in a real Chrome session:
+  the app + its master data are served through `api/gate.php` from `ERP/_app/` (the root static
+  copies are removed — `finalize` done), byte-identical to the local build (SHA-256 checked in the
+  browser), brotli-compressed, ERP boots, `/_app/` is 403, `me.php` is 401, and the new client
+  (`31-auth.js` with heartbeat/sign-out) is deployed but inert while the server isn't enforcing.
+  Backups: `/home/u943531942/backups/gate-20260920005913/` (second, successful migrate) and
+  `.../gate-20260920004319/` (first attempt, rolled back). **Remaining: `scripts/gate-rollout.sh
+  enforce-on`** — see "Before `enforce-on`" below (staff accounts) — then a real-browser sign-in
+  test. Emergency exit: `enforce-off` or set `'enforce_login' => false`.
+  History — first attempt, **Incident, 2026-09-20 ~00:45 PKT:** `gate-rollout.sh
   migrate` passed all of its checks and installed the gate dormant, but a follow-up probe showed
   every request that sends `Accept-Encoding: gzip` (i.e. every real browser) got a **403 from the
   Hostinger CDN edge** (`Server: hcdn`, a gzip'd error page) while bare `curl` (no Accept-Encoding)

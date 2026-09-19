@@ -34,6 +34,17 @@ REMOTE_ERP="/home/u943531942/domains/farooqandcotraders.online/public_html/ERP"
 
 cd "$REPO_ROOT"
 
+# One deploy at a time. Two runs share erp-upgrade/dist and the same *.uploading names on the server;
+# on 2026-09-20 two overlapping runs made one fail at the final rename ("cannot stat ...uploading").
+# The lock lives in .git/ so it never shows up as an uncommitted change.
+LOCK="$REPO_ROOT/.git/deploy-erp.lock"
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "Refusing to deploy: another deploy is already running (lock: $LOCK)." >&2
+  echo "If you are sure none is, remove the folder and retry." >&2
+  exit 1
+fi
+trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
+
 echo "==> Checking for uncommitted changes"
 if [ -n "$(git status --porcelain)" ]; then
   echo "Refusing to deploy: you have uncommitted changes. Commit (and push) first." >&2
