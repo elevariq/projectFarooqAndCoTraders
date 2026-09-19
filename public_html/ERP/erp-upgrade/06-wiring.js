@@ -353,6 +353,74 @@ PANELS.refund = {
   }
 };
 
+/* Change shop — the invoice was made out to the wrong shop. Everything else on
+   it stays; the account entry (and any money taken with it) moves. The rules
+   for what may move live in Invoices.reassignCheck / changeCustomer. */
+var CHANGESHOP_FOR = null, CHANGESHOP_AREA = '';
+function changeShopCandidates(inv) {
+  return customersInAreaFor(CHANGESHOP_AREA).filter(function (c) { return c.id !== inv.customerId; });
+}
+/* deliberately starts on a blank choice: on a money screen the shop must be
+   picked, never silently defaulted to whichever one sorts first */
+function changeShopOptionsHtml(custs) {
+  if (!custs.length) return '<option value="" disabled selected>No other shops in this area</option>';
+  return '<option value="" selected>— choose the correct shop —</option>' + custs.map(function (c) {
+    return '<option value="' + esc(c.id) + '">' + esc(c.sh) + (c.legacyCode ? ' · ' + esc(c.legacyCode) : '') + '</option>';
+  }).join('');
+}
+/* what the move does to the chosen shop's balance — the invoice total less
+   whatever was received with it, since that receipt moves too */
+function changeShopBalanceHtml(inv, plan, newId) {
+  var c = newId ? global.custBy(newId) : null;
+  if (!c) return I('wallet') + '<div><p>Choose a shop to see how its balance changes.</p></div>';
+  var net = inv.grandTotal - plan.payments.reduce(function (a, p) { return a + p.amount; }, 0);
+  var now = ERP.Ledger.customerBalance(c.id);
+  return I('wallet') + '<div><p><b>' + esc(c.sh) + '</b> balance: ' + M.fmt(now) + ' → <b>' + M.fmt(now + net) + '</b></p></div>';
+}
+PANELS.changeshop = {
+  t: 'Change shop', s: 'Move this invoice to a different shop — nothing else on it changes',
+  cta: 'Move invoice',
+  f: function () {
+    var inv = ERP.Invoices.byId(CHANGESHOP_FOR);
+    if (!inv) return '<div class="banner warn">' + I('alert') + '<div><b>Invoice not found</b></div></div>';
+    if (ERP.Can && !ERP.Can('TRANSACTION_CORRECT'))
+      return '<div class="banner warn">' + I('lock') + '<div><b>Not available for the ' + esc(ERP.RBAC.label()) +
+        ' role</b><p>Moving an invoice between shops changes two accounts. Ask the owner, a manager or the accountant.</p></div></div>';
+    var plan = ERP.Invoices.reassignCheck(inv.id);
+    if (plan.errs.length)
+      return '<div class="banner warn">' + I('alert') + '<div><b>This invoice cannot be moved</b>' +
+        plan.errs.map(function (m) { return '<p>' + esc(m) + '</p>'; }).join('') + '</div></div>';
+    CHANGESHOP_AREA = '';
+    var net = inv.grandTotal - plan.payments.reduce(function (a, p) { return a + p.amount; }, 0);
+    var oldBal = ERP.Ledger.customerBalance(inv.customerId);
+    return '<div class="banner info">' + I('doc') + '<div><b>' + esc(inv.invoiceNumber || 'Draft') + ' · ' + M.fmt(inv.grandTotal) +
+        '</b><p>Now billed to <b>' + esc(inv.shopNameSnapshot || '—') + '</b>. ' + esc(inv.shopNameSnapshot || 'That shop') +
+        ' balance: ' + M.fmt(oldBal) + ' → <b>' + M.fmt(oldBal - net) + '</b>.</p>' +
+        (plan.payments.length ? '<p>Moves with it: ' + plan.payments.map(function (p) {
+          return esc(p.receiptNumber) + ' (' + M.fmt(p.amount) + ')'; }).join(', ') + '.</p>' : '') +
+        '<p class="hint">Lines, amounts, stock, the invoice number and the date stay exactly as they are.</p></div></div>' +
+      '<label class="f"><span>Area</span><select data-f="area" id="fcCsArea">' + areaSelectOptionsFor('') + '</select></label>' +
+      '<label class="f"><span>Correct shop</span><select data-f="cust" id="fcCsShop">' +
+        changeShopOptionsHtml(changeShopCandidates(inv)) + '</select></label>' +
+      '<div class="banner info" id="fcCsBal">' + changeShopBalanceHtml(inv, plan, '') + '</div>' +
+      '<label class="f"><span>Reason</span><input data-f="reason" maxlength="200" ' +
+        'placeholder="e.g. picked the wrong shop — recorded in the audit log"></label>';
+  },
+  save: function (v) {
+    var pre = ERP.Invoices.reassignCheck(CHANGESHOP_FOR);
+    if (pre.errs.length) return esc(pre.errs[0]);
+    var chk = ERP.Invoices.reassignCheck(CHANGESHOP_FOR, v.cust || '');
+    if (chk.errs.length) return esc(chk.errs[0]);
+    ERP.Invoices.changeCustomer(CHANGESHOP_FOR, v.cust, { reason: v.reason }).then(function (inv) {
+      global.paint();
+      say(esc(inv.invoiceNumber) + ' now belongs to ' + esc(inv.shopNameSnapshot) + '.');
+    }).catch(function (e) {
+      say(e && e.validation ? e.validation[0] : 'The invoice could not be moved. Nothing was changed.');
+    });
+    return { msg: 'Moving invoice…' };
+  }
+};
+
 PANELS.creditnote = {
   t: 'Customer return', s: 'Bags coming back from a shop — as many products as needed',
   cta: 'Post return & credit note',
@@ -658,6 +726,7 @@ D.addEventListener('click', function (e) {
     else if (act === 'wa') ERP.Viewer.whatsapp();
     else if (act === 'sms') ERP.Viewer.sms();
     else if (act === 'edit') { var m = ERP.Viewer.current; ERP.Viewer.close(); editInvoice(m.entityId); }
+    else if (act === 'changeshop') { var m6 = ERP.Viewer.current; ERP.Viewer.close(); changeInvoiceShop(m6.entityId); }
     else if (act === 'dup') { var m2 = ERP.Viewer.current; ERP.Viewer.close(); duplicateInvoice(m2.entityId); }
     else if (act === 'pay') { var m3 = ERP.Viewer.current; ERP.Viewer.close();
       PAY_FOR = (ERP.Invoices.byId(m3.entityId) || {}).customerId; global.openPanel('payment'); }
@@ -735,6 +804,7 @@ D.addEventListener('click', function (e) {
     if (what === 'view') ERP.Viewer.open(ERP.DocModel.invoice(id));
     else if (what === 'word') { ERP.Viewer.current = ERP.DocModel.invoice(id); ERP.Viewer.word(); }
     else if (what === 'edit') editInvoice(id);
+    else if (what === 'changeshop') changeInvoiceShop(id);
     else if (what === 'dup') duplicateInvoice(id);
     else if (what === 'pay') { PAY_FOR = (ERP.Invoices.byId(id) || {}).customerId; global.openPanel('payment'); }
     else if (what === 'return') { RETURN_FOR = id; global.openPanel('creditnote'); }
@@ -863,6 +933,23 @@ D.addEventListener('change', function (e) {
     }
     return;
   }
+  if (el.id === 'fcCsArea' || el.id === 'fcCsShop') {
+    var csInv = ERP.Invoices.byId(CHANGESHOP_FOR);
+    if (!csInv) return;
+    if (el.id === 'fcCsArea') {
+      CHANGESHOP_AREA = el.value;
+      var csShop = D.getElementById('fcCsShop');
+      if (csShop) {
+        var csOpts = changeShopCandidates(csInv);
+        csShop.disabled = !csOpts.length;
+        csShop.innerHTML = changeShopOptionsHtml(csOpts);
+      }
+    }
+    var csBox = D.getElementById('fcCsBal');
+    if (csBox) csBox.innerHTML = changeShopBalanceHtml(csInv, ERP.Invoices.reassignCheck(csInv.id),
+      (D.getElementById('fcCsShop') || {}).value);
+    return;
+  }
   if (el.id === 'fcPayMode') { renderAllocList(); return; }
   if (el.id === 'fcRetInv') {
     var host = D.getElementById('fcRetLines');
@@ -970,6 +1057,14 @@ function editInvoice(id) {
   d.id = inv.id; d.clientOpId = inv.clientOpId; d.revision = inv.revision || 0; d.existing = true;
   B.start('sale', d);
 }
+function changeInvoiceShop(id) {
+  var inv = ERP.Invoices.byId(id);
+  if (!inv) { say('Invoice not found.'); return; }
+  if (inv.status === 'CANCELLED') { say('A cancelled invoice cannot be moved to another shop.'); return; }
+  if (inv.status === 'DRAFT') { say('This invoice is still a draft — edit it and pick the other shop.'); return; }
+  CHANGESHOP_FOR = id;
+  global.openPanel('changeshop');
+}
 function duplicateInvoice(id) {
   var d = ERP.Invoices.duplicate(id);
   if (!d) { say('Invoice not found.'); return; }
@@ -985,7 +1080,7 @@ function cancelInvoice(id) {
   }).catch(function () { say('The invoice could not be cancelled.'); });
 }
 ERP.actions = { editInvoice: editInvoice, duplicateInvoice: duplicateInvoice, cancelInvoice: cancelInvoice,
-                backup: doBackup };
+                changeInvoiceShop: changeInvoiceShop, backup: doBackup };
 
 /* ══════════════════════════════════════════════════════════════════════════
    PATCHES — point the existing screens at the new database

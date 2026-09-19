@@ -60,6 +60,11 @@ function todayISO() {
 }
 global.FC_TODAY = todayISO;
 function currentUser() { return global.CURRENT_USER || 'Owner'; }
+/* the calendar day before an ISO date, or null if it isn't a real date */
+function dayBefore(iso) {
+  var t = Date.parse(String(iso || '') + 'T00:00:00Z');
+  return isNaN(t) ? null : new Date(t - 86400000).toISOString().slice(0, 10);
+}
 function ikey(pid, wid) { return pid + '|' + wid; }
 
 /* ── a serialised queue so fire-and-forget writes from the older, purely
@@ -385,17 +390,13 @@ var Invoices = ERP.Invoices = {
     };
   },
 
-  buildRecord: function (draft, totals, number, status) {
-    var c = global.custBy(draft.customerId) || {};
+  /* The shop's details as they are stamped onto an invoice. One place builds
+     them, so a new invoice and an invoice moved to another shop
+     (Invoices.changeCustomer) can never disagree about what a snapshot holds. */
+  customerFields: function (c) {
+    c = c || {};
     var region = global.regionOf && c.region ? global.regionOf(c.region) : null;
     return {
-      id: draft.id, invoiceNumber: number,
-      clientOpId: draft.clientOpId || draft.id,      // idempotency for offline sync (§30)
-      invoiceType: draft.invoiceType || 'SALE',
-      saleOrderId: draft.saleOrderId || null,
-      orderNumber: draft.orderNumber || '',
-      dispatchNumber: draft.dispatchNumber || '',
-      customerId: draft.customerId,
       customerCodeSnapshot: c.legacyCode || c.id || '',
       customerNameSnapshot: c.ow || c.sh || '',
       shopNameSnapshot: c.sh || '',
@@ -403,7 +404,21 @@ var Invoices = ERP.Invoices = {
       mobileSnapshot: c.ph || '', whatsappSnapshot: c.wa || '',
       addressSnapshot: c.addr || '',
       regionId: c.region || '', regionSnapshot: region ? (region.ur + ' — ' + region.en) : '',
-      marketSnapshot: c.area || c.route || '',
+      marketSnapshot: c.area || c.route || ''
+    };
+  },
+
+  buildRecord: function (draft, totals, number, status) {
+    var c = global.custBy(draft.customerId) || {};
+    return Object.assign({
+      id: draft.id, invoiceNumber: number,
+      clientOpId: draft.clientOpId || draft.id,      // idempotency for offline sync (§30)
+      invoiceType: draft.invoiceType || 'SALE',
+      saleOrderId: draft.saleOrderId || null,
+      orderNumber: draft.orderNumber || '',
+      dispatchNumber: draft.dispatchNumber || '',
+      customerId: draft.customerId
+    }, Invoices.customerFields(c), {
       warehouseId: draft.warehouseId,
       warehouseSnapshot: global.whName ? global.whName(draft.warehouseId) : '',
       salesperson: draft.salesperson || currentUser(),
@@ -427,7 +442,7 @@ var Invoices = ERP.Invoices = {
       confirmedAt: status !== 'DRAFT' ? nowISO() : null,
       cancelledAt: null, cancelReason: '',
       stockApplied: false
-    };
+    });
   },
 
   /* ── Save. One transaction covers: number, invoice, items, stock,
@@ -437,6 +452,16 @@ var Invoices = ERP.Invoices = {
     opts = opts || {};
     var asDraft = !!opts.draft;
     var errs = Validate.invoice(draft, { skipStock: asDraft, allowZeroRate: asDraft, allowOverpay: opts.allowOverpay });
+    /* An ordinary edit only rewrites the invoice's own `customerId`; the
+       receipts, allocations and returns that belong to the old shop would stay
+       behind and the two shops' accounts would no longer add up. Moving a
+       posted invoice to another shop goes through changeCustomer instead. */
+    var prior = draft.id ? Invoices.byId(draft.id) : null;
+    if (prior && prior.status !== 'DRAFT' && prior.customerId && draft.customerId &&
+        draft.customerId !== prior.customerId) {
+      errs.push('The shop on a posted invoice cannot be changed while editing it. ' +
+                'Use "Change shop" on the invoice, which moves its payments with it.');
+    }
     if (errs.length) return Promise.reject({ validation: errs });
 
     var totals = Calc.invoice(draft);
@@ -581,6 +606,154 @@ var Invoices = ERP.Invoices = {
       });
       return inv;
     }).then(function (r) { Mirror.refresh(); return r; });
+  },
+
+  /* ── Move an invoice to a different shop — the shop and nothing else. ──
+     A shop's account is derived from its invoices, so "the wrong shop was
+     picked" is not a label fix: the invoice total, and any money taken with
+     it, has to leave one shop's account and land on the other's. Lines,
+     amounts, number, date and stock are deliberately untouched — no stock is
+     re-validated or re-deducted, no new invoice number is spent.
+
+     What follows the invoice: the receipts that belong wholly to it, and the
+     dispatch notes written against it (both carry their own copy of the shop).
+     What stops it, because the money cannot be split honestly: a receipt that
+     was also applied to other invoices or left partly on account, and any
+     customer return (its credit note or cash refund is a fact about the old
+     shop). reassignCheck reports all of that without writing anything, so the
+     screen can warn before the click and the service can enforce it. */
+  reassignCheck: function (id, newCustomerId) {
+    var errs = [], inv = Invoices.byId(id);
+    if (!inv) return { errs: ['Invoice not found.'], inv: null, to: null, payments: [], dispatches: [] };
+    var to = newCustomerId && global.custBy ? global.custBy(newCustomerId) : null;
+    if (inv.status === 'CANCELLED') errs.push('A cancelled invoice cannot be moved to another shop.');
+    if (newCustomerId !== undefined) {
+      if (!to) errs.push('Choose the shop this invoice belongs to.');
+      else if (to.id === inv.customerId) errs.push('That is already the shop on this invoice.');
+    }
+
+    var rets = S.custReturns.filter(function (r) { return r.invoiceId === inv.id && r.status !== 'CANCELLED'; });
+    if (rets.length) {
+      errs.push('A return has been posted against this invoice (' +
+        rets.map(function (r) { return r.returnNumber; }).join(', ') +
+        '). Its credit note and any refund belong to ' + (inv.shopNameSnapshot || 'the current shop') +
+        ', so the invoice cannot be moved. Cancel the invoice and make a new one for the right shop instead.');
+    }
+
+    var payments = [], seen = {};
+    S.allocations.forEach(function (a) {
+      if (a.invoiceId !== inv.id || seen[a.paymentId]) return;
+      seen[a.paymentId] = true;
+      var p = Payments.byId(a.paymentId);
+      if (!p || p.status === 'REVERSED') return;
+      var all = S.allocations.filter(function (x) { return x.paymentId === p.id; });
+      var wholly = all.every(function (x) { return x.invoiceId === inv.id; }) &&
+                   all.reduce(function (s, x) { return s + x.amount; }, 0) === p.amount;
+      if (wholly) payments.push(p);
+      else errs.push('Receipt ' + p.receiptNumber + ' (' + M.fmt(p.amount) + ') was also applied to other invoices ' +
+        'or left partly on account, so it belongs to the shop, not to this one invoice. Reverse that receipt first, ' +
+        'move the invoice, then record the money again against the right shop.');
+    });
+
+    var dispatches = (S.stockDocs || []).filter(function (d) { return d.invoiceId === inv.id; });
+    return { errs: errs, inv: inv, to: to, payments: payments, dispatches: dispatches };
+  },
+
+  changeCustomer: function (id, newCustomerId, opts) {
+    opts = opts || {};
+    var plan = Invoices.reassignCheck(id, newCustomerId || '');
+    if (plan.errs.length) return Promise.reject({ validation: plan.errs });
+    var inv = plan.inv, to = plan.to;
+    var oldShop = inv.shopNameSnapshot || '', oldId = inv.customerId;
+
+    /* the new shop's balance just before this invoice's date — what it owed
+       before this sale, which is what "previous balance" on the paper means.
+       Read before anything moves, while the invoice is still on the old shop. */
+    function balanceBefore(iso) {
+      var d = dayBefore(iso);
+      return d ? Ledger.customer(to.id, null, d).closing : Ledger.customerBalance(to.id);
+    }
+    var prevBal = balanceBefore(inv.invoiceDate);
+
+    var fields = Invoices.customerFields(to);
+    var rec = Object.assign({}, inv, fields, { customerId: to.id, previousBalance: prevBal, updatedAt: nowISO() });
+    /* A receipt carries the balance it was taken against, and the printed
+       receipt shows it beside the shop's name — so it is recomputed for the new
+       shop, the way it was worked out originally: the shop's balance on the
+       day (this invoice included, earlier moved receipts not yet). */
+    var movedSoFar = 0;
+    var payRecs = plan.payments.slice().sort(function (a, b) {
+      return a.paymentDate !== b.paymentDate ? (a.paymentDate < b.paymentDate ? -1 : 1)
+           : ((a.createdAt || '') < (b.createdAt || '') ? -1 : 1);
+    }).map(function (p) {
+      var before = balanceBefore(p.paymentDate) - movedSoFar +
+                   (inv.status !== 'DRAFT' && inv.invoiceDate <= p.paymentDate ? inv.grandTotal : 0);
+      movedSoFar += p.amount;
+      return Object.assign({}, p, {
+        partyId: to.id, partyNameSnapshot: to.sh || '', partyOwnerSnapshot: to.ow || '',
+        regionSnapshot: fields.regionSnapshot,
+        balanceBefore: before, balanceAfter: before - p.amount
+      });
+    });
+    var docRecs = plan.dispatches.map(function (d) {
+      return Object.assign({}, d, { customerId: to.id, customerSnapshot: to.sh || '',
+                                    regionSnapshot: fields.regionSnapshot });
+    });
+
+    /* A hand-typed shop name, address or "previous balance" on the printed
+       sheet would keep showing the old shop's details over the new snapshot.
+       Those overrides are dropped — kept in the sheet's own history so the
+       earlier wording can still be stepped back to. */
+    var edit = ERP.Edits && ERP.Edits.get ? ERP.Edits.get(inv.id) : null;
+    var editRec = null;
+    if (edit) {
+      var stale = ['shop', 'owner', 'code', 'contact', 'address', 'region', 'previousBalance']
+        .filter(function (k) { return edit.fields && edit.fields[k] !== undefined; });
+      if (stale.length) {
+        editRec = JSON.parse(JSON.stringify(edit));
+        editRec.revisions = editRec.revisions || [];
+        editRec.revisions.unshift({ at: nowISO(), by: currentUser(), note: 'Before the shop was changed',
+                                    state: ERP.Edits.snapshot(edit) });
+        if (editRec.revisions.length > 15) editRec.revisions.length = 15;
+        stale.forEach(function (k) { delete editRec.fields[k]; });
+        editRec.lastSaved = ERP.Edits.snapshot(editRec);
+        editRec.updatedAt = nowISO();
+      }
+    }
+
+    return FDB.tx(['invoices', 'payments', 'stockDocs', 'documentEdits', 'auditLog'], function (api) {
+      api.put('invoices', rec);
+      payRecs.forEach(function (p) { api.put('payments', p); });
+      docRecs.forEach(function (d) { api.put('stockDocs', d); });
+      if (editRec) api.put('documentEdits', editRec);
+      Audit.write(api, {
+        action: 'Invoice moved to another shop', entity: 'Invoice', entityId: inv.id,
+        ref: inv.invoiceNumber || 'draft',
+        oldValues: { customerId: oldId, shop: oldShop },
+        newValues: {
+          customerId: to.id, shop: rec.shopNameSnapshot,
+          receiptsMoved: payRecs.map(function (p) { return p.receiptNumber; }),
+          dispatchNotesMoved: docRecs.map(function (d) { return d.docNumber; })
+        },
+        reason: opts.reason || ''
+      });
+      return rec;
+    }).then(function () {
+      /* the working set only changes once the database has accepted it all */
+      var ix = S.invoices.findIndex(function (i) { return i.id === rec.id; });
+      if (ix > -1) S.invoices[ix] = rec;
+      payRecs.forEach(function (p) {
+        var k = S.payments.findIndex(function (x) { return x.id === p.id; });
+        if (k > -1) S.payments[k] = p;
+      });
+      docRecs.forEach(function (d) {
+        var k = (S.stockDocs || []).findIndex(function (x) { return x.id === d.id; });
+        if (k > -1) S.stockDocs[k] = d;
+      });
+      if (editRec) Object.assign(edit, editRec);
+      Mirror.refresh();
+      return rec;
+    });
   },
 
   /* A duplicate is a fresh draft: no number, no date, no payments (§36). */

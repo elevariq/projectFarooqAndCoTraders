@@ -567,6 +567,43 @@ a purchase edit; a zero rate is accepted on a NET job's line the same way `needR
 allows it everywhere else in the app (a deliberate free/promotional line, not a milling-specific
 gap).
 
+## Change shop on an invoice (2026-09-19)
+
+Business need: an invoice made out to the wrong shop must move to the right one — the shop and
+nothing else. A shop's khata is *derived* from invoices, so this is an account move, not a label
+fix. Previously the edit screen's Shop picker only rewrote `customerId`: receipts/allocations
+stayed with the old shop (new shop got the debit, old shop kept the credit), and the edit route
+re-validates stock against bags the invoice already took, so it failed once stock hit zero.
+
+- `ERP.Invoices.changeCustomer(id, newCustomerId, {reason})` (`02-services.js`), one transaction:
+  refreshes the invoice's shop snapshots (`Invoices.customerFields`, shared with `buildRecord`),
+  sets `previousBalance` from the **new** shop as of the day before the invoice date, moves the
+  receipts that belong *wholly* to this invoice (recomputing each one's stored `balanceBefore`/
+  `balanceAfter`, which the printed receipt shows) and any dispatch notes linked to it, drops stale
+  hand-typed shop/owner/code/contact/address/region/previousBalance overrides from the print
+  sheet (kept in its revision history), writes an audit entry. Lines, amounts, number, date and
+  stock are untouched — nothing is re-validated or re-deducted, no new number is spent.
+- `Invoices.reassignCheck(id[, newId])` reports what would block it without writing. Refused (with
+  a message naming the receipt/return): a receipt also applied to other invoices or partly left on
+  account; any customer return (its credit note/refund is a fact about the old shop); a cancelled
+  invoice. A reversed receipt does not block. Sales orders are deliberately left as they were.
+- `Invoices.save` now rejects changing the shop on a **posted** invoice (drafts are still free);
+  the edit screen locks the Region/Shop pickers for posted invoices with a hint.
+- UI: "Change shop" panel (`PANELS.changeshop`: Area → Shop starting on a blank choice, balance
+  before→after preview, optional reason), opened from the invoice list row and the document
+  viewer. Gated by the existing `TRANSACTION_CORRECT` permission (Owner/Manager/Accountant) — no
+  server-side permission change needed. Relax it in `04-documents.js`/`05-ui-builder.js` if wanted.
+- Integrity page: new `Health.allocationCheck()` warns about any receipt applied to an invoice that
+  belongs to a different shop — exactly what the old edit route could have left in live data. It
+  only detects; there is no auto-repair (reverse and re-enter the receipt, or Change shop).
+- Deliberately unchanged: stock movement notes and the source Sales Order keep the old shop name
+  (history, not accounting); moving is repeatable (a wrong move can be moved back).
+- `test-invoice-change-shop.mjs` (90 checks, mutation-tested: ten deliberate breakages each turn it red).
+- **Pre-existing bug found, NOT fixed (unrelated)**: only ONE draft invoice can ever exist — the
+  `invoices` store has a unique `invoiceNumber` index and drafts save with `invoiceNumber: ''`, so
+  saving a second draft fails with "Transaction failed". Needs its own fix (e.g. store no number
+  for drafts, or a non-unique/partial index) and a decision on existing data.
+
 ## Where to look for more detail
 
 - `docs/OPERATIONS.md` — full access inventory, exact commands used, and the deploy checklist.

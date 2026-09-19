@@ -222,20 +222,28 @@ function partyBlock() {
   });
   var c = B.draft.customerId ? global.custBy(B.draft.customerId) : null;
   var bal = c ? ERP.Ledger.customerBalance(c.id) : 0;
+  /* On a posted invoice the shop is fixed here: the receipts and account
+     entries hang off it, so it moves through "Change shop", which takes them
+     along. A draft has nothing posted yet and stays freely editable. */
+  var posted = B.mode === 'sale' && B.editingId ? ERP.Invoices.byId(B.editingId) : null;
+  var lockShop = !!(posted && posted.status !== 'DRAFT');
+  var lock = lockShop ? ' disabled' : '';
   return '<div class="f2">' +
-    '<label class="f"><span>Region</span><select data-fcb="regionFilter">' +
+    '<label class="f"><span>Region</span><select data-fcb="regionFilter"' + lock + '>' +
       '<option value="all">All regions (' + CUSTS().length + ' shops)</option>' +
       regions.map(function (r) {
         var n = CUSTS().filter(function (x) { return x.region === r.id; }).length;
         return '<option value="' + r.id + '"' + (B.regionFilter === r.id ? ' selected' : '') + '>' +
           esc(r.en) + ' — ' + esc(r.ur) + ' (' + n + ')</option>';
       }).join('') + '</select></label>' +
-    '<label class="f"><span>Shop</span><select data-fcb="customerId">' +
+    '<label class="f"><span>Shop</span><select data-fcb="customerId"' + lock + '>' +
       '<option value="">— choose a shop —</option>' +
       custs.map(function (x) {
         return '<option value="' + x.id + '"' + (B.draft.customerId === x.id ? ' selected' : '') + '>' +
           esc(x.sh) + (x.legacyCode ? ' · ' + esc(x.legacyCode) : '') + '</option>';
       }).join('') + '</select></label></div>' +
+    (lockShop ? '<p class="hint">To bill a different shop, save or leave this edit and use <b>Change shop</b> ' +
+      'on the invoice — its payments and the shop balances move with it.</p>' : '') +
     (c ? '<div class="fcb-party">' +
         '<div><i>Owner</i><b>' + esc(c.ow || '—') + '</b></div>' +
         '<div><i>Mobile</i><b>' + esc(c.ph || 'Not set') + '</b></div>' +
@@ -736,6 +744,8 @@ global.PAGES.invoices = function () {
         '<button class="btn sm" data-fcinv="view" data-id="' + i.id + '">View</button>' +
         '<button class="btn sm" data-fcinv="word" data-id="' + i.id + '">Word</button>' +
         (i.status !== 'CANCELLED' ? '<button class="btn sm" data-fcinv="edit" data-id="' + i.id + '">Edit</button>' : '') +
+        (i.status !== 'CANCELLED' && i.status !== 'DRAFT' && (!ERP.Can || ERP.Can('TRANSACTION_CORRECT'))
+          ? '<button class="btn sm" data-fcinv="changeshop" data-id="' + i.id + '">Change shop</button>' : '') +
         '<button class="btn sm" data-fcinv="dup" data-id="' + i.id + '">Duplicate</button>' +
         (i.status !== 'CANCELLED' && i.status !== 'DRAFT'
           ? '<button class="btn sm" data-fcinv="pay" data-id="' + i.id + '">Payment</button>' +

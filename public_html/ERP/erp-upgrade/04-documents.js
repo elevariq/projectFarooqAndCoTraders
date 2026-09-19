@@ -142,7 +142,10 @@ var DocModel = {
         terms: ERP.Settings.get().terms || '',
         bank: ERP.Settings.get().bankDetails || ''
       },
-      actions: { edit: true, duplicate: true, cancel: true, payment: true, ret: true, whatsapp: true, sms: true }
+      actions: { edit: true, duplicate: true, cancel: true, payment: true, ret: true, whatsapp: true, sms: true,
+                 /* a draft has no account entry to move (edit it instead); a cancelled one has none left */
+                 changeShop: inv.status !== 'DRAFT' && inv.status !== 'CANCELLED' &&
+                             (!ERP.Can || ERP.Can('TRANSACTION_CORRECT')) }
     };
   },
 
@@ -733,6 +736,7 @@ var Viewer = {
         (a.whatsapp ? btn('wa', 'WhatsApp') : '') +
         (a.sms ? btn('sms', 'Send SMS') : '') +
         (a.edit ? btn('edit', 'Edit') : '') +
+        (a.changeShop ? btn('changeshop', 'Change shop') : '') +
         (a.duplicate ? btn('dup', 'Duplicate') : '') +
         (a.payment ? btn('pay', 'Payment') : '') +
         (a.ret ? btn('return', 'Return') : '') +

@@ -615,6 +615,24 @@ var Health = ERP.Health = {
     return { checked: Math.min(300, (global.SUPPLIERS || []).length), mismatches: bad, ok: !bad.length };
   },
 
+  /* A receipt applied to an invoice has to be that same shop's money. An older
+     build let the invoice edit screen change an invoice's shop while its
+     receipts stayed behind, leaving the two shops' accounts out by the amount.
+     "Change shop" now moves them together; this finds any left from before. */
+  allocationCheck: function () {
+    var bad = [];
+    (S.allocations || []).forEach(function (a) {
+      if (!a.invoiceId) return;
+      var inv = ERP.Invoices.byId(a.invoiceId), p = ERP.Payments.byId(a.paymentId);
+      if (!inv || !p || p.status === 'REVERSED' || inv.status === 'CANCELLED') return;
+      if (p.partyId !== inv.customerId) {
+        bad.push({ invoice: inv.invoiceNumber, invoiceShop: inv.shopNameSnapshot,
+                   receipt: p.receiptNumber, receiptShop: p.partyNameSnapshot, amount: a.amount });
+      }
+    });
+    return { checked: (S.allocations || []).length, mismatches: bad, ok: !bad.length };
+  },
+
   /* the January question, asked of the system itself */
   dateLeakCheck: function () {
     var c = (global.CUSTOMERS || [])[0];
@@ -652,6 +670,7 @@ var Health = ERP.Health = {
     var sled = Health.supplierLedgerCheck();
     var leak = Health.dateLeakCheck();
     var sleak = Health.supplierDateLeakCheck();
+    var alloc = Health.allocationCheck();
     var backups = Migration.backups();
     var counts = countStores();
     counts.areas = (global.REGIONS || []).length;
@@ -671,11 +690,14 @@ var Health = ERP.Health = {
       },
       backups: backups,
       lastBackup: backups.length ? backups[0].createdAt : null,
-      inventory: inv, ledger: led, dateLeak: leak,
+      inventory: inv, ledger: led, dateLeak: leak, allocations: alloc,
       notes: Health.notes,
       warnings: []
         .concat(inv.ok ? [] : [inv.mismatches.length + ' stock rows do not match their movement history'])
         .concat(led.ok ? [] : [led.mismatches.length + ' customer balances do not add up'])
+        .concat(alloc.ok ? [] : [alloc.mismatches.length + ' receipts are applied to an invoice that belongs to a different shop (' +
+          alloc.mismatches.slice(0, 3).map(function (m) { return m.receipt + ' → ' + m.invoice; }).join(', ') +
+          (alloc.mismatches.length > 3 ? ', …' : '') + ')'])
         .concat(sled.ok ? [] : [sled.mismatches.length + ' supplier balances do not add up'])
         .concat(leak.ok ? [] : ['A dated customer statement is including transactions from after its end date'])
         .concat(sleak.ok ? [] : ['A dated supplier statement is including transactions from after its end date'])
