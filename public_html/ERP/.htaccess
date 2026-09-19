@@ -1,0 +1,26 @@
+# Farooq & Co Traders ERP — root access control
+#
+# Added 2026-09-16 (auth project, Phase 0). This file ONLY blocks specific file
+# patterns at this level (the *.md reports). The sensitive subdirectories
+# (database/, data-exports/, docs/, samples/, erp-upgrade/, app/) each carry
+# their OWN .htaccess denying all access — see those files. This file
+# deliberately does NOT contain a blanket deny, because that would also block
+# index.html / farooq-co-erp.html / farooq-erp-data.js / logo.png, which must
+# stay reachable until the login gate (Phase 3 of the auth project) is live.
+#
+# Verify after deploy + CDN cache clear:
+#   curl -I https://erp.farooqandcotraders.online/README.md            -> 403
+#   curl -I https://erp.farooqandcotraders.online/database/fresh-install-backup.json -> 403
+#   curl -I https://erp.farooqandcotraders.online/index.html           -> 200 (unchanged)
+
+<IfModule mod_authz_core.c>
+  <FilesMatch "\.(md|json|sql|prisma)$">
+    Require all denied
+  </FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+  <FilesMatch "\.(md|json|sql|prisma)$">
+    Order allow,deny
+    Deny from all
+  </FilesMatch>
+</IfModule>

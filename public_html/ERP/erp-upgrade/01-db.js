@@ -94,6 +94,15 @@ var STORES = {
      customer/supplier balance movement). ── */
   employees:             { keyPath: 'id',    idx: { name: 'name', role: 'role', active: 'active' } },
   salaryPayments:        { keyPath: 'id',    idx: { salaryNumber: ['salaryNumber', true], employeeId: 'employeeId', paymentDate: 'paymentDate' } },
+  /* ── milling jobs (toll milling): wheat issued to a mill, flour + bran
+     received back, weighed in kilograms alongside the existing bag count.
+     Two stores, same shape as every other document/line pair (stockDocs /
+     stockDocItems, purchases / purchaseItems). The financial side settles
+     into the mill's own existing supplier khata — see ERP.Ledger.supplier's
+     milling-job wrapper in 32-milling.js — so no separate ledger store is
+     needed here. ── */
+  millingJobs:           { keyPath: 'id',    idx: { jobNumber: ['jobNumber', true], millId: 'millId', jobDate: 'jobDate' } },
+  millingJobItems:       { keyPath: 'id',    idx: { jobId: 'jobId', productId: 'productId' } },
   syncQueue:             { keyPath: 'opId',  idx: { state: 'state' } },
   legacy:                { keyPath: 'k' }   /* orders, dispatch, activity, rules, users, devices … */
 };
@@ -104,8 +113,9 @@ var STORE_NAMES = Object.keys(STORES);
    Opening that database under this schema would corrupt it, so this build
    uses its own name and adopts the old one on first run instead. */
 var DB_NAME = 'farooqco_erp_ledger';
-var DB_VER  = 10;  /* … v7 price history and approvals · v8 user accounts · v9 landed cost ·
-                       v10 payroll (employees, salaryPayments) */
+var DB_VER  = 11;  /* … v7 price history and approvals · v8 user accounts · v9 landed cost ·
+                       v10 payroll (employees, salaryPayments) ·
+                       v11 milling jobs (millingJobs, millingJobItems) */
 var OLD_DB_NAME = 'farooqco_erp';
 var LS_KEY  = 'farooqco_erp_idb_mirror';
 var LEGACY_LS_KEY = 'farooqco_erp_v1';

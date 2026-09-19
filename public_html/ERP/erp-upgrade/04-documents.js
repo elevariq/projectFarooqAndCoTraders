@@ -142,7 +142,10 @@ var DocModel = {
         terms: ERP.Settings.get().terms || '',
         bank: ERP.Settings.get().bankDetails || ''
       },
-      actions: { edit: true, duplicate: true, cancel: true, payment: true, ret: true, whatsapp: true, sms: true }
+      actions: { edit: true, duplicate: true, cancel: true, payment: true, ret: true, whatsapp: true, sms: true,
+                 /* a draft has no account entry to move (edit it instead); a cancelled one has none left */
+                 changeShop: inv.status !== 'DRAFT' && inv.status !== 'CANCELLED' &&
+                             (!ERP.Can || ERP.Can('TRANSACTION_CORRECT')) }
     };
   },
 
@@ -347,6 +350,70 @@ var DocModel = {
                { label: 'Payable after adjustment', value: M.fmt(ERP.Ledger.supplierBalance(r.supplierId)), bold: true }],
       words: words(r.debitAmount), notes: r.notes || '', ledger: [],
       signatures: ['Handed over by', 'Received by (supplier)'],
+      footer: { thanks: '', terms: '', bank: '' },
+      actions: {}
+    };
+  },
+
+  /* Milling job — wheat issued to a mill, flour/chokar received back, the
+     process loss shown and the net settlement against the mill's own
+     account. Added by 32-milling.js; ERP.Milling is guarded so this model
+     simply returns null if that module never loaded. */
+  millingJob: function (jobId) {
+    if (!ERP.Milling) return null;
+    var job = ERP.Milling.byId(jobId);
+    if (!job) return null;
+    var items = ERP.Milling.items(jobId);
+    var mill = (global.supOf && global.supOf(job.millId)) || {};
+    var totals = [];
+    if (job.settle !== 'FEE_ONLY') {
+      totals.push({ label: 'Wheat issued', value: M.fmt(job.issuedValue) });
+      totals.push({ label: 'Received back', value: M.fmt(job.receivedValue) });
+    }
+    if (job.feeAmount) totals.push({ label: 'Milling fee', value: M.fmt(job.feeAmount) });
+    totals.push({
+      label: job.netAmount >= 0 ? 'Net payable to mill' : 'Net receivable from mill',
+      labelUr: job.netAmount >= 0 ? 'بقایا رقم' : '',
+      value: M.fmt(Math.abs(job.netAmount)), big: true, rule: true
+    });
+    totals.push({ label: 'Payable after this job', value: M.fmt(ERP.Ledger.supplierBalance(job.millId)), bold: true });
+    return {
+      kind: 'MILLING', entityId: job.id, title: 'MILLING JOB', number: job.jobNumber,
+      status: job.status === 'CANCELLED' ? 'Cancelled' : 'Posted', cancelled: job.status === 'CANCELLED',
+      date: fmtDate(job.jobDate), rawDate: job.jobDate,
+      business: DocModel.business(),
+      party: { label: 'MILL', shop: job.millSnapshot, owner: mill.cp || '', contact: mill.ph || '', id: job.millId },
+      metaLabel: 'MILLING DETAILS',
+      meta: [
+        ['Job No', job.jobNumber, true],
+        ['Date', fmtDate(job.jobDate)],
+        ['Warehouse', job.warehouseSnapshot],
+        ['Settlement', job.settle === 'FEE_ONLY' ? 'Grinding fee only' : 'Net off against account']
+      ],
+      strip: [['Weight issued', job.inWeightKg + ' kg'], ['Weight received', job.outWeightKg + ' kg'],
+              ['Process loss', job.lossKg + ' kg (' + job.lossPct + '%)'], ['Net', M.fmt(job.netAmount)]],
+      columns: [
+        { key: 'sr', label: 'SR', align: 'center', width: 0.05 },
+        { key: 'side', label: 'Side', align: 'center', width: 0.11 },
+        { key: 'description', label: 'Description / تفصیل', width: 0.29 },
+        { key: 'qty', label: 'تعداد', align: 'right', width: 0.12 },
+        { key: 'pack', label: 'وزن (kg)', align: 'right', width: 0.13 },
+        { key: 'rate', label: 'ریٹ', align: 'right', width: 0.13 },
+        { key: 'amount', label: 'رقم', align: 'right', width: 0.17 }
+      ],
+      rows: items.map(function (it, i) {
+        return {
+          sr: i + 1, side: it.side === 'ISSUE' ? 'Issued' : 'Received',
+          description: it.productSnapshot, descriptionUr: it.productUrSnapshot,
+          qty: qtyFmt(it.quantity), pack: qtyFmt(it.weightKg),
+          rate: M.fmtPlain(it.unitRate) + '/' + (it.rateBasis === 'KG' ? 'kg' : 'bag'),
+          amount: M.fmtPlain(it.lineTotal)
+        };
+      }),
+      itemsFooter: null,
+      totals: totals,
+      words: words(Math.abs(job.netAmount)), notes: job.notes || '', ledger: [],
+      signatures: ['Handed over by', 'Received by (mill)'],
       footer: { thanks: '', terms: '', bank: '' },
       actions: {}
     };
@@ -669,6 +736,7 @@ var Viewer = {
         (a.whatsapp ? btn('wa', 'WhatsApp') : '') +
         (a.sms ? btn('sms', 'Send SMS') : '') +
         (a.edit ? btn('edit', 'Edit') : '') +
+        (a.changeShop ? btn('changeshop', 'Change shop') : '') +
         (a.duplicate ? btn('dup', 'Duplicate') : '') +
         (a.payment ? btn('pay', 'Payment') : '') +
         (a.ret ? btn('return', 'Return') : '') +

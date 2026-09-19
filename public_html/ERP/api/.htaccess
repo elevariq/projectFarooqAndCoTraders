@@ -1,0 +1,18 @@
+# Farooq & Co Traders ERP API — added 2026-09-16 (auth project, Phase 1)
+# Endpoint files (login.php, me.php, ...) must stay reachable; the shared
+# includes (prefixed with _) are meant to be require()'d only, never hit
+# directly over HTTP.
+<IfModule mod_authz_core.c>
+  <FilesMatch "^_">
+    Require all denied
+  </FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+  <FilesMatch "^_">
+    Order allow,deny
+    Deny from all
+  </FilesMatch>
+</IfModule>
+
+# No directory listing.
+Options -Indexes

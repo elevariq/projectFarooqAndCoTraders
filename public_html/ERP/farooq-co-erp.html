@@ -609,6 +609,7 @@ table.dt tr.tot-row td,table.dt tr.open-row td{background:#F7F7F7;font-weight:70
 
 
 
+
 <!-- FAROOQ & CO ERP — PRE-BOOT GUARD --><script>
 /* ══════════════════════════════════════════════════════════════════════════
    FAROOQ & CO TRADERS — ERP UPGRADE · MODULE 00a
@@ -3348,6 +3349,15 @@ var STORES = {
      customer/supplier balance movement). ── */
   employees:             { keyPath: 'id',    idx: { name: 'name', role: 'role', active: 'active' } },
   salaryPayments:        { keyPath: 'id',    idx: { salaryNumber: ['salaryNumber', true], employeeId: 'employeeId', paymentDate: 'paymentDate' } },
+  /* ── milling jobs (toll milling): wheat issued to a mill, flour + bran
+     received back, weighed in kilograms alongside the existing bag count.
+     Two stores, same shape as every other document/line pair (stockDocs /
+     stockDocItems, purchases / purchaseItems). The financial side settles
+     into the mill's own existing supplier khata — see ERP.Ledger.supplier's
+     milling-job wrapper in 32-milling.js — so no separate ledger store is
+     needed here. ── */
+  millingJobs:           { keyPath: 'id',    idx: { jobNumber: ['jobNumber', true], millId: 'millId', jobDate: 'jobDate' } },
+  millingJobItems:       { keyPath: 'id',    idx: { jobId: 'jobId', productId: 'productId' } },
   syncQueue:             { keyPath: 'opId',  idx: { state: 'state' } },
   legacy:                { keyPath: 'k' }   /* orders, dispatch, activity, rules, users, devices … */
 };
@@ -3358,8 +3368,9 @@ var STORE_NAMES = Object.keys(STORES);
    Opening that database under this schema would corrupt it, so this build
    uses its own name and adopts the old one on first run instead. */
 var DB_NAME = 'farooqco_erp_ledger';
-var DB_VER  = 10;  /* … v7 price history and approvals · v8 user accounts · v9 landed cost ·
-                       v10 payroll (employees, salaryPayments) */
+var DB_VER  = 11;  /* … v7 price history and approvals · v8 user accounts · v9 landed cost ·
+                       v10 payroll (employees, salaryPayments) ·
+                       v11 milling jobs (millingJobs, millingJobItems) */
 var OLD_DB_NAME = 'farooqco_erp';
 var LS_KEY  = 'farooqco_erp_idb_mirror';
 var LEGACY_LS_KEY = 'farooqco_erp_v1';
@@ -3771,7 +3782,8 @@ var ENUM = ERP.ENUM = {
   movement: ['OPENING_STOCK', 'PURCHASE_IN', 'SALE_OUT', 'CUSTOMER_RETURN_IN', 'CUSTOMER_RETURN_DAMAGED_IN',
              'SUPPLIER_RETURN_OUT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT',
              'SALE_REVERSAL_IN', 'PURCHASE_REVERSAL_OUT', 'REPLACEMENT_OUT', 'SUPPLIER_REPLACEMENT_IN',
-             'STOCK_WRITE_OFF', 'DISPATCH_OUT'],
+             'STOCK_WRITE_OFF', 'DISPATCH_OUT',
+             'MILL_ISSUE_OUT', 'MILL_RECEIPT_IN', 'MILL_ISSUE_REVERSAL_IN', 'MILL_RECEIPT_REVERSAL_OUT'],
   /* what physically happens to a returned bag */
   returnCondition: ['SELLABLE', 'DAMAGED', 'DEFECTIVE', 'WRONG_ITEM', 'EXPIRED', 'OTHER'],
   /* what happens to the money */
@@ -3797,6 +3809,11 @@ function todayISO() {
 }
 global.FC_TODAY = todayISO;
 function currentUser() { return global.CURRENT_USER || 'Owner'; }
+/* the calendar day before an ISO date, or null if it isn't a real date */
+function dayBefore(iso) {
+  var t = Date.parse(String(iso || '') + 'T00:00:00Z');
+  return isNaN(t) ? null : new Date(t - 86400000).toISOString().slice(0, 10);
+}
 function ikey(pid, wid) { return pid + '|' + wid; }
 
 /* ── a serialised queue so fire-and-forget writes from the older, purely
@@ -3877,7 +3894,7 @@ var Inventory = ERP.Inventory = {
     if (mv.bucket === 'damaged') r.damagedQty = Math.round((r.damagedQty + delta) * 1000) / 1000;
     else r.qty = Math.round((r.qty + delta) * 1000) / 1000;
 
-    if (mv.kind === 'PURCHASE_IN' && mv.unitCostP) {          // moving average cost (§41)
+    if ((mv.kind === 'PURCHASE_IN' || mv.kind === 'MILL_RECEIPT_IN') && mv.unitCostP) {  // moving average cost (§41)
       var before = r.qty - delta, prev = r.avgCostP || 0;
       r.avgCostP = before > 0
         ? Math.round((before * prev + delta * mv.unitCostP) / (before + delta))
@@ -3922,7 +3939,9 @@ var Movements = ERP.Movements = {
       ADJUSTMENT_IN: 'Adjustment in', ADJUSTMENT_OUT: 'Adjustment out', ADJUSTMENT: 'Adjustment',
       SALE_REVERSAL_IN: 'Sale reversal', PURCHASE_REVERSAL_OUT: 'Purchase reversal',
       REPLACEMENT_OUT: 'Replacement issued', SUPPLIER_REPLACEMENT_IN: 'Replacement from supplier',
-      DISPATCH_OUT: 'Dispatch', OPENING_STOCK: 'Opening stock', OPENING: 'Opening stock'
+      DISPATCH_OUT: 'Dispatch', OPENING_STOCK: 'Opening stock', OPENING: 'Opening stock',
+      MILL_ISSUE_OUT: 'Issued for milling', MILL_RECEIPT_IN: 'Received from mill',
+      MILL_ISSUE_REVERSAL_IN: 'Milling issue reversed', MILL_RECEIPT_REVERSAL_OUT: 'Milling receipt reversed'
     })[k] || k;
   }
 };
@@ -4120,17 +4139,13 @@ var Invoices = ERP.Invoices = {
     };
   },
 
-  buildRecord: function (draft, totals, number, status) {
-    var c = global.custBy(draft.customerId) || {};
+  /* The shop's details as they are stamped onto an invoice. One place builds
+     them, so a new invoice and an invoice moved to another shop
+     (Invoices.changeCustomer) can never disagree about what a snapshot holds. */
+  customerFields: function (c) {
+    c = c || {};
     var region = global.regionOf && c.region ? global.regionOf(c.region) : null;
     return {
-      id: draft.id, invoiceNumber: number,
-      clientOpId: draft.clientOpId || draft.id,      // idempotency for offline sync (§30)
-      invoiceType: draft.invoiceType || 'SALE',
-      saleOrderId: draft.saleOrderId || null,
-      orderNumber: draft.orderNumber || '',
-      dispatchNumber: draft.dispatchNumber || '',
-      customerId: draft.customerId,
       customerCodeSnapshot: c.legacyCode || c.id || '',
       customerNameSnapshot: c.ow || c.sh || '',
       shopNameSnapshot: c.sh || '',
@@ -4138,7 +4153,21 @@ var Invoices = ERP.Invoices = {
       mobileSnapshot: c.ph || '', whatsappSnapshot: c.wa || '',
       addressSnapshot: c.addr || '',
       regionId: c.region || '', regionSnapshot: region ? (region.ur + ' — ' + region.en) : '',
-      marketSnapshot: c.area || c.route || '',
+      marketSnapshot: c.area || c.route || ''
+    };
+  },
+
+  buildRecord: function (draft, totals, number, status) {
+    var c = global.custBy(draft.customerId) || {};
+    return Object.assign({
+      id: draft.id, invoiceNumber: number,
+      clientOpId: draft.clientOpId || draft.id,      // idempotency for offline sync (§30)
+      invoiceType: draft.invoiceType || 'SALE',
+      saleOrderId: draft.saleOrderId || null,
+      orderNumber: draft.orderNumber || '',
+      dispatchNumber: draft.dispatchNumber || '',
+      customerId: draft.customerId
+    }, Invoices.customerFields(c), {
       warehouseId: draft.warehouseId,
       warehouseSnapshot: global.whName ? global.whName(draft.warehouseId) : '',
       salesperson: draft.salesperson || currentUser(),
@@ -4162,7 +4191,7 @@ var Invoices = ERP.Invoices = {
       confirmedAt: status !== 'DRAFT' ? nowISO() : null,
       cancelledAt: null, cancelReason: '',
       stockApplied: false
-    };
+    });
   },
 
   /* ── Save. One transaction covers: number, invoice, items, stock,
@@ -4172,6 +4201,16 @@ var Invoices = ERP.Invoices = {
     opts = opts || {};
     var asDraft = !!opts.draft;
     var errs = Validate.invoice(draft, { skipStock: asDraft, allowZeroRate: asDraft, allowOverpay: opts.allowOverpay });
+    /* An ordinary edit only rewrites the invoice's own `customerId`; the
+       receipts, allocations and returns that belong to the old shop would stay
+       behind and the two shops' accounts would no longer add up. Moving a
+       posted invoice to another shop goes through changeCustomer instead. */
+    var prior = draft.id ? Invoices.byId(draft.id) : null;
+    if (prior && prior.status !== 'DRAFT' && prior.customerId && draft.customerId &&
+        draft.customerId !== prior.customerId) {
+      errs.push('The shop on a posted invoice cannot be changed while editing it. ' +
+                'Use "Change shop" on the invoice, which moves its payments with it.');
+    }
     if (errs.length) return Promise.reject({ validation: errs });
 
     var totals = Calc.invoice(draft);
@@ -4316,6 +4355,154 @@ var Invoices = ERP.Invoices = {
       });
       return inv;
     }).then(function (r) { Mirror.refresh(); return r; });
+  },
+
+  /* ── Move an invoice to a different shop — the shop and nothing else. ──
+     A shop's account is derived from its invoices, so "the wrong shop was
+     picked" is not a label fix: the invoice total, and any money taken with
+     it, has to leave one shop's account and land on the other's. Lines,
+     amounts, number, date and stock are deliberately untouched — no stock is
+     re-validated or re-deducted, no new invoice number is spent.
+
+     What follows the invoice: the receipts that belong wholly to it, and the
+     dispatch notes written against it (both carry their own copy of the shop).
+     What stops it, because the money cannot be split honestly: a receipt that
+     was also applied to other invoices or left partly on account, and any
+     customer return (its credit note or cash refund is a fact about the old
+     shop). reassignCheck reports all of that without writing anything, so the
+     screen can warn before the click and the service can enforce it. */
+  reassignCheck: function (id, newCustomerId) {
+    var errs = [], inv = Invoices.byId(id);
+    if (!inv) return { errs: ['Invoice not found.'], inv: null, to: null, payments: [], dispatches: [] };
+    var to = newCustomerId && global.custBy ? global.custBy(newCustomerId) : null;
+    if (inv.status === 'CANCELLED') errs.push('A cancelled invoice cannot be moved to another shop.');
+    if (newCustomerId !== undefined) {
+      if (!to) errs.push('Choose the shop this invoice belongs to.');
+      else if (to.id === inv.customerId) errs.push('That is already the shop on this invoice.');
+    }
+
+    var rets = S.custReturns.filter(function (r) { return r.invoiceId === inv.id && r.status !== 'CANCELLED'; });
+    if (rets.length) {
+      errs.push('A return has been posted against this invoice (' +
+        rets.map(function (r) { return r.returnNumber; }).join(', ') +
+        '). Its credit note and any refund belong to ' + (inv.shopNameSnapshot || 'the current shop') +
+        ', so the invoice cannot be moved. Cancel the invoice and make a new one for the right shop instead.');
+    }
+
+    var payments = [], seen = {};
+    S.allocations.forEach(function (a) {
+      if (a.invoiceId !== inv.id || seen[a.paymentId]) return;
+      seen[a.paymentId] = true;
+      var p = Payments.byId(a.paymentId);
+      if (!p || p.status === 'REVERSED') return;
+      var all = S.allocations.filter(function (x) { return x.paymentId === p.id; });
+      var wholly = all.every(function (x) { return x.invoiceId === inv.id; }) &&
+                   all.reduce(function (s, x) { return s + x.amount; }, 0) === p.amount;
+      if (wholly) payments.push(p);
+      else errs.push('Receipt ' + p.receiptNumber + ' (' + M.fmt(p.amount) + ') was also applied to other invoices ' +
+        'or left partly on account, so it belongs to the shop, not to this one invoice. Reverse that receipt first, ' +
+        'move the invoice, then record the money again against the right shop.');
+    });
+
+    var dispatches = (S.stockDocs || []).filter(function (d) { return d.invoiceId === inv.id; });
+    return { errs: errs, inv: inv, to: to, payments: payments, dispatches: dispatches };
+  },
+
+  changeCustomer: function (id, newCustomerId, opts) {
+    opts = opts || {};
+    var plan = Invoices.reassignCheck(id, newCustomerId || '');
+    if (plan.errs.length) return Promise.reject({ validation: plan.errs });
+    var inv = plan.inv, to = plan.to;
+    var oldShop = inv.shopNameSnapshot || '', oldId = inv.customerId;
+
+    /* the new shop's balance just before this invoice's date — what it owed
+       before this sale, which is what "previous balance" on the paper means.
+       Read before anything moves, while the invoice is still on the old shop. */
+    function balanceBefore(iso) {
+      var d = dayBefore(iso);
+      return d ? Ledger.customer(to.id, null, d).closing : Ledger.customerBalance(to.id);
+    }
+    var prevBal = balanceBefore(inv.invoiceDate);
+
+    var fields = Invoices.customerFields(to);
+    var rec = Object.assign({}, inv, fields, { customerId: to.id, previousBalance: prevBal, updatedAt: nowISO() });
+    /* A receipt carries the balance it was taken against, and the printed
+       receipt shows it beside the shop's name — so it is recomputed for the new
+       shop, the way it was worked out originally: the shop's balance on the
+       day (this invoice included, earlier moved receipts not yet). */
+    var movedSoFar = 0;
+    var payRecs = plan.payments.slice().sort(function (a, b) {
+      return a.paymentDate !== b.paymentDate ? (a.paymentDate < b.paymentDate ? -1 : 1)
+           : ((a.createdAt || '') < (b.createdAt || '') ? -1 : 1);
+    }).map(function (p) {
+      var before = balanceBefore(p.paymentDate) - movedSoFar +
+                   (inv.status !== 'DRAFT' && inv.invoiceDate <= p.paymentDate ? inv.grandTotal : 0);
+      movedSoFar += p.amount;
+      return Object.assign({}, p, {
+        partyId: to.id, partyNameSnapshot: to.sh || '', partyOwnerSnapshot: to.ow || '',
+        regionSnapshot: fields.regionSnapshot,
+        balanceBefore: before, balanceAfter: before - p.amount
+      });
+    });
+    var docRecs = plan.dispatches.map(function (d) {
+      return Object.assign({}, d, { customerId: to.id, customerSnapshot: to.sh || '',
+                                    regionSnapshot: fields.regionSnapshot });
+    });
+
+    /* A hand-typed shop name, address or "previous balance" on the printed
+       sheet would keep showing the old shop's details over the new snapshot.
+       Those overrides are dropped — kept in the sheet's own history so the
+       earlier wording can still be stepped back to. */
+    var edit = ERP.Edits && ERP.Edits.get ? ERP.Edits.get(inv.id) : null;
+    var editRec = null;
+    if (edit) {
+      var stale = ['shop', 'owner', 'code', 'contact', 'address', 'region', 'previousBalance']
+        .filter(function (k) { return edit.fields && edit.fields[k] !== undefined; });
+      if (stale.length) {
+        editRec = JSON.parse(JSON.stringify(edit));
+        editRec.revisions = editRec.revisions || [];
+        editRec.revisions.unshift({ at: nowISO(), by: currentUser(), note: 'Before the shop was changed',
+                                    state: ERP.Edits.snapshot(edit) });
+        if (editRec.revisions.length > 15) editRec.revisions.length = 15;
+        stale.forEach(function (k) { delete editRec.fields[k]; });
+        editRec.lastSaved = ERP.Edits.snapshot(editRec);
+        editRec.updatedAt = nowISO();
+      }
+    }
+
+    return FDB.tx(['invoices', 'payments', 'stockDocs', 'documentEdits', 'auditLog'], function (api) {
+      api.put('invoices', rec);
+      payRecs.forEach(function (p) { api.put('payments', p); });
+      docRecs.forEach(function (d) { api.put('stockDocs', d); });
+      if (editRec) api.put('documentEdits', editRec);
+      Audit.write(api, {
+        action: 'Invoice moved to another shop', entity: 'Invoice', entityId: inv.id,
+        ref: inv.invoiceNumber || 'draft',
+        oldValues: { customerId: oldId, shop: oldShop },
+        newValues: {
+          customerId: to.id, shop: rec.shopNameSnapshot,
+          receiptsMoved: payRecs.map(function (p) { return p.receiptNumber; }),
+          dispatchNotesMoved: docRecs.map(function (d) { return d.docNumber; })
+        },
+        reason: opts.reason || ''
+      });
+      return rec;
+    }).then(function () {
+      /* the working set only changes once the database has accepted it all */
+      var ix = S.invoices.findIndex(function (i) { return i.id === rec.id; });
+      if (ix > -1) S.invoices[ix] = rec;
+      payRecs.forEach(function (p) {
+        var k = S.payments.findIndex(function (x) { return x.id === p.id; });
+        if (k > -1) S.payments[k] = p;
+      });
+      docRecs.forEach(function (d) {
+        var k = (S.stockDocs || []).findIndex(function (x) { return x.id === d.id; });
+        if (k > -1) S.stockDocs[k] = d;
+      });
+      if (editRec) Object.assign(edit, editRec);
+      Mirror.refresh();
+      return rec;
+    });
   },
 
   /* A duplicate is a fresh draft: no number, no date, no payments (§36). */
@@ -5074,7 +5261,13 @@ var Ledger = ERP.Ledger = {
 var Reports = ERP.Reports = {
   range: function (key) {
     var t = todayISO(), d = new Date(t + 'T00:00:00');
-    function iso(x) { return x.toISOString().slice(0, 10); }
+    /* local calendar date — toISOString() is UTC, which moved every date built
+       from a local-midnight Date back one day east of Greenwich (in Pakistan,
+       "Yesterday" was two days ago and "Last month" ran Jul 31–Aug 30) */
+    function iso(x) {
+      return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' +
+             String(x.getDate()).padStart(2, '0');
+    }
     function shift(n) { var y = new Date(d); y.setDate(y.getDate() + n); return iso(y); }
     switch (key) {
       case 'today':     return [t, t];
@@ -6354,7 +6547,10 @@ var DocModel = {
         terms: ERP.Settings.get().terms || '',
         bank: ERP.Settings.get().bankDetails || ''
       },
-      actions: { edit: true, duplicate: true, cancel: true, payment: true, ret: true, whatsapp: true, sms: true }
+      actions: { edit: true, duplicate: true, cancel: true, payment: true, ret: true, whatsapp: true, sms: true,
+                 /* a draft has no account entry to move (edit it instead); a cancelled one has none left */
+                 changeShop: inv.status !== 'DRAFT' && inv.status !== 'CANCELLED' &&
+                             (!ERP.Can || ERP.Can('TRANSACTION_CORRECT')) }
     };
   },
 
@@ -6559,6 +6755,70 @@ var DocModel = {
                { label: 'Payable after adjustment', value: M.fmt(ERP.Ledger.supplierBalance(r.supplierId)), bold: true }],
       words: words(r.debitAmount), notes: r.notes || '', ledger: [],
       signatures: ['Handed over by', 'Received by (supplier)'],
+      footer: { thanks: '', terms: '', bank: '' },
+      actions: {}
+    };
+  },
+
+  /* Milling job — wheat issued to a mill, flour/chokar received back, the
+     process loss shown and the net settlement against the mill's own
+     account. Added by 32-milling.js; ERP.Milling is guarded so this model
+     simply returns null if that module never loaded. */
+  millingJob: function (jobId) {
+    if (!ERP.Milling) return null;
+    var job = ERP.Milling.byId(jobId);
+    if (!job) return null;
+    var items = ERP.Milling.items(jobId);
+    var mill = (global.supOf && global.supOf(job.millId)) || {};
+    var totals = [];
+    if (job.settle !== 'FEE_ONLY') {
+      totals.push({ label: 'Wheat issued', value: M.fmt(job.issuedValue) });
+      totals.push({ label: 'Received back', value: M.fmt(job.receivedValue) });
+    }
+    if (job.feeAmount) totals.push({ label: 'Milling fee', value: M.fmt(job.feeAmount) });
+    totals.push({
+      label: job.netAmount >= 0 ? 'Net payable to mill' : 'Net receivable from mill',
+      labelUr: job.netAmount >= 0 ? 'بقایا رقم' : '',
+      value: M.fmt(Math.abs(job.netAmount)), big: true, rule: true
+    });
+    totals.push({ label: 'Payable after this job', value: M.fmt(ERP.Ledger.supplierBalance(job.millId)), bold: true });
+    return {
+      kind: 'MILLING', entityId: job.id, title: 'MILLING JOB', number: job.jobNumber,
+      status: job.status === 'CANCELLED' ? 'Cancelled' : 'Posted', cancelled: job.status === 'CANCELLED',
+      date: fmtDate(job.jobDate), rawDate: job.jobDate,
+      business: DocModel.business(),
+      party: { label: 'MILL', shop: job.millSnapshot, owner: mill.cp || '', contact: mill.ph || '', id: job.millId },
+      metaLabel: 'MILLING DETAILS',
+      meta: [
+        ['Job No', job.jobNumber, true],
+        ['Date', fmtDate(job.jobDate)],
+        ['Warehouse', job.warehouseSnapshot],
+        ['Settlement', job.settle === 'FEE_ONLY' ? 'Grinding fee only' : 'Net off against account']
+      ],
+      strip: [['Weight issued', job.inWeightKg + ' kg'], ['Weight received', job.outWeightKg + ' kg'],
+              ['Process loss', job.lossKg + ' kg (' + job.lossPct + '%)'], ['Net', M.fmt(job.netAmount)]],
+      columns: [
+        { key: 'sr', label: 'SR', align: 'center', width: 0.05 },
+        { key: 'side', label: 'Side', align: 'center', width: 0.11 },
+        { key: 'description', label: 'Description / تفصیل', width: 0.29 },
+        { key: 'qty', label: 'تعداد', align: 'right', width: 0.12 },
+        { key: 'pack', label: 'وزن (kg)', align: 'right', width: 0.13 },
+        { key: 'rate', label: 'ریٹ', align: 'right', width: 0.13 },
+        { key: 'amount', label: 'رقم', align: 'right', width: 0.17 }
+      ],
+      rows: items.map(function (it, i) {
+        return {
+          sr: i + 1, side: it.side === 'ISSUE' ? 'Issued' : 'Received',
+          description: it.productSnapshot, descriptionUr: it.productUrSnapshot,
+          qty: qtyFmt(it.quantity), pack: qtyFmt(it.weightKg),
+          rate: M.fmtPlain(it.unitRate) + '/' + (it.rateBasis === 'KG' ? 'kg' : 'bag'),
+          amount: M.fmtPlain(it.lineTotal)
+        };
+      }),
+      itemsFooter: null,
+      totals: totals,
+      words: words(Math.abs(job.netAmount)), notes: job.notes || '', ledger: [],
+      signatures: ['Handed over by', 'Received by (mill)'],
       footer: { thanks: '', terms: '', bank: '' },
       actions: {}
     };
@@ -6881,6 +7141,7 @@ var Viewer = {
         (a.whatsapp ? btn('wa', 'WhatsApp') : '') +
         (a.sms ? btn('sms', 'Send SMS') : '') +
         (a.edit ? btn('edit', 'Edit') : '') +
+        (a.changeShop ? btn('changeshop', 'Change shop') : '') +
         (a.duplicate ? btn('dup', 'Duplicate') : '') +
         (a.payment ? btn('pay', 'Payment') : '') +
         (a.ret ? btn('return', 'Return') : '') +
@@ -8058,20 +8319,28 @@ function partyBlock() {
   });
   var c = B.draft.customerId ? global.custBy(B.draft.customerId) : null;
   var bal = c ? ERP.Ledger.customerBalance(c.id) : 0;
+  /* On a posted invoice the shop is fixed here: the receipts and account
+     entries hang off it, so it moves through "Change shop", which takes them
+     along. A draft has nothing posted yet and stays freely editable. */
+  var posted = B.mode === 'sale' && B.editingId ? ERP.Invoices.byId(B.editingId) : null;
+  var lockShop = !!(posted && posted.status !== 'DRAFT');
+  var lock = lockShop ? ' disabled' : '';
   return '<div class="f2">' +
-    '<label class="f"><span>Region</span><select data-fcb="regionFilter">' +
+    '<label class="f"><span>Region</span><select data-fcb="regionFilter"' + lock + '>' +
       '<option value="all">All regions (' + CUSTS().length + ' shops)</option>' +
       regions.map(function (r) {
         var n = CUSTS().filter(function (x) { return x.region === r.id; }).length;
         return '<option value="' + r.id + '"' + (B.regionFilter === r.id ? ' selected' : '') + '>' +
           esc(r.en) + ' — ' + esc(r.ur) + ' (' + n + ')</option>';
       }).join('') + '</select></label>' +
-    '<label class="f"><span>Shop</span><select data-fcb="customerId">' +
+    '<label class="f"><span>Shop</span><select data-fcb="customerId"' + lock + '>' +
       '<option value="">— choose a shop —</option>' +
       custs.map(function (x) {
         return '<option value="' + x.id + '"' + (B.draft.customerId === x.id ? ' selected' : '') + '>' +
           esc(x.sh) + (x.legacyCode ? ' · ' + esc(x.legacyCode) : '') + '</option>';
       }).join('') + '</select></label></div>' +
+    (lockShop ? '<p class="hint">To bill a different shop, save or leave this edit and use <b>Change shop</b> ' +
+      'on the invoice — its payments and the shop balances move with it.</p>' : '') +
     (c ? '<div class="fcb-party">' +
         '<div><i>Owner</i><b>' + esc(c.ow || '—') + '</b></div>' +
         '<div><i>Mobile</i><b>' + esc(c.ph || 'Not set') + '</b></div>' +
@@ -8507,56 +8776,83 @@ B.save = function (asDraft) {
 /* ══════════════════════════════════════════════════════════════════════════
    INVOICE LIST (§37 §38 §39)
    ══════════════════════════════════════════════════════════════════════════ */
-var LIST = ERP.InvoiceList = { q: '', period: 'all', status: 'all', region: 'all', wh: 'all', custom: null };
+/* The search and filter rules live in 33-invoice-search.js (ERP.InvoiceSearch,
+   loaded later — it is only ever called at paint time). This object is just
+   the screen's remembered state; the keys are the ones ERP.InvoiceSearch.DEFAULTS
+   lists, and every data-fcfil control writes straight into it. */
+var LIST = ERP.InvoiceList = { q: '', scope: 'all', period: 'all', from: '', to: '', min: '', max: '',
+                               status: 'all', region: 'all', wh: 'all', sort: 'newest', page: 1 };
+var PAGE_SIZE = 50;
 
-function matches(inv) {
-  var q = LIST.q.toLowerCase().trim();
-  if (q) {
-    var items = ERP.Invoices.items(inv.id);
-    var hay = [inv.invoiceNumber, inv.shopNameSnapshot, inv.customerNameSnapshot, inv.mobileSnapshot,
-      inv.regionSnapshot, inv.orderNumber, inv.warehouseSnapshot, inv.referenceNo,
-      ERP.STATUS_LABEL[inv.status], M.toR(inv.grandTotal),
-      items.map(function (i) {
-        return i.descriptionSnapshot + ' ' + i.descriptionEnSnapshot + ' ' + i.brandSnapshot;
-      }).join(' ')].filter(Boolean).join(' ').toLowerCase();
-    if (hay.indexOf(q) === -1) return false;
-  }
-  if (LIST.status !== 'all' && inv.status !== LIST.status) return false;
-  if (LIST.region !== 'all' && inv.regionId !== LIST.region) return false;
-  if (LIST.wh !== 'all' && inv.warehouseId !== LIST.wh) return false;
-  if (LIST.period !== 'all') {
-    var r = LIST.period === 'custom' ? (LIST.custom || [null, null]) : ERP.Reports.range(LIST.period);
-    if (r[0] && inv.invoiceDate < r[0]) return false;
-    if (r[1] && inv.invoiceDate > r[1]) return false;
-  }
-  return true;
-}
+function matches(inv) { return ERP.InvoiceSearch.matcher(LIST)(inv); }
+LIST.results = function () { return ERP.InvoiceSearch.results(LIST); };
+LIST.reset = function () { ERP.InvoiceSearch.reset(LIST); };
+LIST.pages = 1;
+/* Prev / Next / First / Last, or a page number */
+LIST.goPage = function (to) {
+  var n = to === 'prev' ? LIST.page - 1 : to === 'next' ? LIST.page + 1
+        : to === 'first' ? 1 : to === 'last' ? LIST.pages : Number(to);
+  if (!isFinite(n)) return;
+  LIST.page = Math.min(Math.max(1, Math.round(n)), LIST.pages);
+  global.paint();
+  var top = global.document.querySelector('.fcb-count');
+  if (top && top.scrollIntoView) top.scrollIntoView({ block: 'nearest' });
+};
 
 global.PAGES.invoices = function () {
-  var all = ERP.Invoices.all().slice().sort(function (a, b) {
-    return a.invoiceDate === b.invoiceDate ? (a.createdAt < b.createdAt ? 1 : -1)
-                                           : (a.invoiceDate < b.invoiceDate ? 1 : -1);
-  });
-  var list = all.filter(matches);
+  var all = ERP.Invoices.all();
+  var list = LIST.results();
   var live = list.filter(function (i) { return i.status !== 'CANCELLED' && i.status !== 'DRAFT'; });
   var revenue = live.reduce(function (a, i) { return a + i.grandTotal; }, 0);
   var received = live.reduce(function (a, i) { return a + ERP.Invoices.paidFor(i.id); }, 0);
   var outstanding = live.reduce(function (a, i) { return a + ERP.Invoices.outstanding(i); }, 0);
 
+  /* Only one page of rows is drawn; the totals above still cover every
+     invoice that passes the filters. A narrowed-down list can leave the
+     remembered page past the end, so it is clamped rather than shown empty. */
+  LIST.pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  if (LIST.page > LIST.pages) LIST.page = LIST.pages;
+  if (!(LIST.page >= 1)) LIST.page = 1;
+  var first = (LIST.page - 1) * PAGE_SIZE;
+  var shown = list.slice(first, first + PAGE_SIZE);
+  var info = ERP.InvoiceSearch.describe(LIST);
+  var filtering = ERP.InvoiceSearch.active(LIST);
+  var hitsOf = ERP.InvoiceSearch.hitsFor(LIST);
+
   var periods = [['all', 'All dates'], ['today', 'Today'], ['yesterday', 'Yesterday'], ['week', 'This week'],
-                 ['month', 'This month'], ['lastmonth', 'Last month'], ['year', 'This year']];
+                 ['month', 'This month'], ['lastmonth', 'Last month'], ['last30', 'Last 30 days'],
+                 ['last90', 'Last 3 months'], ['year', 'This year'], ['lastyear', 'Last 12 months'],
+                 ['custom', 'Custom range…']];
   var statuses = [['all', 'All statuses']].concat(ERP.ENUM.invoiceStatus.map(function (s) {
     return [s, ERP.STATUS_LABEL[s]];
   }));
+  function options(pairs, cur) {
+    return pairs.map(function (p) {
+      return '<option value="' + esc(p[0]) + '"' + (cur === p[0] ? ' selected' : '') + '>' + esc(p[1]) + '</option>';
+    }).join('');
+  }
 
-  var rows = list.map(function (i) {
+  var pager = LIST.pages > 1
+    ? '<div class="fcb-pager">' +
+        '<button class="btn sm" data-fcpage="first"' + (LIST.page <= 1 ? ' disabled' : '') + ' aria-label="First page">«</button>' +
+        '<button class="btn sm" data-fcpage="prev"' + (LIST.page <= 1 ? ' disabled' : '') + '>‹ Prev</button>' +
+        '<span class="pg">Page ' + LIST.page + ' of ' + LIST.pages + '</span>' +
+        '<button class="btn sm" data-fcpage="next"' + (LIST.page >= LIST.pages ? ' disabled' : '') + '>Next ›</button>' +
+        '<button class="btn sm" data-fcpage="last"' + (LIST.page >= LIST.pages ? ' disabled' : '') + ' aria-label="Last page">»</button>' +
+      '</div>' : '';
+
+  var rows = shown.map(function (i) {
     var paid = ERP.Invoices.paidFor(i.id), due = ERP.Invoices.outstanding(i);
+    var hit = hitsOf(i);
     var cls = i.status === 'PAID' ? 'ok' : i.status === 'CANCELLED' ? 'neu'
             : i.status === 'DRAFT' ? 'neu' : i.status === 'PARTIALLY_PAID' ? 'low'
             : /RETURNED/.test(i.status) ? 'info' : 'bad';
     return '<tr data-row data-iso="' + i.invoiceDate + '" data-status="' + esc(ERP.STATUS_LABEL[i.status]) + '">' +
       '<td data-label="Invoice" class="fcb-key"><b class="mono">' + esc(i.invoiceNumber || 'Draft') + '</b>' +
-        (i.orderNumber ? '<div class="sub mono">' + esc(i.orderNumber) + '</div>' : '') + '</td>' +
+        (i.orderNumber ? '<div class="sub mono">' + esc(i.orderNumber) + '</div>' : '') +
+        (hit ? '<div class="fcb-hit">' + hit.lines.map(function (l) {
+            return esc(l.name) + (l.qty ? ' × ' + esc(l.qty) : '');
+          }).join(' · ') + (hit.more ? ' · +' + hit.more + ' more' : '') + '</div>' : '') + '</td>' +
       '<td data-label="Date">' + esc(fmtDate(i.invoiceDate)) + '</td>' +
       '<td data-label="Shop"><button class="lnk" data-cust="' + i.customerId + '">' +
         esc(i.shopNameSnapshot || '—') + '</button>' +
@@ -8572,6 +8868,8 @@ global.PAGES.invoices = function () {
         '<button class="btn sm" data-fcinv="view" data-id="' + i.id + '">View</button>' +
         '<button class="btn sm" data-fcinv="word" data-id="' + i.id + '">Word</button>' +
         (i.status !== 'CANCELLED' ? '<button class="btn sm" data-fcinv="edit" data-id="' + i.id + '">Edit</button>' : '') +
+        (i.status !== 'CANCELLED' && i.status !== 'DRAFT' && (!ERP.Can || ERP.Can('TRANSACTION_CORRECT'))
+          ? '<button class="btn sm" data-fcinv="changeshop" data-id="' + i.id + '">Change shop</button>' : '') +
         '<button class="btn sm" data-fcinv="dup" data-id="' + i.id + '">Duplicate</button>' +
         (i.status !== 'CANCELLED' && i.status !== 'DRAFT'
           ? '<button class="btn sm" data-fcinv="pay" data-id="' + i.id + '">Payment</button>' +
@@ -8591,42 +8889,76 @@ global.PAGES.invoices = function () {
     '</div>' +
     '<div class="bar">' +
       '<div class="tsearch">' + I('search') +
-        '<input placeholder="Invoice no, shop, phone, region, product, order, amount…" data-fcq value="' +
-        esc(LIST.q) + '"></div>' +
-      '<label class="fld">' + I('cal') + '<select data-fcfil="period">' + periods.map(function (p) {
-        return '<option value="' + p[0] + '"' + (LIST.period === p[0] ? ' selected' : '') + '>' + p[1] + '</option>';
-      }).join('') + '</select></label>' +
-      '<label class="fld">' + I('filter') + '<select data-fcfil="status">' + statuses.map(function (s) {
-        return '<option value="' + s[0] + '"' + (LIST.status === s[0] ? ' selected' : '') + '>' + s[1] + '</option>';
-      }).join('') + '</select></label>' +
-      '<label class="fld">' + I('pin') + '<select data-fcfil="region"><option value="all">All regions</option>' +
-        (global.REGIONS || []).map(function (r) {
-          return '<option value="' + r.id + '"' + (LIST.region === r.id ? ' selected' : '') + '>' +
-            esc(r.en) + '</option>';
-        }).join('') + '</select></label>' +
-      '<label class="fld">' + I('box') + '<select data-fcfil="wh"><option value="all">All warehouses</option>' +
-        (global.activeWh ? global.activeWh() : []).map(function (w) {
-          return '<option value="' + w.id + '"' + (LIST.wh === w.id ? ' selected' : '') + '>' +
-            esc(w.name) + '</option>';
-        }).join('') + '</select></label>' +
+        '<input placeholder="Find an invoice — number, shop, phone, product, date (12/09/2026), amount…" ' +
+        'data-fcq value="' + esc(LIST.q) + '" autocomplete="off" spellcheck="false" ' +
+        'aria-label="Search invoices"></div>' +
+      '<label class="fld" title="Which part of an invoice the words are looked for in">' + I('filter') +
+        '<select data-fcfil="scope" aria-label="Search in">' +
+        options(ERP.InvoiceSearch.SCOPES.map(function (s) {
+          return [s[0], s[0] === 'all' ? 'Search: everything' : 'Search: ' + s[1]];
+        }), LIST.scope) + '</select></label>' +
+      '<label class="fld" title="Order of the list">' + I('chart') +
+        '<select data-fcfil="sort" aria-label="Sort by">' + options(ERP.InvoiceSearch.SORTS, LIST.sort) +
+        '</select></label>' +
       '<div class="grow"></div>' +
       '<button class="btn" data-fcbact="exportcsv">' + I('sheet') + 'CSV</button>' +
       '<button class="btn" data-fcnew="order">' + I('doc') + 'New Order</button>' +
       '<button class="btn pri" data-fcnew="sale">' + I('plus') + 'New Invoice</button>' +
     '</div>' +
-    (rows.length ? '<div class="tw"><table class="fcb-list"><thead><tr>' +
-      '<th>Invoice #</th><th>Date</th><th>Customer / shop</th><th>Region</th><th class="c">Items</th>' +
-      '<th>Warehouse</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Balance</th>' +
-      '<th>Status</th><th class="c">Actions</th></tr></thead><tbody>' + rows.join('') + '</tbody></table></div>'
+    '<div class="bar fcb-filters">' +
+      '<label class="fld">' + I('cal') + '<select data-fcfil="period" aria-label="Date">' +
+        options(periods, LIST.period) + '</select></label>' +
+      (LIST.period === 'custom'
+        ? '<label class="f"><span>From</span><input type="date" data-fcfil="from" value="' + esc(LIST.from) + '"></label>' +
+          '<label class="f"><span>To</span><input type="date" data-fcfil="to" value="' + esc(LIST.to) + '"></label>'
+        : '') +
+      '<label class="fld">' + I('filter') + '<select data-fcfil="status" aria-label="Status">' +
+        options(statuses, LIST.status) + '</select></label>' +
+      '<label class="fld">' + I('pin') + '<select data-fcfil="region" aria-label="Region">' +
+        '<option value="all">All regions</option>' +
+        (global.REGIONS || []).map(function (r) {
+          return '<option value="' + esc(r.id) + '"' + (LIST.region === r.id ? ' selected' : '') + '>' +
+            esc(r.en) + '</option>';
+        }).join('') + '</select></label>' +
+      '<label class="fld">' + I('box') + '<select data-fcfil="wh" aria-label="Warehouse">' +
+        '<option value="all">All warehouses</option>' +
+        (global.activeWh ? global.activeWh() : []).map(function (w) {
+          return '<option value="' + esc(w.id) + '"' + (LIST.wh === w.id ? ' selected' : '') + '>' +
+            esc(w.name) + '</option>';
+        }).join('') + '</select></label>' +
+      '<label class="f"><span>Total from</span><input inputmode="decimal" data-fcfil="min" placeholder="0" value="' +
+        esc(LIST.min) + '"></label>' +
+      '<label class="f"><span>Total to</span><input inputmode="decimal" data-fcfil="max" placeholder="any" value="' +
+        esc(LIST.max) + '"></label>' +
+      (filtering ? '<button class="btn" data-fcbact="invclear">Clear filters</button>' : '') +
+    '</div>' +
+    info.problems.map(function (m) {
+      return '<div class="fcb-note warn">' + I('alert') + '<span>' + esc(m) + '</span></div>';
+    }).join('') +
+    info.notes.map(function (m) {
+      return '<div class="fcb-note">' + I('cal') + '<span>' + esc(m) + '</span></div>';
+    }).join('') +
+    (list.length
+      ? '<div class="fcb-count"><span>' +
+          (filtering ? '<b>' + list.length + '</b> of ' + all.length + ' invoices match' : '<b>' + all.length + '</b> invoices') +
+          (LIST.pages > 1 ? ' · showing ' + (first + 1) + '–' + (first + shown.length) : '') + '</span>' + pager + '</div>' +
+        '<div class="tw"><table class="fcb-list"><thead><tr>' +
+        '<th>Invoice #</th><th>Date</th><th>Customer / shop</th><th>Region</th><th class="c">Items</th>' +
+        '<th>Warehouse</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Balance</th>' +
+        '<th>Status</th><th class="c">Actions</th></tr></thead><tbody>' + rows.join('') + '</tbody></table></div>' +
+        (LIST.pages > 1 ? '<div class="fcb-count"><span></span>' + pager + '</div>' : '')
     : '<div class="empty"><div class="ei">' + I('tag') + '</div><b>No invoices match</b>' +
-      '<p>Change the filters, or raise the first invoice for a shop.</p>' +
-      '<button class="btn pri" data-fcnew="sale">' + I('plus') + 'New Invoice</button></div>');
+      (filtering
+        ? '<p>Nothing on file fits these words and filters. Try fewer words, widen the dates, or search in “Everything”.</p>' +
+          '<button class="btn pri" data-fcbact="invclear">Clear filters</button>'
+        : '<p>Raise the first invoice for a shop.</p>' +
+          '<button class="btn pri" data-fcnew="sale">' + I('plus') + 'New Invoice</button>') + '</div>');
 };
 
 LIST.exportCsv = function () {
   var rows = [['Invoice', 'Date', 'Shop', 'Owner', 'Region', 'Warehouse', 'Items', 'Bags', 'Subtotal',
                'Discount', 'Charges', 'Grand total', 'Paid', 'Balance', 'Status']];
-  ERP.Invoices.all().filter(matches).forEach(function (i) {
+  LIST.results().forEach(function (i) {
     rows.push([i.invoiceNumber || 'DRAFT', i.invoiceDate, i.shopNameSnapshot, i.customerNameSnapshot,
       i.regionSnapshot, i.warehouseSnapshot, i.lineCount, i.totalQty,
       M.toR(i.subtotal), M.toR(i.discountAmount),
@@ -9339,6 +9671,74 @@ PANELS.refund = {
   }
 };
 
+/* Change shop — the invoice was made out to the wrong shop. Everything else on
+   it stays; the account entry (and any money taken with it) moves. The rules
+   for what may move live in Invoices.reassignCheck / changeCustomer. */
+var CHANGESHOP_FOR = null, CHANGESHOP_AREA = '';
+function changeShopCandidates(inv) {
+  return customersInAreaFor(CHANGESHOP_AREA).filter(function (c) { return c.id !== inv.customerId; });
+}
+/* deliberately starts on a blank choice: on a money screen the shop must be
+   picked, never silently defaulted to whichever one sorts first */
+function changeShopOptionsHtml(custs) {
+  if (!custs.length) return '<option value="" disabled selected>No other shops in this area</option>';
+  return '<option value="" selected>— choose the correct shop —</option>' + custs.map(function (c) {
+    return '<option value="' + esc(c.id) + '">' + esc(c.sh) + (c.legacyCode ? ' · ' + esc(c.legacyCode) : '') + '</option>';
+  }).join('');
+}
+/* what the move does to the chosen shop's balance — the invoice total less
+   whatever was received with it, since that receipt moves too */
+function changeShopBalanceHtml(inv, plan, newId) {
+  var c = newId ? global.custBy(newId) : null;
+  if (!c) return I('wallet') + '<div><p>Choose a shop to see how its balance changes.</p></div>';
+  var net = inv.grandTotal - plan.payments.reduce(function (a, p) { return a + p.amount; }, 0);
+  var now = ERP.Ledger.customerBalance(c.id);
+  return I('wallet') + '<div><p><b>' + esc(c.sh) + '</b> balance: ' + M.fmt(now) + ' → <b>' + M.fmt(now + net) + '</b></p></div>';
+}
+PANELS.changeshop = {
+  t: 'Change shop', s: 'Move this invoice to a different shop — nothing else on it changes',
+  cta: 'Move invoice',
+  f: function () {
+    var inv = ERP.Invoices.byId(CHANGESHOP_FOR);
+    if (!inv) return '<div class="banner warn">' + I('alert') + '<div><b>Invoice not found</b></div></div>';
+    if (ERP.Can && !ERP.Can('TRANSACTION_CORRECT'))
+      return '<div class="banner warn">' + I('lock') + '<div><b>Not available for the ' + esc(ERP.RBAC.label()) +
+        ' role</b><p>Moving an invoice between shops changes two accounts. Ask the owner, a manager or the accountant.</p></div></div>';
+    var plan = ERP.Invoices.reassignCheck(inv.id);
+    if (plan.errs.length)
+      return '<div class="banner warn">' + I('alert') + '<div><b>This invoice cannot be moved</b>' +
+        plan.errs.map(function (m) { return '<p>' + esc(m) + '</p>'; }).join('') + '</div></div>';
+    CHANGESHOP_AREA = '';
+    var net = inv.grandTotal - plan.payments.reduce(function (a, p) { return a + p.amount; }, 0);
+    var oldBal = ERP.Ledger.customerBalance(inv.customerId);
+    return '<div class="banner info">' + I('doc') + '<div><b>' + esc(inv.invoiceNumber || 'Draft') + ' · ' + M.fmt(inv.grandTotal) +
+        '</b><p>Now billed to <b>' + esc(inv.shopNameSnapshot || '—') + '</b>. ' + esc(inv.shopNameSnapshot || 'That shop') +
+        ' balance: ' + M.fmt(oldBal) + ' → <b>' + M.fmt(oldBal - net) + '</b>.</p>' +
+        (plan.payments.length ? '<p>Moves with it: ' + plan.payments.map(function (p) {
+          return esc(p.receiptNumber) + ' (' + M.fmt(p.amount) + ')'; }).join(', ') + '.</p>' : '') +
+        '<p class="hint">Lines, amounts, stock, the invoice number and the date stay exactly as they are.</p></div></div>' +
+      '<label class="f"><span>Area</span><select data-f="area" id="fcCsArea">' + areaSelectOptionsFor('') + '</select></label>' +
+      '<label class="f"><span>Correct shop</span><select data-f="cust" id="fcCsShop">' +
+        changeShopOptionsHtml(changeShopCandidates(inv)) + '</select></label>' +
+      '<div class="banner info" id="fcCsBal">' + changeShopBalanceHtml(inv, plan, '') + '</div>' +
+      '<label class="f"><span>Reason</span><input data-f="reason" maxlength="200" ' +
+        'placeholder="e.g. picked the wrong shop — recorded in the audit log"></label>';
+  },
+  save: function (v) {
+    var pre = ERP.Invoices.reassignCheck(CHANGESHOP_FOR);
+    if (pre.errs.length) return esc(pre.errs[0]);
+    var chk = ERP.Invoices.reassignCheck(CHANGESHOP_FOR, v.cust || '');
+    if (chk.errs.length) return esc(chk.errs[0]);
+    ERP.Invoices.changeCustomer(CHANGESHOP_FOR, v.cust, { reason: v.reason }).then(function (inv) {
+      global.paint();
+      say(esc(inv.invoiceNumber) + ' now belongs to ' + esc(inv.shopNameSnapshot) + '.');
+    }).catch(function (e) {
+      say(e && e.validation ? e.validation[0] : 'The invoice could not be moved. Nothing was changed.');
+    });
+    return { msg: 'Moving invoice…' };
+  }
+};
+
 PANELS.creditnote = {
   t: 'Customer return', s: 'Bags coming back from a shop — as many products as needed',
   cta: 'Post return & credit note',
@@ -9644,6 +10044,7 @@ D.addEventListener('click', function (e) {
     else if (act === 'wa') ERP.Viewer.whatsapp();
     else if (act === 'sms') ERP.Viewer.sms();
     else if (act === 'edit') { var m = ERP.Viewer.current; ERP.Viewer.close(); editInvoice(m.entityId); }
+    else if (act === 'changeshop') { var m6 = ERP.Viewer.current; ERP.Viewer.close(); changeInvoiceShop(m6.entityId); }
     else if (act === 'dup') { var m2 = ERP.Viewer.current; ERP.Viewer.close(); duplicateInvoice(m2.entityId); }
     else if (act === 'pay') { var m3 = ERP.Viewer.current; ERP.Viewer.close();
       PAY_FOR = (ERP.Invoices.byId(m3.entityId) || {}).customerId; global.openPanel('payment'); }
@@ -9684,6 +10085,7 @@ D.addEventListener('click', function (e) {
       return;
     }
     if (a === 'exportcsv') { ERP.InvoiceList.exportCsv(); return; }
+    if (a === 'invclear') { ERP.InvoiceList.reset(); global.paint(); return; }
     if (a === 'backup') { doBackup(); return; }
     if (a === 'exportbiz') { exportBusinessCsv(); return; }
     if (a === 'savesettings') { saveSettingsForm(); return; }
@@ -9713,6 +10115,10 @@ D.addEventListener('click', function (e) {
     return;
   }
 
+  /* invoice list paging */
+  var pg = h('[data-fcpage]');
+  if (pg) { e.preventDefault(); if (!pg.disabled) ERP.InvoiceList.goPage(pg.dataset.fcpage); return; }
+
   /* invoice list row actions */
   var ia = h('[data-fcinv]');
   if (ia) {
@@ -9721,6 +10127,7 @@ D.addEventListener('click', function (e) {
     if (what === 'view') ERP.Viewer.open(ERP.DocModel.invoice(id));
     else if (what === 'word') { ERP.Viewer.current = ERP.DocModel.invoice(id); ERP.Viewer.word(); }
     else if (what === 'edit') editInvoice(id);
+    else if (what === 'changeshop') changeInvoiceShop(id);
     else if (what === 'dup') duplicateInvoice(id);
     else if (what === 'pay') { PAY_FOR = (ERP.Invoices.byId(id) || {}).customerId; global.openPanel('payment'); }
     else if (what === 'return') { RETURN_FOR = id; global.openPanel('creditnote'); }
@@ -9745,7 +10152,7 @@ D.addEventListener('click', function (e) {
 D.addEventListener('input', function (e) {
   var el = e.target;
   if (el.id === 'fcbPick') { B.pickerQuery = el.value; B.pickerOpen = true; ERP.BuilderRender.results(); return; }
-  if (el.dataset.fcq !== undefined) { ERP.InvoiceList.q = el.value; repaintList(); return; }
+  if (el.dataset.fcq !== undefined) { ERP.InvoiceList.q = el.value; ERP.InvoiceList.page = 1; repaintList(); return; }
   if (el.dataset.fcline) {
     var ix = +el.dataset.ix, k = el.dataset.fcline;
     if (!B.draft || !B.draft.items[ix]) return;
@@ -9798,7 +10205,11 @@ D.addEventListener('change', function (e) {
     ERP.BuilderRender.lines(); return;
   }
   if (el.dataset.fcretcond && B.draft === null) { return; }
-  if (el.dataset.fcfil) { ERP.InvoiceList[el.dataset.fcfil] = el.value; repaintList(); return; }
+  if (el.dataset.fcfil) {
+    ERP.InvoiceList[el.dataset.fcfil] = el.value;
+    if (el.dataset.fcfil !== 'sort') ERP.InvoiceList.page = 1;    /* a new order keeps its place; a new filter starts over */
+    repaintList(); return;
+  }
   if (el.id === 'fcPayCust') {
     var box = D.getElementById('fcPayBal');
     if (box) box.innerHTML = I('wallet') + '<div><p>Outstanding balance: <b>' +
@@ -9847,6 +10258,23 @@ D.addEventListener('change', function (e) {
         rbbox.innerHTML = payBalanceHtml(ropts);
       }
     }
+    return;
+  }
+  if (el.id === 'fcCsArea' || el.id === 'fcCsShop') {
+    var csInv = ERP.Invoices.byId(CHANGESHOP_FOR);
+    if (!csInv) return;
+    if (el.id === 'fcCsArea') {
+      CHANGESHOP_AREA = el.value;
+      var csShop = D.getElementById('fcCsShop');
+      if (csShop) {
+        var csOpts = changeShopCandidates(csInv);
+        csShop.disabled = !csOpts.length;
+        csShop.innerHTML = changeShopOptionsHtml(csOpts);
+      }
+    }
+    var csBox = D.getElementById('fcCsBal');
+    if (csBox) csBox.innerHTML = changeShopBalanceHtml(csInv, ERP.Invoices.reassignCheck(csInv.id),
+      (D.getElementById('fcCsShop') || {}).value);
     return;
   }
   if (el.id === 'fcPayMode') { renderAllocList(); return; }
@@ -9956,6 +10384,14 @@ function editInvoice(id) {
   d.id = inv.id; d.clientOpId = inv.clientOpId; d.revision = inv.revision || 0; d.existing = true;
   B.start('sale', d);
 }
+function changeInvoiceShop(id) {
+  var inv = ERP.Invoices.byId(id);
+  if (!inv) { say('Invoice not found.'); return; }
+  if (inv.status === 'CANCELLED') { say('A cancelled invoice cannot be moved to another shop.'); return; }
+  if (inv.status === 'DRAFT') { say('This invoice is still a draft — edit it and pick the other shop.'); return; }
+  CHANGESHOP_FOR = id;
+  global.openPanel('changeshop');
+}
 function duplicateInvoice(id) {
   var d = ERP.Invoices.duplicate(id);
   if (!d) { say('Invoice not found.'); return; }
@@ -9971,7 +10407,7 @@ function cancelInvoice(id) {
   }).catch(function () { say('The invoice could not be cancelled.'); });
 }
 ERP.actions = { editInvoice: editInvoice, duplicateInvoice: duplicateInvoice, cancelInvoice: cancelInvoice,
-                backup: doBackup };
+                changeInvoiceShop: changeInvoiceShop, backup: doBackup };
 
 /* ══════════════════════════════════════════════════════════════════════════
    PATCHES — point the existing screens at the new database
@@ -16984,6 +17420,24 @@ var Health = ERP.Health = {
     return { checked: Math.min(300, (global.SUPPLIERS || []).length), mismatches: bad, ok: !bad.length };
   },
 
+  /* A receipt applied to an invoice has to be that same shop's money. An older
+     build let the invoice edit screen change an invoice's shop while its
+     receipts stayed behind, leaving the two shops' accounts out by the amount.
+     "Change shop" now moves them together; this finds any left from before. */
+  allocationCheck: function () {
+    var bad = [];
+    (S.allocations || []).forEach(function (a) {
+      if (!a.invoiceId) return;
+      var inv = ERP.Invoices.byId(a.invoiceId), p = ERP.Payments.byId(a.paymentId);
+      if (!inv || !p || p.status === 'REVERSED' || inv.status === 'CANCELLED') return;
+      if (p.partyId !== inv.customerId) {
+        bad.push({ invoice: inv.invoiceNumber, invoiceShop: inv.shopNameSnapshot,
+                   receipt: p.receiptNumber, receiptShop: p.partyNameSnapshot, amount: a.amount });
+      }
+    });
+    return { checked: (S.allocations || []).length, mismatches: bad, ok: !bad.length };
+  },
+
   /* the January question, asked of the system itself */
   dateLeakCheck: function () {
     var c = (global.CUSTOMERS || [])[0];
@@ -17021,6 +17475,7 @@ var Health = ERP.Health = {
     var sled = Health.supplierLedgerCheck();
     var leak = Health.dateLeakCheck();
     var sleak = Health.supplierDateLeakCheck();
+    var alloc = Health.allocationCheck();
     var backups = Migration.backups();
     var counts = countStores();
     counts.areas = (global.REGIONS || []).length;
@@ -17040,11 +17495,14 @@ var Health = ERP.Health = {
       },
       backups: backups,
       lastBackup: backups.length ? backups[0].createdAt : null,
-      inventory: inv, ledger: led, dateLeak: leak,
+      inventory: inv, ledger: led, dateLeak: leak, allocations: alloc,
       notes: Health.notes,
       warnings: []
         .concat(inv.ok ? [] : [inv.mismatches.length + ' stock rows do not match their movement history'])
         .concat(led.ok ? [] : [led.mismatches.length + ' customer balances do not add up'])
+        .concat(alloc.ok ? [] : [alloc.mismatches.length + ' receipts are applied to an invoice that belongs to a different shop (' +
+          alloc.mismatches.slice(0, 3).map(function (m) { return m.receipt + ' → ' + m.invoice; }).join(', ') +
+          (alloc.mismatches.length > 3 ? ', …' : '') + ')'])
         .concat(sled.ok ? [] : [sled.mismatches.length + ' supplier balances do not add up'])
         .concat(leak.ok ? [] : ['A dated customer statement is including transactions from after its end date'])
         .concat(sleak.ok ? [] : ['A dated supplier statement is including transactions from after its end date'])
@@ -22573,6 +23031,1739 @@ D.addEventListener('click', function (e) {
     if (close) { e.preventDefault(); PR.selectedId = null; global.paint(); return; }
   });
 })(typeof window !== 'undefined' ? window : this);
+
+</script>
+<script>/* ── 31-auth.js · AUTH — server-checked accounts, sessions and permissions (Phase 2: observe mode) ── */
+/* ══════════════════════════════════════════════════════════════════════════
+   FAROOQ & CO TRADERS — ERP UPGRADE · MODULE 31
+   SERVER-SIDE AUTHENTICATION
+   Module 22 gave every account a name and a role, but nothing made signing
+   in mandatory, the PIN was a hand-rolled hash anyone with devtools could
+   read past, and a role was only ever a setting this device chose to honour.
+   This module adds a real account on a real server: a bcrypt password, a
+   session the server can revoke, and a permission list the server — not
+   this browser — decides.
+
+   PHASED ROLLOUT (see docs/OPERATIONS.md and the auth project plan):
+     Phase 2 (this file, AUTH_MODE = 'observe'): a server account, once
+       signed into, becomes the source of truth for identity and
+       permissions — but nobody is forced to sign in yet, and the app keeps
+       rendering exactly as before if the API is unreachable or nobody has
+       signed in with a server account. Nothing that worked yesterday stops
+       working today.
+     Phase 3 (flip AUTH_MODE to 'enforce', a one-line change once Phase 2
+       has run clean for a few days): rendering itself is gated on a valid
+       session, and the app files move behind index.php/erp.php.
+
+   OFFLINE GRACE PERIOD: the ERP is used on shop-floor devices that lose
+   signal. A successful online sign-in returns a short-lived signed ticket
+   (see api/_session.php make_offline_ticket) good for
+   CFG.offline_grace_hours. While that ticket is unexpired, this module
+   trusts the role/permissions it carries without asking the server again.
+   This module cannot verify the ticket's HMAC signature itself — the
+   secret that signs it never reaches the browser — so an expiry check on
+   the ticket's own claimed `exp` is what actually gates re-use, not proof
+   the ticket is untampered. That is the same honest limit as everywhere
+   else client-side state is trusted (see 22-users.js's own PIN comment):
+   it raises the cost of tampering, it does not remove the device from the
+   trust boundary.
+   ══════════════════════════════════════════════════════════════════════════ */
+(function (global) {
+'use strict';
+var ERP = global.ERP; if (!ERP) return;
+var D = global.document;
+if (!D) return;
+
+var AUTH_MODE = 'observe';           /* 'observe' | 'enforce' — see header */
+var API_BASE = 'api/auth/';
+var TICKET_KEY = 'farooqco_auth_ticket';
+var IDLE_MS_DEFAULT = 15 * 60 * 1000;
+
+function esc(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function say(m) { return global.say ? global.say(m) : null; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   STATE
+   ══════════════════════════════════════════════════════════════════════════ */
+var Auth = ERP.Auth = {
+  mode: AUTH_MODE,
+  IDLE_MS: IDLE_MS_DEFAULT,
+  identity: null,        /* { id, username, displayName } once signed in server-side */
+  role: null,
+  permissions: null,      /* array; ['*'] means "all", matching the API */
+  csrf: null,
+  online: true,
+  locked: false,
+  _idleTimer: null
+};
+
+function api(path) {
+  /* relative, not absolute — same-origin whether served from the ERP root
+     or through the base64 srcdoc launcher, which inherits that origin */
+  return API_BASE + path;
+}
+
+var REQUEST_TIMEOUT_MS = 4000;    /* bounds how long a dead/slow connection can stall a call —
+                                      without this, a shop with no signal waits on the OS's own
+                                      DNS/connect timeout (which can be much longer) before this
+                                      module falls back to the offline ticket. */
+
+function request(path, opts) {
+  opts = opts || {};
+  try {
+    if (typeof global.fetch !== 'function') return Promise.reject(new Error('fetch unavailable'));
+    var headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+    if (Auth.csrf && opts.method && opts.method !== 'GET') headers['X-CSRF-Token'] = Auth.csrf;
+    var fetchOpts = {
+      method: opts.method || 'GET',
+      credentials: 'same-origin',
+      headers: headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined
+    };
+    if (typeof global.AbortSignal !== 'undefined' && global.AbortSignal.timeout) {
+      fetchOpts.signal = global.AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+    }
+    return global.fetch(api(path), fetchOpts).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (data) {
+        return { ok: res.status, status: res.status, data: data };
+      });
+    });
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
+function hasPerm(perm) {
+  if (!Auth.permissions) return null;               /* no server identity — caller should fall back */
+  if (Auth.permissions.indexOf('*') > -1) return true;
+  return Auth.permissions.indexOf(perm) > -1;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   OFFLINE TICKET
+   ══════════════════════════════════════════════════════════════════════════ */
+function decodeTicketPayload(ticket) {
+  if (!ticket || ticket.indexOf('.') === -1) return null;
+  var b64 = ticket.split('.')[0];
+  try {
+    var pad = b64.length % 4 ? '='.repeat(4 - (b64.length % 4)) : '';
+    var std = b64.replace(/-/g, '+').replace(/_/g, '/') + pad;
+    var json = (global.atob || function (s) { return Buffer.from(s, 'base64').toString('binary'); })(std);
+    /* atob returns a binary string; decode UTF-8 bytes back to text */
+    var bytes = [];
+    for (var i = 0; i < json.length; i++) bytes.push(json.charCodeAt(i));
+    var text = (typeof TextDecoder !== 'undefined')
+      ? new TextDecoder('utf-8').decode(new Uint8Array(bytes))
+      : json;
+    return JSON.parse(text);
+  } catch (e) { return null; }
+}
+
+function storeTicket(ticket) {
+  try { global.localStorage.setItem(TICKET_KEY, JSON.stringify({ ticket: ticket, savedAt: Date.now() })); }
+  catch (e) {}
+}
+function loadTicket() {
+  try {
+    var raw = global.localStorage.getItem(TICKET_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
+}
+function clearTicket() {
+  try { global.localStorage.removeItem(TICKET_KEY); } catch (e) {}
+  try { global.localStorage.removeItem(VERIFIER_KEY); } catch (e) {}
+}
+
+/* ── offline password verifier ────────────────────────────────────────────
+   The idle lock (below) has to be releasable with no connection, or a grace
+   period that only works while online isn't a grace period. There is no way
+   to check a password offline without storing *something* derived from it,
+   so a salted PBKDF2 hash is kept alongside the ticket and discarded with
+   it. This is exactly as strong, and exactly as limited, as the ticket
+   itself — see the module header. */
+var VERIFIER_KEY = 'farooqco_auth_verifier';
+var PBKDF2_ITERATIONS = 200000;
+
+function bytesToB64(bytes) {
+  var bin = '';
+  for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return global.btoa(bin);
+}
+function b64ToBytes(b64) {
+  var bin = global.atob(b64);
+  var bytes = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+function deriveHash(password, saltBytes) {
+  var subtle = global.crypto && global.crypto.subtle;
+  if (!subtle) return Promise.resolve(null);
+  var enc = new TextEncoder();
+  return subtle.importKey('raw', enc.encode(password), { name: 'PBKDF2' }, false, ['deriveBits'])
+    .then(function (key) {
+      return subtle.deriveBits(
+        { name: 'PBKDF2', salt: saltBytes, iterations: PBKDF2_ITERATIONS, hash: 'SHA-256' },
+        key, 256
+      );
+    })
+    .then(function (bits) { return bytesToB64(new Uint8Array(bits)); });
+}
+function storeVerifier(password) {
+  var subtle = global.crypto && global.crypto.subtle;
+  if (!subtle || !global.crypto.getRandomValues) return Promise.resolve();
+  var salt = global.crypto.getRandomValues(new Uint8Array(16));
+  return deriveHash(password, salt).then(function (hashB64) {
+    if (!hashB64) return;
+    try {
+      global.localStorage.setItem(VERIFIER_KEY, JSON.stringify({ saltB64: bytesToB64(salt), hashB64: hashB64 }));
+    } catch (e) {}
+  });
+}
+function checkVerifier(password) {
+  var raw;
+  try { raw = global.localStorage.getItem(VERIFIER_KEY); } catch (e) { raw = null; }
+  if (!raw) return Promise.resolve(false);
+  var rec;
+  try { rec = JSON.parse(raw); } catch (e) { return Promise.resolve(false); }
+  if (!rec || !rec.saltB64 || !rec.hashB64) return Promise.resolve(false);
+  return deriveHash(password, b64ToBytes(rec.saltB64)).then(function (hashB64) {
+    return !!hashB64 && hashB64 === rec.hashB64;
+  });
+}
+
+/** A valid, unexpired cached ticket, or null. */
+function validCachedTicket() {
+  var rec = loadTicket();
+  if (!rec || !rec.ticket) return null;
+  var payload = decodeTicketPayload(rec.ticket);
+  if (!payload || !payload.exp) return null;
+  if (payload.exp * 1000 < Date.now()) return null;
+  return payload;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   IDENTITY APPLICATION — this is what "becomes the source of truth" means
+   ══════════════════════════════════════════════════════════════════════════ */
+function applyIdentity(resp) {
+  Auth.identity = resp.user;
+  Auth.role = resp.role;
+  Auth.permissions = resp.permissions || [];
+  Auth.csrf = resp.csrf || null;
+  Auth.mustChangePassword = !!resp.mustChangePassword;
+  if (resp.offlineTicket) storeTicket(resp.offlineTicket);
+
+  if (ERP.Session) {
+    ERP.Session.name = function () { return Auth.identity ? Auth.identity.displayName : 'Owner'; };
+    ERP.Session.role = function () { return Auth.role || 'OWNER'; };
+    ERP.Session.id = function () { return Auth.identity ? Auth.identity.id : null; };
+  }
+  if (ERP.RBAC) {
+    ERP.RBAC.can = function (perm) {
+      var v = hasPerm(perm);
+      return v === null ? false : v;                 /* fail CLOSED once a server identity exists */
+    };
+    ERP.RBAC.label = function () { return Auth.role || ''; };
+  }
+  try { global.CURRENT_USER = Auth.identity ? Auth.identity.displayName : global.CURRENT_USER; } catch (e) {}
+}
+
+function applyFromTicket(payload) {
+  Auth.identity = Auth.identity || { id: payload.uid, username: '', displayName: Auth.identity && Auth.identity.displayName || global.CURRENT_USER || 'Owner' };
+  Auth.role = payload.role;
+  Auth.permissions = payload.perms || [];
+  if (ERP.Session) {
+    ERP.Session.role = function () { return Auth.role || 'OWNER'; };
+    ERP.Session.id = function () { return Auth.identity ? Auth.identity.id : null; };
+  }
+  if (ERP.RBAC) {
+    ERP.RBAC.can = function (perm) {
+      var v = hasPerm(perm);
+      return v === null ? false : v;
+    };
+  }
+}
+
+function clearIdentity() {
+  Auth.identity = null; Auth.role = null; Auth.permissions = null; Auth.csrf = null;
+  clearTicket();
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   PUBLIC API
+   ══════════════════════════════════════════════════════════════════════════ */
+Auth.login = function (username, password) {
+  return request('login.php', { method: 'POST', body: { username: username, password: password } })
+    .then(function (r) {
+      if (r.status !== 200) {
+        var msg = (r.data && r.data.error) || 'Could not sign in.';
+        return Promise.reject({ validation: [msg], status: r.status });
+      }
+      Auth.online = true;
+      applyIdentity(r.data);
+      startIdleWatch();
+      return storeVerifier(password).then(function () {
+        try { global.paint(); } catch (e) {}
+        if (Auth.mustChangePassword) openChangePw(true);
+        return r.data;
+      });
+    });
+};
+
+Auth.logout = function () {
+  return request('logout.php', { method: 'POST' }).catch(function () { /* best effort */ })
+    .then(function () {
+      clearIdentity();
+      stopIdleWatch();
+      try { global.paint(); } catch (e) {}
+    });
+};
+
+Auth.changePassword = function (currentPassword, newPassword) {
+  return request('change-password.php', {
+    method: 'POST', body: { currentPassword: currentPassword, newPassword: newPassword }
+  }).then(function (r) {
+    if (r.status !== 200) {
+      var msg = (r.data && r.data.error) || (r.data && r.data.validation && r.data.validation[0]) || 'Could not change the password.';
+      return Promise.reject({ validation: [msg] });
+    }
+    Auth.mustChangePassword = false;
+    /* the offline verifier was derived from the old password — a fresh
+       online sign-in is needed before it can be trusted again, so it's
+       safer to drop it now than to leave a verifier that no longer matches
+       what unlocks the account */
+    try { global.localStorage.removeItem(VERIFIER_KEY); } catch (e) {}
+    return r.data;
+  });
+};
+
+Auth.can = function (perm) {
+  var v = hasPerm(perm);
+  return v === null ? null : v;
+};
+
+/** Called on boot and can be called again any time connectivity is regained. */
+Auth.refresh = function () {
+  return request('me.php').then(function (r) {
+    if (r.status === 200) {
+      Auth.online = true;
+      applyIdentity(r.data);
+      return true;
+    }
+    if (r.status === 401) {
+      /* server reachable, no session — an offline ticket doesn't apply here,
+         a live "not signed in" answer is authoritative */
+      Auth.online = true;
+      clearIdentity();
+      return false;
+    }
+    throw new Error('unexpected status ' + r.status);
+  }).catch(function () {
+    /* unreachable — fall back to the offline ticket if one is still valid */
+    Auth.online = false;
+    var payload = validCachedTicket();
+    if (payload) { applyFromTicket(payload); return true; }
+    clearIdentity();
+    return false;
+  });
+};
+
+/* ══════════════════════════════════════════════════════════════════════════
+   IDLE LOCK — only engages once a server identity is active, so it never
+   affects anyone still solely on the module-22 PIN system (Phase 2).
+   ══════════════════════════════════════════════════════════════════════════ */
+function startIdleWatch() {
+  stopIdleWatch();
+  var reset = function () {
+    if (Auth._idleTimer) global.clearTimeout(Auth._idleTimer);
+    Auth._idleTimer = global.setTimeout(lockScreen, Auth.IDLE_MS);
+  };
+  Auth._resetIdle = reset;
+  ['click', 'keydown', 'touchstart', 'mousemove'].forEach(function (ev) {
+    D.addEventListener(ev, reset, true);
+  });
+  reset();
+}
+function stopIdleWatch() {
+  if (Auth._idleTimer) global.clearTimeout(Auth._idleTimer);
+  Auth._idleTimer = null;
+  if (Auth._resetIdle) {
+    ['click', 'keydown', 'touchstart', 'mousemove'].forEach(function (ev) {
+      D.removeEventListener(ev, Auth._resetIdle, true);
+    });
+    Auth._resetIdle = null;
+  }
+}
+function lockScreen() {
+  if (!Auth.identity) return;
+  Auth.locked = true;
+  renderLock();
+}
+function unlockWith(password) {
+  var username = Auth.identity ? Auth.identity.username : '';
+  var finish = function () {
+    Auth.locked = false;
+    var el = D.getElementById('fcAuthLock');
+    if (el) el.classList.remove('on');
+  };
+  if (Auth.online) {
+    /* prefer a real server check — it also refreshes the session and ticket */
+    return Auth.login(username, password).then(finish);
+  }
+  /* offline: the only check available is the local verifier, and only for
+     as long as the cached ticket itself hasn't expired */
+  var payload = validCachedTicket();
+  if (!payload) {
+    return Promise.reject({ validation: ['The offline sign-in window has expired. Connect to the internet to continue.'] });
+  }
+  return checkVerifier(password).then(function (ok) {
+    if (!ok) return Promise.reject({ validation: ['That password is not right.'] });
+    applyFromTicket(payload);
+    finish();
+  });
+}
+
+var LOCK_CSS = `
+#fcAuthLock{position:fixed;inset:0;z-index:200;display:none;align-items:center;justify-content:center;
+  padding:16px;background:rgba(12,10,20,.72);backdrop-filter:blur(4px)}
+#fcAuthLock.on{display:flex}
+#fcAuthLock .box{max-width:360px;width:100%;background:var(--surface);border-radius:16px;padding:22px;
+  text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+#fcAuthLock input{width:100%;padding:10px;border:1.5px solid var(--line);border-radius:var(--r-sm);
+  margin-top:14px;text-align:center;font-size:16px}
+#fcAuthLock .err{color:#C0392B;font-size:12.5px;margin-top:8px;min-height:16px}
+`;
+(function () { var s = D.createElement('style'); s.id = 'fc-authlock-css'; s.textContent = LOCK_CSS; D.head.appendChild(s); })();
+
+function renderLock() {
+  var host = D.getElementById('fcAuthLock');
+  if (!host) { host = D.createElement('div'); host.id = 'fcAuthLock'; D.body.appendChild(host); }
+  var name = Auth.identity ? Auth.identity.displayName : '';
+  host.innerHTML =
+    '<div class="box"><b>' + esc(name) + ', you have been idle</b>' +
+    '<p style="color:var(--muted);font-size:13px">Enter your password to keep going.</p>' +
+    '<input id="fcLockPw" type="password" placeholder="Password" autocomplete="off">' +
+    '<div class="err" id="fcLockErr"></div>' +
+    '<button class="btn pri" id="fcLockGo" style="width:100%;margin-top:10px">Unlock</button>' +
+    '<button class="btn" id="fcLockOut" style="width:100%;margin-top:8px">Sign out instead</button></div>';
+  host.classList.add('on');
+  var pw = D.getElementById('fcLockPw');
+  setTimeout(function () { pw && pw.focus(); }, 20);
+}
+
+D.addEventListener('click', function (e) {
+  if (!e.target.closest) return;
+  if (e.target.id === 'fcLockGo') {
+    var pw = D.getElementById('fcLockPw');
+    unlockWith(pw ? pw.value : '').catch(function (err) {
+      var el = D.getElementById('fcLockErr');
+      if (el) el.textContent = (err && err.validation && err.validation[0]) || 'Could not unlock.';
+      if (pw) { pw.value = ''; pw.focus(); }
+    });
+  }
+  if (e.target.id === 'fcLockOut') {
+    Auth.logout().then(function () {
+      var el = D.getElementById('fcAuthLock');
+      if (el) el.classList.remove('on');
+    });
+  }
+}, true);
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SERVER SIGN-IN ENTRY POINT
+   A small, self-contained overlay alongside the module-22 PIN dialog rather
+   than rewritten into it — Phase 3 retires the PIN dialog entirely, so this
+   is deliberately not entangled with it.
+   ══════════════════════════════════════════════════════════════════════════ */
+var FORM_CSS = `
+#fcServerAuth{position:fixed;inset:0;z-index:190;display:none;align-items:center;justify-content:center;
+  padding:16px;background:rgba(12,10,20,.55)}
+#fcServerAuth.on{display:flex}
+#fcServerAuth .box{max-width:360px;width:100%;background:var(--surface);border-radius:16px;padding:20px}
+#fcServerAuth input{width:100%;padding:10px;border:1.5px solid var(--line);border-radius:var(--r-sm);margin-top:10px}
+#fcServerAuth .err{color:#C0392B;font-size:12.5px;margin-top:8px;min-height:16px}
+#fcCompanyLink{font-size:12px;color:var(--muted);background:none;border:none;cursor:pointer;text-decoration:underline;padding:4px}
+`;
+(function () { var s = D.createElement('style'); s.id = 'fc-serverauth-css'; s.textContent = FORM_CSS; D.head.appendChild(s); })();
+
+function openServerAuth() {
+  var host = D.getElementById('fcServerAuth');
+  if (!host) { host = D.createElement('div'); host.id = 'fcServerAuth'; D.body.appendChild(host); }
+  host.innerHTML =
+    '<div class="box"><b>Company account sign-in</b>' +
+    '<p style="color:var(--muted);font-size:13px">This account works from any device and is checked by the server.</p>' +
+    '<input id="fcAuthUser" placeholder="Username" autocomplete="username">' +
+    '<input id="fcAuthPass" type="password" placeholder="Password" autocomplete="current-password">' +
+    '<div class="err" id="fcAuthErr"></div>' +
+    '<button class="btn pri" id="fcAuthGo" style="width:100%;margin-top:10px">Sign in</button>' +
+    '<button class="btn" id="fcAuthCancel" style="width:100%;margin-top:8px">Cancel</button></div>';
+  host.classList.add('on');
+}
+function closeServerAuth() {
+  var h = D.getElementById('fcServerAuth');
+  if (h) { h.classList.remove('on'); h.innerHTML = ''; }
+}
+
+D.addEventListener('click', function (e) {
+  if (!e.target.closest) return;
+  if (e.target.id === 'fcCompanyLink') { e.preventDefault(); openServerAuth(); return; }
+  if (e.target.id === 'fcAuthCancel') { closeServerAuth(); return; }
+  if (e.target.id === 'fcAuthGo') {
+    var u = D.getElementById('fcAuthUser'), p = D.getElementById('fcAuthPass');
+    Auth.login(u ? u.value : '', p ? p.value : '').then(function () {
+      closeServerAuth();
+      say('Signed in as ' + Auth.identity.displayName + '.');
+    }).catch(function (err) {
+      var el = D.getElementById('fcAuthErr');
+      if (el) el.textContent = (err && err.validation && err.validation[0]) || 'Could not sign in.';
+    });
+  }
+}, true);
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CHANGE PASSWORD
+   Reachable voluntarily via the link next to the account chip once signed
+   in, and shown automatically — with no way to dismiss it — when the
+   server says this account must change its password (set on the account
+   the owner bootstrap script creates, and whenever an owner resets someone
+   else's password from api/auth/users.php).
+   ══════════════════════════════════════════════════════════════════════════ */
+var PW_CSS = `
+#fcChangePw{position:fixed;inset:0;z-index:195;display:none;align-items:center;justify-content:center;
+  padding:16px;background:rgba(12,10,20,.6)}
+#fcChangePw.on{display:flex}
+#fcChangePw .box{max-width:360px;width:100%;background:var(--surface);border-radius:16px;padding:20px}
+#fcChangePw input{width:100%;padding:10px;border:1.5px solid var(--line);border-radius:var(--r-sm);margin-top:10px}
+#fcChangePw .err{color:#C0392B;font-size:12.5px;margin-top:8px;min-height:16px}
+#fcChangePw .ok{color:#1E7A34;font-size:12.5px;margin-top:8px;min-height:16px}
+#fcChangePwLink{font-size:12px;color:var(--muted);background:none;border:none;cursor:pointer;text-decoration:underline;padding:4px}
+`;
+(function () { var s = D.createElement('style'); s.id = 'fc-changepw-css'; s.textContent = PW_CSS; D.head.appendChild(s); })();
+
+function openChangePw(forced) {
+  var host = D.getElementById('fcChangePw');
+  if (!host) { host = D.createElement('div'); host.id = 'fcChangePw'; D.body.appendChild(host); }
+  host.dataset.forced = forced ? '1' : '';
+  host.innerHTML =
+    '<div class="box"><b>Change your password</b>' +
+    '<p style="color:var(--muted);font-size:13px">' +
+    (forced ? 'This account was set up with a temporary password. Choose your own before continuing.'
+            : 'You can change your password any time.') + '</p>' +
+    '<input id="fcPwCur" type="password" placeholder="Current password" autocomplete="current-password">' +
+    '<input id="fcPwNew" type="password" placeholder="New password (at least 8 characters)" autocomplete="new-password">' +
+    '<input id="fcPwConf" type="password" placeholder="Confirm new password" autocomplete="new-password">' +
+    '<div class="err" id="fcPwErr"></div><div class="ok" id="fcPwOk"></div>' +
+    '<button class="btn pri" id="fcPwGo" style="width:100%;margin-top:10px">Change password</button>' +
+    (forced ? '' : '<button class="btn" id="fcPwCancel" style="width:100%;margin-top:8px">Cancel</button>') +
+    '</div>';
+  host.classList.add('on');
+}
+function closeChangePw() {
+  var h = D.getElementById('fcChangePw');
+  if (h) { h.classList.remove('on'); h.innerHTML = ''; }
+}
+
+D.addEventListener('click', function (e) {
+  if (!e.target.closest) return;
+  if (e.target.id === 'fcChangePwLink') { e.preventDefault(); openChangePw(false); return; }
+  if (e.target.id === 'fcPwCancel') { closeChangePw(); return; }
+  if (e.target.id === 'fcPwGo') {
+    var cur = D.getElementById('fcPwCur'), nw = D.getElementById('fcPwNew'), conf = D.getElementById('fcPwConf');
+    var errEl = D.getElementById('fcPwErr'), okEl = D.getElementById('fcPwOk');
+    if (errEl) errEl.textContent = ''; if (okEl) okEl.textContent = '';
+    if (nw && conf && nw.value !== conf.value) { if (errEl) errEl.textContent = 'The new passwords do not match.'; return; }
+    if (nw && nw.value.length < 8) { if (errEl) errEl.textContent = 'The new password must be at least 8 characters.'; return; }
+    Auth.changePassword(cur ? cur.value : '', nw ? nw.value : '').then(function () {
+      if (okEl) okEl.textContent = 'Password changed.';
+      say('Password changed.');
+      setTimeout(closeChangePw, 700);
+    }).catch(function (err) {
+      if (errEl) errEl.textContent = (err && err.validation && err.validation[0]) || 'Could not change the password.';
+    });
+  }
+}, true);
+
+/* offer the link next to the existing sign-in chip, once it exists —
+   "Company sign-in" while nobody has a server identity, "Change password"
+   once someone does, never both. */
+function ensureCompanyLink() {
+  var chip = D.getElementById('fcUserChip');
+  if (!chip) return;
+  var signInBtn = D.getElementById('fcCompanyLink');
+  var pwBtn = D.getElementById('fcChangePwLink');
+  if (Auth.identity) {
+    if (signInBtn) signInBtn.remove();
+    if (!pwBtn) {
+      pwBtn = D.createElement('button');
+      pwBtn.id = 'fcChangePwLink';
+      pwBtn.textContent = 'Change password';
+      chip.parentNode.insertBefore(pwBtn, chip);
+    }
+  } else {
+    if (pwBtn) pwBtn.remove();
+    if (!signInBtn) {
+      signInBtn = D.createElement('button');
+      signInBtn.id = 'fcCompanyLink';
+      signInBtn.textContent = 'Company sign-in';
+      chip.parentNode.insertBefore(signInBtn, chip);
+    }
+  }
+}
+
+var origPaint = global.paint;
+if (typeof origPaint === 'function') {
+  global.paint = function () {
+    origPaint.apply(global, arguments);
+    try { ensureCompanyLink(); } catch (e) {}
+  };
+}
+
+/* test-only surface — exercised directly by test-auth-client.mjs, never
+   relied on by any other module or by the UI */
+Auth._internal = {
+  TICKET_KEY: TICKET_KEY, VERIFIER_KEY: VERIFIER_KEY,
+  decodeTicketPayload: decodeTicketPayload, validCachedTicket: validCachedTicket,
+  lockScreen: lockScreen, unlockWith: unlockWith,
+  startIdleWatch: startIdleWatch, stopIdleWatch: stopIdleWatch,
+  openChangePw: openChangePw, closeChangePw: closeChangePw
+};
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BOOT
+   ══════════════════════════════════════════════════════════════════════════ */
+(ERP.bootPromise || Promise.resolve()).then(function () {
+  return Auth.refresh().then(function (signedIn) {
+    if (signedIn) startIdleWatch();
+    try { global.paint(); } catch (e) {}
+    if (signedIn && Auth.mustChangePassword) openChangePw(true);
+  });
+}).catch(function () { /* observe mode: never block boot on this */ });
+
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>/* ── 32-milling.js · MILLING JOBS — toll milling: wheat out, flour + chokar back, net settled into the mill's khata ── */
+/* ══════════════════════════════════════════════════════════════════════════
+   MILLING JOBS — TOLL MILLING (wheat out, flour + chokar back)
+
+   Client request, analysed 2026-09-16 (clientNewReq/): Farooq & Co hand
+   wheat to a flour mill and get flour bags plus chokar (bran) back, with
+   some grain lost in grinding, and settle the difference in the mill's
+   own account — currently kept on a paper khata page with four columns:
+   تعداد (bags), وزن (weight), ریٹ (rate), رقم (amount). This is a second-hand
+   reading of that request (the referenced photo of the paper page was not
+   available), confirmed against the ERP's own data rather than guessed:
+   25 of 32 suppliers are flour mills, there is a "گندم 49 کلو" (wheat)
+   product and two "چوکر" (chokar/bran) products, and a supplier record is
+   literally named "Zam Zam chokar khata" carrying a running balance.
+
+     - A "Milling job": pick a mill (an existing supplier), list the wheat
+       issued and the flour/bran received back, each line in bags AND
+       kilograms (weight auto-fills from the product's existing bag-weight
+       field and stays editable for the real weighbridge figure).
+     - Process loss (issued weight − received weight) is calculated and
+       shown, never enforced — no saved yield recipes or conversion ratios.
+       Output heavier than input is refused (grinding cannot create mass);
+       a loss outside a rough 1–8% band is flagged, never blocked.
+     - The money settles into the mill's own existing supplier khata: wheat
+       issued reduces what is owed, flour/chokar received plus a milling
+       fee increase it — only the net difference moves the balance. A
+       "Grinding fee only" setting is also offered for the case where the
+       wheat never changes ownership and only a milling charge is owed.
+
+   Deliberately NOT built here (flagged for the client to specify before
+   any of this is attempted): saved yield recipes / expected conversion
+   ratios, an in-house (no-mill) production mode, editing a posted job
+   (only Cancel, which reverses the stock movements — same as every other
+   posted document in this app).
+
+   Its own pair of IndexedDB stores (01-db.js, DB_VER 11) — separate from
+   `purchases`/`stockDocs` because this is neither a purchase (the mill
+   doesn't sell the wheat back) nor a plain stock adjustment (it settles a
+   supplier balance). The financial side reuses the supplier's own khata
+   rather than a new ledger store — see the ERP.Ledger.supplier patch
+   below, which follows the same pattern 16-khata.js uses for customer
+   account adjustments.
+   ══════════════════════════════════════════════════════════════════════════ */
+(function (global) {
+  'use strict';
+  var ERP = global.ERP; if (!ERP) return;
+  var M = global.Money, FDB = global.FDB, D = global.document, S = ERP.S;
+  if (!M || !FDB || !S || !global.PAGES || !ERP.Ledger || !ERP.Inventory || !ERP.Settings) return;
+  var Inventory = ERP.Inventory, Audit = ERP.Audit;
+
+  S.millingJobs = S.millingJobs || [];
+  S.millingJobItems = S.millingJobItems || [];
+
+  (function injectCss() {
+    var s = D.createElement('style');
+    s.id = 'fc-milling-css';
+    s.textContent = '.fc-mill-lines input,.fc-mill-lines select{width:100%}' +
+      'table.tbl .sub{font-size:12px;color:var(--muted);margin-top:1px}' +
+      'table.tbl td.c,table.tbl th.c{text-align:center}';
+    D.head.appendChild(s);
+  })();
+
+  function esc(s) {
+    return String(s === null || s === undefined ? '' : s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+  function I(n) { return global.icon ? global.icon(n) : ''; }
+  function say(m) { try { global.say(m); } catch (e) {} }
+  function fmtDate(d) { return global.fmtDate ? global.fmtDate(d) : d; }
+  function nowISO() { return new Date().toISOString(); }
+  function today() { return global.FC_TODAY ? global.FC_TODAY() : new Date().toISOString().slice(0, 10); }
+  function pill(cls, label) { return global.pill ? global.pill(cls, label) : esc(label); }
+  function whName(id) { return global.whName ? global.whName(id) : id; }
+  function prodOf(id) { return (global.prodOf && global.prodOf(id)) || null; }
+  function currentUser() { return global.CURRENT_USER || 'Owner'; }
+  function can(p) { return ERP.Can ? ERP.Can(p) : true; }
+  function qtyFmt(q) { return Number(q).toLocaleString('en-US'); }
+  function activeProducts() {
+    var list = ERP.sources ? ERP.sources.PRODS() : (global.PRODUCTS || []);
+    return list.filter(function (p) { return p.active !== false; });
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+     SERVICE
+     ══════════════════════════════════════════════════════════════════════════ */
+  var Milling = ERP.Milling = {
+    all: function () {
+      return (S.millingJobs || []).slice().sort(function (a, b) {
+        if (a.jobDate !== b.jobDate) return a.jobDate < b.jobDate ? 1 : -1;
+        return (a.createdAt || '') < (b.createdAt || '') ? 1 : -1;
+      });
+    },
+    byId: function (id) { return (S.millingJobs || []).filter(function (j) { return j.id === id; })[0] || null; },
+    items: function (jobId) {
+      return (S.millingJobItems || []).filter(function (i) { return i.jobId === jobId; })
+        .sort(function (a, b) { return a.sortOrder - b.sortOrder; });
+    },
+    /* only posted jobs move the mill's balance — a cancelled job contributes nothing */
+    forMill: function (millId) {
+      return (S.millingJobs || []).filter(function (j) { return j.millId === millId && j.status !== 'CANCELLED'; });
+    },
+
+    /* live totals for the entry screen — plain rupee arithmetic, nothing
+       persisted, so an incomplete draft can still be previewed */
+    summary: function (draft) {
+      function calcSide(lines) {
+        return (lines || []).filter(function (l) { return l && l.productId; }).map(function (l) {
+          var qty = Number(l.quantity) || 0, weightKg = Number(l.weightKg) || 0, rate = Number(l.unitRate) || 0;
+          var basis = l.rateBasis === 'KG' ? 'KG' : 'BAG';
+          var basisQty = basis === 'KG' ? weightKg : qty;
+          return { weightKg: weightKg, lineTotal: Math.round(basisQty * rate * 100) / 100 };
+        });
+      }
+      var issue = calcSide(draft.issue), receive = calcSide(draft.receive);
+      var inWeightKg = Math.round(issue.reduce(function (a, l) { return a + l.weightKg; }, 0) * 1000) / 1000;
+      var outWeightKg = Math.round(receive.reduce(function (a, l) { return a + l.weightKg; }, 0) * 1000) / 1000;
+      var lossKg = Math.round((inWeightKg - outWeightKg) * 1000) / 1000;
+      var lossPct = inWeightKg > 0 ? Math.round((lossKg / inWeightKg) * 10000) / 100 : 0;
+      var issuedValue = Math.round(issue.reduce(function (a, l) { return a + l.lineTotal; }, 0) * 100) / 100;
+      var receivedValue = Math.round(receive.reduce(function (a, l) { return a + l.lineTotal; }, 0) * 100) / 100;
+      var fee = Number(draft.feeAmount) || 0;
+      var settle = draft.settle === 'FEE_ONLY' ? 'FEE_ONLY' : 'NET';
+      var net = settle === 'FEE_ONLY' ? fee : (receivedValue + fee - issuedValue);
+      return { inWeightKg: inWeightKg, outWeightKg: outWeightKg, lossKg: lossKg, lossPct: lossPct,
+        issuedValue: issuedValue, receivedValue: receivedValue, fee: fee, net: net, settle: settle };
+    },
+
+    save: function (draft) {
+      var mill = draft.millId ? global.supOf(draft.millId) : null;
+      var errs = [];
+      if (!mill) errs.push('Choose a mill.');
+      if (!draft.warehouseId) errs.push('Choose a warehouse.');
+      var settle = draft.settle === 'FEE_ONLY' ? 'FEE_ONLY' : 'NET';
+
+      var issueRaw = (draft.issue || []).filter(function (l) { return l && l.productId; });
+      var receiveRaw = (draft.receive || []).filter(function (l) { return l && l.productId; });
+      if (!issueRaw.length) errs.push('Add at least one line to what was issued.');
+      if (!receiveRaw.length) errs.push('Add at least one line to what was received back.');
+
+      function checkLine(l, n, side) {
+        var p = prodOf(l.productId);
+        var label = side + ' line ' + (n + 1) + (p ? ' (' + (p.en || p.ur) + ')' : '');
+        if (!p) { errs.push(label + ': that product no longer exists.'); return null; }
+        var qty = M.qty(l.quantity);
+        if (!(qty > 0)) { errs.push(label + ': bag count must be more than zero.'); return null; }
+        var weightKg = Number(l.weightKg);
+        if (!(weightKg > 0)) { errs.push(label + ': weight must be more than zero.'); return null; }
+        var rate = M.toP(l.unitRate || 0);
+        if (rate < 0) { errs.push(label + ': the rate cannot be negative.'); return null; }
+        var basis = l.rateBasis === 'KG' ? 'KG' : 'BAG';
+        var basisQty = basis === 'KG' ? weightKg : qty;
+        var lineTotal = settle === 'FEE_ONLY' ? 0 : M.mul(rate, basisQty);
+        return { productId: l.productId, product: p, quantity: qty, weightKg: weightKg,
+          bagKg: p.kg || 0, rateBasis: basis, unitRate: rate, lineTotal: lineTotal };
+      }
+
+      var issueClean = [], receiveClean = [];
+      issueRaw.forEach(function (l, n) { var c = checkLine(l, n, 'Issued'); if (c) issueClean.push(c); });
+      receiveRaw.forEach(function (l, n) { var c = checkLine(l, n, 'Received'); if (c) receiveClean.push(c); });
+      if (errs.length) return Promise.reject({ validation: errs });
+
+      /* stock check on the issue side only — same rule as any other
+         outgoing movement in the app */
+      if (!ERP.Settings.allowNegativeStock()) {
+        var demand = {};
+        issueClean.forEach(function (l) { demand[l.productId] = (demand[l.productId] || 0) + l.quantity; });
+        Object.keys(demand).forEach(function (pid) {
+          var have = Inventory.available(pid, draft.warehouseId);
+          if (demand[pid] > have) {
+            var p = prodOf(pid) || {};
+            errs.push('Only ' + have + ' bags of ' + (p.en || p.ur || pid) + ' are available in ' +
+              whName(draft.warehouseId) + '. Requested: ' + demand[pid] + '.');
+          }
+        });
+      }
+      if (errs.length) return Promise.reject({ validation: errs });
+
+      var inWeightKg = Math.round(issueClean.reduce(function (a, l) { return a + l.weightKg; }, 0) * 1000) / 1000;
+      var outWeightKg = Math.round(receiveClean.reduce(function (a, l) { return a + l.weightKg; }, 0) * 1000) / 1000;
+      var lossKg = Math.round((inWeightKg - outWeightKg) * 1000) / 1000;
+      if (lossKg < 0) {
+        return Promise.reject({ validation: ['The weight received back (' + outWeightKg +
+          ' kg) is more than the weight issued (' + inWeightKg + ' kg). Grinding cannot create extra ' +
+          'weight — check the entries.'] });
+      }
+      var lossPct = inWeightKg > 0 ? Math.round((lossKg / inWeightKg) * 10000) / 100 : 0;
+
+      var issuedValue = M.sum(issueClean.map(function (l) { return l.lineTotal; }));
+      var receivedValue = M.sum(receiveClean.map(function (l) { return l.lineTotal; }));
+      var feeAmount = M.toP(draft.feeAmount || 0);
+      if (feeAmount < 0) return Promise.reject({ validation: ['The milling fee cannot be negative.'] });
+      var netAmount = settle === 'FEE_ONLY' ? feeAmount : (receivedValue + feeAmount - issuedValue);
+
+      draft.id = draft.id || FDB.uid('mil');
+      var opId = (draft.clientOpId || draft.id) + '#0';
+
+      return FDB.tx(['sequences', 'millingJobs', 'millingJobItems', 'inventory', 'stockMovements',
+        'auditLog', 'operations'], function (api) {
+        return FDB.claimOperation(api, opId, 'MillingJob', { entityId: draft.id }).then(function () {
+          return FDB.nextNumber(api, 'MIL').then(function (number) {
+            var rec = {
+              id: draft.id, jobNumber: number, clientOpId: draft.clientOpId || draft.id,
+              jobDate: draft.jobDate || today(),
+              millId: draft.millId, millSnapshot: mill.co,
+              warehouseId: draft.warehouseId, warehouseSnapshot: whName(draft.warehouseId),
+              settle: settle,
+              inWeightKg: inWeightKg, outWeightKg: outWeightKg, lossKg: lossKg, lossPct: lossPct,
+              issuedValue: issuedValue, receivedValue: receivedValue,
+              feeAmount: feeAmount, feeNote: draft.feeNote || '', netAmount: netAmount,
+              notes: draft.notes || '', status: 'POSTED', cancelReason: '',
+              createdBy: currentUser(), createdAt: nowISO()
+            };
+            var sort = 0;
+            issueClean.forEach(function (l) {
+              var r = {
+                id: FDB.uid('mli'), jobId: rec.id, sortOrder: sort++, side: 'ISSUE',
+                productId: l.productId, productSnapshot: l.product.en || l.product.ur || '',
+                productUrSnapshot: l.product.ur || '', packageSnapshot: l.bagKg ? l.bagKg + ' KG' : 'Bag',
+                quantity: l.quantity, bagKg: l.bagKg, weightKg: l.weightKg,
+                rateBasis: l.rateBasis, unitRate: l.unitRate, lineTotal: l.lineTotal, unitCostP: 0
+              };
+              api.put('millingJobItems', r); (S.millingJobItems || (S.millingJobItems = [])).push(r);
+              Inventory.apply(api, {
+                productId: l.productId, warehouseId: rec.warehouseId, qtyDelta: -l.quantity,
+                kind: 'MILL_ISSUE_OUT', ref: number, refType: 'MILLING',
+                note: 'Issued for milling — ' + rec.millSnapshot, date: rec.jobDate
+              });
+            });
+            receiveClean.forEach(function (l) {
+              var costPerBag = l.quantity > 0 ? Math.round(l.lineTotal / l.quantity) : 0;
+              var r = {
+                id: FDB.uid('mli'), jobId: rec.id, sortOrder: sort++, side: 'RECEIVE',
+                productId: l.productId, productSnapshot: l.product.en || l.product.ur || '',
+                productUrSnapshot: l.product.ur || '', packageSnapshot: l.bagKg ? l.bagKg + ' KG' : 'Bag',
+                quantity: l.quantity, bagKg: l.bagKg, weightKg: l.weightKg,
+                rateBasis: l.rateBasis, unitRate: l.unitRate, lineTotal: l.lineTotal, unitCostP: costPerBag
+              };
+              api.put('millingJobItems', r); (S.millingJobItems || (S.millingJobItems = [])).push(r);
+              Inventory.apply(api, {
+                productId: l.productId, warehouseId: rec.warehouseId, qtyDelta: l.quantity,
+                kind: 'MILL_RECEIPT_IN', ref: number, refType: 'MILLING',
+                note: 'Received from mill — ' + rec.millSnapshot, date: rec.jobDate, unitCostP: costPerBag
+              });
+            });
+            api.put('millingJobs', rec); (S.millingJobs || (S.millingJobs = [])).unshift(rec);
+            Audit.write(api, {
+              action: 'Milling job posted', entity: 'MillingJob', entityId: rec.id, ref: number,
+              newValues: { mill: rec.millSnapshot, inWeightKg: inWeightKg, outWeightKg: outWeightKg,
+                lossKg: lossKg, net: M.toR(netAmount) }
+            });
+            return rec;
+          });
+        });
+      }).then(function (rec) { if (ERP.Mirror) ERP.Mirror.refresh(); return rec; });
+    },
+
+    cancel: function (id, reason) {
+      var job = Milling.byId(id);
+      if (!job) return Promise.reject(new Error('Milling job not found.'));
+      if (job.status === 'CANCELLED') return Promise.resolve(job);
+      return FDB.tx(['millingJobs', 'inventory', 'stockMovements', 'auditLog'], function (api) {
+        Milling.items(id).forEach(function (it) {
+          if (it.side === 'ISSUE') {
+            Inventory.apply(api, {
+              productId: it.productId, warehouseId: job.warehouseId, qtyDelta: it.quantity,
+              kind: 'MILL_ISSUE_REVERSAL_IN', ref: job.jobNumber, refType: 'MILLING_CANCEL',
+              note: 'Milling job cancelled — ' + (reason || 'no reason given'), date: today()
+            });
+          } else {
+            Inventory.apply(api, {
+              productId: it.productId, warehouseId: job.warehouseId, qtyDelta: -it.quantity,
+              kind: 'MILL_RECEIPT_REVERSAL_OUT', ref: job.jobNumber, refType: 'MILLING_CANCEL',
+              note: 'Milling job cancelled — ' + (reason || 'no reason given'), date: today()
+            });
+          }
+        });
+        var old = { status: job.status };
+        job.status = 'CANCELLED'; job.cancelReason = reason || ''; job.cancelledAt = nowISO();
+        api.put('millingJobs', job);
+        Audit.write(api, {
+          action: 'Milling job cancelled', entity: 'MillingJob', entityId: job.id, ref: job.jobNumber,
+          oldValues: old, newValues: { status: 'CANCELLED' }, reason: reason || ''
+        });
+        return job;
+      }).then(function (r) { if (ERP.Mirror) ERP.Mirror.refresh(); return r; });
+    }
+  };
+
+  /* ── the mill's own khata now includes milling jobs — patched in one place
+     the same way 16-khata.js patches ERP.Ledger.customer for account
+     adjustments, so the statement, the payables total and the invoice-style
+     "current balance" figure cannot disagree. ── */
+  var origSupplierLedger = ERP.Ledger.supplier;
+  ERP.Ledger.supplier = function (supplierId, fromISO, toISO) {
+    var full = origSupplierLedger.call(ERP.Ledger, supplierId, null, null);
+    var rows = full.rows.map(function (r) {
+      return { iso: r.iso, ref: r.ref, what: r.what, dr: r.dr, cr: r.cr, kind: r.kind,
+        id: r.id, createdAt: r.createdAt };
+    });
+    Milling.forMill(supplierId).forEach(function (j) {
+      if (j.settle !== 'FEE_ONLY') {
+        if (j.issuedValue) rows.push({
+          iso: j.jobDate, ref: j.jobNumber, what: 'Wheat issued — milling job',
+          dr: j.issuedValue, cr: 0, kind: 'MILLING', id: j.id + '#issue', createdAt: (j.createdAt || '') + '#1'
+        });
+        if (j.receivedValue) rows.push({
+          iso: j.jobDate, ref: j.jobNumber, what: 'Received from mill — milling job',
+          dr: 0, cr: j.receivedValue, kind: 'MILLING', id: j.id + '#recv', createdAt: (j.createdAt || '') + '#2'
+        });
+      }
+      if (j.feeAmount) rows.push({
+        iso: j.jobDate, ref: j.jobNumber, what: 'Milling fee',
+        dr: 0, cr: j.feeAmount, kind: 'MILLING', id: j.id + '#fee', createdAt: (j.createdAt || '') + '#3'
+      });
+    });
+    return ERP.Ledger._roll(rows, fromISO, toISO, true);
+  };
+
+  /* exposed so callers (and tests, after simulating a restart) can know when
+     the milling stores have actually finished loading — same pattern
+     30-payroll.js uses for ERP.payrollReady */
+  ERP.millingReady = (ERP.bootPromise || Promise.resolve()).then(function () {
+    return FDB.hydrate().then(function (d) {
+      S.millingJobs = d.millingJobs || [];
+      S.millingJobItems = d.millingJobItems || [];
+    });
+  }).catch(function () {
+    S.millingJobs = S.millingJobs || []; S.millingJobItems = S.millingJobItems || [];
+  });
+
+  /* ════════════════════════════════════════════════════════════════════════
+     THE SCREEN
+     ════════════════════════════════════════════════════════════════════════ */
+  var MILL = { view: 'list', selectedId: null };
+  var DRAFT = null;
+  var RID = 0;
+
+  function blankLine() {
+    return { rid: 'r' + (++RID), productId: '', quantity: '', weightKg: '', weightManual: false,
+      rateBasis: 'KG', unitRate: '' };
+  }
+  function freshDraft() {
+    var whs = global.activeWh ? global.activeWh() : [];
+    return { millId: '', warehouseId: (whs[0] || {}).id || '', jobDate: today(), settle: 'NET',
+      feeAmount: '', feeNote: '', notes: '', issue: [blankLine()], receive: [blankLine()] };
+  }
+  function autoWeight(line) {
+    var p = line.productId ? prodOf(line.productId) : null;
+    var bagKg = p ? (Number(p.kg) || 0) : 0;
+    var qty = Number(line.quantity) || 0;
+    return bagKg && qty ? Math.round(bagKg * qty * 1000) / 1000 : '';
+  }
+
+  function card(cls, l, v, d) {
+    return '<div class="kh-card ' + cls + '"><i>' + l + '</i><b>' + v + '</b>' +
+      (d ? '<div class="d">' + d + '</div>' : '') + '</div>';
+  }
+
+  function millOptions(preId) {
+    var all = (global.SUPPLIERS || []);
+    var sups = all.filter(function (s) { return s.active !== false; });
+    /* an inactive mill a job already points at stays selectable, marked
+       (inactive) — the same fix made for the payment Area filter and the
+       Statement of Account screen, so a job doesn't silently swap mills */
+    if (preId && !sups.some(function (s) { return s.id === preId; })) {
+      var inactive = all.filter(function (s) { return s.id === preId; })[0];
+      if (inactive) sups = sups.concat([inactive]);
+    }
+    if (!sups.length) return '<option value="">— no suppliers on file —</option>';
+    return '<option value="">— choose a mill —</option>' + sups.map(function (s) {
+      return '<option value="' + esc(s.id) + '"' + (s.id === preId ? ' selected' : '') + '>' +
+        esc(s.co) + (s.active === false ? ' (inactive)' : '') + '</option>';
+    }).join('');
+  }
+
+  function warehouseOptions(preId) {
+    var whs = global.activeWh ? global.activeWh() : (global.WAREHOUSES || []).filter(function (w) { return w.active !== false; });
+    if (preId && !whs.some(function (w) { return w.id === preId; })) {
+      var inactive = (global.WAREHOUSES || []).filter(function (w) { return w.id === preId; })[0];
+      if (inactive) whs = whs.concat([inactive]);
+    }
+    return whs.map(function (w) {
+      return '<option value="' + esc(w.id) + '"' + (w.id === preId ? ' selected' : '') + '>' +
+        esc(w.name) + (w.active === false ? ' (inactive)' : '') + '</option>';
+    }).join('');
+  }
+
+  function lineRow(side, l) {
+    var basis = l.rateBasis === 'KG' ? 'KG' : 'BAG';
+    var basisQty = basis === 'KG' ? (Number(l.weightKg) || 0) : (Number(l.quantity) || 0);
+    var amount = Math.round((Number(l.unitRate) || 0) * basisQty);
+    return '<tr>' +
+      '<td><select data-millrow="' + l.rid + '" data-millside="' + side + '" data-millf="product">' +
+        '<option value="">— choose —</option>' +
+        activeProducts().map(function (p) {
+          return '<option value="' + esc(p.id) + '"' + (p.id === l.productId ? ' selected' : '') + '>' +
+            esc(p.en || p.ur || p.id) + (p.kg ? ' — ' + p.kg + ' KG' : '') + '</option>';
+        }).join('') + '</select></td>' +
+      '<td><input data-millrow="' + l.rid + '" data-millside="' + side + '" data-millf="qty" ' +
+        'inputmode="decimal" value="' + esc(l.quantity) + '"></td>' +
+      '<td><input data-millrow="' + l.rid + '" data-millside="' + side + '" data-millf="weight" ' +
+        'inputmode="decimal" value="' + esc(l.weightKg) + '"></td>' +
+      '<td><select data-millrow="' + l.rid + '" data-millside="' + side + '" data-millf="basis">' +
+        '<option value="KG"' + (basis === 'KG' ? ' selected' : '') + '>/kg</option>' +
+        '<option value="BAG"' + (basis === 'BAG' ? ' selected' : '') + '>/bag</option></select></td>' +
+      '<td><input data-millrow="' + l.rid + '" data-millside="' + side + '" data-millf="rate" ' +
+        'inputmode="decimal" value="' + esc(l.unitRate) + '"></td>' +
+      '<td class="r">' + amount.toLocaleString('en-US') + '</td>' +
+      '<td><button class="btn sm" data-millrmline="' + side + ':' + l.rid + '">' + I('x') + '</button></td>' +
+    '</tr>';
+  }
+
+  function linesTable(side, title, lines) {
+    return '<div class="f fc-mill-lines" style="margin-top:10px"><span>' + esc(title) + '</span>' +
+      '<div class="tw"><table class="tbl"><thead><tr>' +
+        '<th>Product</th><th>Bags / تعداد</th><th>Weight (kg) / وزن</th><th>Basis</th>' +
+        '<th>Rate / ریٹ</th><th class="r">Amount / رقم</th><th></th>' +
+      '</tr></thead><tbody>' + lines.map(function (l) { return lineRow(side, l); }).join('') +
+      '</tbody></table></div>' +
+      '<button class="btn sm" data-milladdline="' + side + '" style="margin-top:6px">' + I('plus') + 'Add line</button>' +
+    '</div>';
+  }
+
+  function entryView() {
+    var sum = Milling.summary(DRAFT);
+    var warnBand = sum.inWeightKg > 0 && (sum.lossPct < 1 || sum.lossPct > 8);
+    var millRec = DRAFT.millId && global.supOf ? global.supOf(DRAFT.millId) : null;
+    return '<div class="card"><div class="card-h"><h3>New milling job</h3><div class="grow"></div>' +
+        '<button class="btn" data-millentrycancel>Cancel</button></div><div class="card-b">' +
+      '<div class="f2">' +
+        '<label class="f"><span>Mill</span><select data-millh="mill">' + millOptions(DRAFT.millId) + '</select></label>' +
+        '<label class="f"><span>Warehouse</span><select data-millh="wh">' + warehouseOptions(DRAFT.warehouseId) + '</select></label>' +
+      '</div>' +
+      '<div class="f2">' +
+        '<label class="f"><span>Date</span><input type="date" data-millh="date" value="' + esc(DRAFT.jobDate) + '"></label>' +
+        '<label class="f"><span>Settlement</span><select data-millh="settle">' +
+          '<option value="NET"' + (DRAFT.settle !== 'FEE_ONLY' ? ' selected' : '') + '>Net off against the mill’s account</option>' +
+          '<option value="FEE_ONLY"' + (DRAFT.settle === 'FEE_ONLY' ? ' selected' : '') + '>Grinding fee only — wheat stays ours</option>' +
+        '</select></label>' +
+      '</div>' +
+      linesTable('issue', 'Issued — wheat out', DRAFT.issue) +
+      linesTable('receive', 'Received — back from the mill', DRAFT.receive) +
+      '<div class="kh-cards" style="margin-top:12px">' +
+        card('', 'Weight issued', sum.inWeightKg.toLocaleString('en-US') + ' kg') +
+        card('', 'Weight received', sum.outWeightKg.toLocaleString('en-US') + ' kg') +
+        card(warnBand ? 'due' : '', 'Process loss', sum.lossKg.toLocaleString('en-US') + ' kg (' + sum.lossPct + '%)',
+          warnBand ? 'Outside the usual 1–8% range — check the weights' : '') +
+      '</div>' +
+      (sum.settle !== 'FEE_ONLY'
+        ? '<div class="f2" style="margin-top:10px">' +
+            '<div class="f"><span>Value issued</span><b>' + sum.issuedValue.toLocaleString('en-US') + '</b></div>' +
+            '<div class="f"><span>Value received</span><b>' + sum.receivedValue.toLocaleString('en-US') + '</b></div>' +
+          '</div>'
+        : '') +
+      '<div class="f2" style="margin-top:10px">' +
+        '<label class="f"><span>Milling fee</span><input data-millh="fee" inputmode="decimal" value="' + esc(DRAFT.feeAmount) + '"></label>' +
+        '<label class="f"><span>Fee note</span><input data-millh="feenote" placeholder="Optional" value="' + esc(DRAFT.feeNote) + '"></label>' +
+      '</div>' +
+      '<label class="f"><span>Notes</span><input data-millh="notes" placeholder="Optional" value="' + esc(DRAFT.notes) + '"></label>' +
+      '<div class="banner ' + (sum.net >= 0 ? 'info' : 'warn') + '" style="margin-top:10px">' + I('wallet') +
+        '<div><p>Net ' + (sum.net >= 0 ? 'payable to' : 'receivable from') + ' ' +
+        esc(millRec ? millRec.co : 'the mill') + ' <b>' + Math.abs(sum.net).toLocaleString('en-US') + '</b></p></div></div>' +
+      '<div style="margin-top:12px">' +
+        (can('PURCHASE_CREATE') ? '<button class="btn pri" data-millsave>' + I('check') + 'Save milling job</button>' : '') +
+      '</div>' +
+    '</div></div>';
+  }
+
+  function itemRow(it) {
+    return '<tr><td>' + esc(it.productSnapshot) + '</td><td class="r">' + it.quantity + '</td>' +
+      '<td class="r">' + it.weightKg + ' kg</td>' +
+      '<td class="r">' + M.fmtPlain(it.unitRate) + ' /' + (it.rateBasis === 'KG' ? 'kg' : 'bag') + '</td>' +
+      '<td class="r">' + M.fmtPlain(it.lineTotal) + '</td></tr>';
+  }
+
+  function listView() {
+    var rows = Milling.all();
+    var body = rows.map(function (j) {
+      return '<tr>' +
+        '<td data-label="Date">' + esc(fmtDate(j.jobDate)) + '</td>' +
+        '<td data-label="Job #" class="mono">' + esc(j.jobNumber) + '</td>' +
+        '<td data-label="Mill">' + esc(j.millSnapshot) + '</td>' +
+        '<td data-label="In (kg)" class="r">' + Number(j.inWeightKg).toLocaleString('en-US') + '</td>' +
+        '<td data-label="Out (kg)" class="r">' + Number(j.outWeightKg).toLocaleString('en-US') + '</td>' +
+        '<td data-label="Loss %" class="r">' + j.lossPct + '%</td>' +
+        '<td data-label="Net" class="r">' + M.fmtPlain(j.netAmount) + '</td>' +
+        '<td data-label="Status">' + (j.status === 'CANCELLED' ? pill('neu', 'Cancelled') : pill('ok', 'Posted')) + '</td>' +
+        '<td data-label="" class="c fcb-rowacts">' +
+          '<button class="btn sm" data-millview="' + j.id + '">View</button>' +
+          '<button class="btn sm" data-millprint="' + j.id + '">Print</button>' +
+          (j.status !== 'CANCELLED' && can('PURCHASE_CREATE')
+            ? '<button class="btn sm" data-millcancel="' + j.id + '">Cancel</button>' : '') +
+        '</td></tr>';
+    }).join('');
+
+    var listCard = '<div class="card"><div class="card-h"><h3>Milling jobs</h3>' +
+        '<span class="pill neu">' + rows.length + '</span><div class="grow"></div>' +
+        (rows.length ? '<button class="btn" data-millexcel>' + I('sheet') + 'Excel</button>' : '') +
+        (can('PURCHASE_CREATE') ? '<button class="btn pri" data-millnew>' + I('plus') + 'New milling job</button>' : '') +
+      '</div><div class="card-b" style="padding:0">' +
+      (rows.length
+        ? '<div class="tw"><table class="tbl"><thead><tr>' +
+            '<th>Date</th><th>Job #</th><th>Mill</th><th class="r">In (kg)</th><th class="r">Out (kg)</th>' +
+            '<th class="r">Loss %</th><th class="r">Net</th><th>Status</th><th></th>' +
+          '</tr></thead><tbody>' + body + '</tbody></table></div>'
+        : '<div class="empty"><div class="ei">' + I('mill') + '</div><b>No milling jobs yet</b>' +
+          '<p>Record wheat handed to a mill and the flour and chokar received back.</p>' +
+          (can('PURCHASE_CREATE') ? '<button class="btn pri" data-millnew>' + I('plus') + 'New milling job</button>' : '') +
+          '</div>') +
+      '</div></div>';
+
+    var detail = '';
+    var job = MILL.selectedId ? Milling.byId(MILL.selectedId) : null;
+    if (job) {
+      var items = Milling.items(job.id);
+      var issueRows = items.filter(function (i) { return i.side === 'ISSUE'; });
+      var recvRows = items.filter(function (i) { return i.side === 'RECEIVE'; });
+      detail = '<div class="card" style="margin-top:14px"><div class="card-h">' +
+          '<h3>' + esc(job.jobNumber) + '</h3><span class="pill neu">' + esc(job.millSnapshot) + '</span>' +
+          '<div class="grow"></div>' +
+          '<button class="btn" data-millprint="' + job.id + '">' + I('print') + 'Print / PDF</button>' +
+          (job.status !== 'CANCELLED' && can('PURCHASE_CREATE')
+            ? '<button class="btn" data-millcancel="' + job.id + '">Cancel</button>' : '') +
+          '<button class="btn" data-millclose>Close</button>' +
+        '</div><div class="card-b">' +
+        '<div class="kh-cards">' +
+          card('', 'Weight issued', Number(job.inWeightKg).toLocaleString('en-US') + ' kg') +
+          card('', 'Weight received', Number(job.outWeightKg).toLocaleString('en-US') + ' kg') +
+          card('', 'Process loss', Number(job.lossKg).toLocaleString('en-US') + ' kg (' + job.lossPct + '%)') +
+          card(job.netAmount >= 0 ? 'due' : 'credit', 'Net', M.fmt(job.netAmount)) +
+        '</div>' +
+        (issueRows.length ? '<p class="hint" style="margin-top:12px">Issued — wheat out</p>' +
+          '<div class="tw"><table class="kh-table"><thead><tr><th>Product</th><th class="r">Bags</th>' +
+          '<th class="r">Weight</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead><tbody>' +
+          issueRows.map(itemRow).join('') + '</tbody></table></div>' : '') +
+        (recvRows.length ? '<p class="hint" style="margin-top:12px">Received — back from the mill</p>' +
+          '<div class="tw"><table class="kh-table"><thead><tr><th>Product</th><th class="r">Bags</th>' +
+          '<th class="r">Weight</th><th class="r">Rate</th><th class="r">Amount</th></tr></thead><tbody>' +
+          recvRows.map(itemRow).join('') + '</tbody></table></div>' : '') +
+        (job.status === 'CANCELLED' ? '<div class="banner warn" style="margin-top:10px">' + I('alert') +
+          '<div><p><b>Cancelled</b> — ' + esc(job.cancelReason || 'No reason given') + '</p></div></div>' : '') +
+      '</div></div>';
+    }
+    return listCard + detail;
+  }
+
+  global.PAGES.milling = function () { return MILL.view === 'entry' && DRAFT ? entryView() : listView(); };
+
+  /* ════════════════════════════════════════════════════════════════════════
+     NAV — one entry under Inventory & supply
+     ════════════════════════════════════════════════════════════════════════ */
+  try {
+    var NAV = global.NAV, GROUPS = global.NAVGROUPS;
+    if (!NAV.some(function (n) { return n.id === 'milling'; })) {
+      var at = NAV.map(function (n) { return n.id; }).indexOf('purchases');
+      NAV.splice(at < 0 ? NAV.length : at + 1, 0, { id: 'milling', l: 'Milling', i: 'mill' });
+    }
+    GROUPS.forEach(function (g) {
+      if (g[0] === 'Inventory & supply' && g[1].indexOf('milling') === -1) {
+        var pos = g[1].indexOf('purchases');
+        g[1].splice(pos < 0 ? g[1].length : pos + 1, 0, 'milling');
+      }
+    });
+    if (global.PAGEMETA) {
+      global.PAGEMETA.milling = ['Milling',
+        'Wheat handed to a mill and the flour and chokar received back, with the process loss shown and the net settled into the mill’s own account.'];
+    }
+  } catch (e) {}
+
+  /* ════════════════════════════════════════════════════════════════════════
+     HANDLERS
+     ════════════════════════════════════════════════════════════════════════ */
+  D.addEventListener('change', function (e) {
+    var el = e.target; if (!el.dataset) return;
+    if (el.dataset.millh !== undefined && DRAFT) {
+      var k = el.dataset.millh;
+      if (k === 'mill') DRAFT.millId = el.value;
+      else if (k === 'wh') DRAFT.warehouseId = el.value;
+      else if (k === 'date') DRAFT.jobDate = el.value;
+      else if (k === 'settle') DRAFT.settle = el.value;
+      else if (k === 'fee') DRAFT.feeAmount = el.value;
+      else if (k === 'feenote') DRAFT.feeNote = el.value;
+      else if (k === 'notes') DRAFT.notes = el.value;
+      global.paint(); return;
+    }
+    if (el.dataset.millrow !== undefined && DRAFT) {
+      var side = el.dataset.millside === 'receive' ? 'receive' : 'issue';
+      var line = DRAFT[side].filter(function (l) { return l.rid === el.dataset.millrow; })[0];
+      if (!line) return;
+      var field = el.dataset.millf;
+      if (field === 'product') { line.productId = el.value; if (!line.weightManual) line.weightKg = autoWeight(line); }
+      else if (field === 'qty') { line.quantity = el.value; if (!line.weightManual) line.weightKg = autoWeight(line); }
+      else if (field === 'weight') { line.weightKg = el.value; line.weightManual = true; }
+      else if (field === 'basis') { line.rateBasis = el.value; }
+      else if (field === 'rate') { line.unitRate = el.value; }
+      global.paint();
+    }
+  });
+
+  D.addEventListener('click', function (e) {
+    if (!e.target.closest) return;
+    var t;
+    if (e.target.closest('[data-millnew]')) {
+      e.preventDefault(); DRAFT = freshDraft(); MILL.view = 'entry'; global.paint(); return;
+    }
+    if (e.target.closest('[data-millentrycancel]')) {
+      e.preventDefault(); DRAFT = null; MILL.view = 'list'; global.paint(); return;
+    }
+    if ((t = e.target.closest('[data-milladdline]'))) {
+      e.preventDefault();
+      if (DRAFT) DRAFT[t.dataset.milladdline].push(blankLine());
+      global.paint(); return;
+    }
+    if ((t = e.target.closest('[data-millrmline]'))) {
+      e.preventDefault();
+      var parts = t.dataset.millrmline.split(':');
+      if (DRAFT) {
+        DRAFT[parts[0]] = DRAFT[parts[0]].filter(function (l) { return l.rid !== parts[1]; });
+        /* never leave a side with no rows at all — same rule 27-landed-ui.js
+           uses for its own dynamic line list, so there is always a row to
+           type into rather than a dead-end empty table */
+        if (!DRAFT[parts[0]].length) DRAFT[parts[0]].push(blankLine());
+      }
+      global.paint(); return;
+    }
+    if (e.target.closest('[data-millsave]')) {
+      e.preventDefault();
+      if (!DRAFT) return;
+      /* captured so a slower save that resolves after the person has
+         already moved on to a second draft (e.g. clicked "New milling job"
+         again before this one finished) cannot wipe that second draft out
+         from under them */
+      var savingDraft = DRAFT;
+      Milling.save(savingDraft).then(function (job) {
+        if (DRAFT === savingDraft) { DRAFT = null; MILL.view = 'list'; }
+        MILL.selectedId = job.id;
+        global.paint(); say('Milling job ' + job.jobNumber + ' posted.');
+        setTimeout(function () {
+          var m = ERP.DocModel && ERP.DocModel.millingJob ? ERP.DocModel.millingJob(job.id) : null;
+          if (m) ERP.Viewer.open(m);
+        }, 220);
+      }).catch(function (err) { say(err && err.validation ? err.validation[0] : 'Could not save the milling job.'); });
+      return;
+    }
+    if ((t = e.target.closest('[data-millview]'))) {
+      e.preventDefault(); MILL.selectedId = t.dataset.millview; global.paint(); return;
+    }
+    if (e.target.closest('[data-millclose]')) {
+      e.preventDefault(); MILL.selectedId = null; global.paint(); return;
+    }
+    if ((t = e.target.closest('[data-millprint]'))) {
+      e.preventDefault();
+      var m2 = ERP.DocModel && ERP.DocModel.millingJob ? ERP.DocModel.millingJob(t.dataset.millprint) : null;
+      if (m2) ERP.Viewer.open(m2);
+      return;
+    }
+    if ((t = e.target.closest('[data-millcancel]'))) {
+      e.preventDefault();
+      var id2 = t.dataset.millcancel;
+      var why = global.prompt ? global.prompt('Why is this milling job being cancelled?') : 'Cancelled';
+      if (why === null) return;
+      Milling.cancel(id2, why || 'No reason given').then(function () {
+        global.paint(); say('Milling job cancelled and the stock movements reversed.');
+      }).catch(function (err) { say((err && err.validation && err.validation[0]) || 'Could not cancel that.'); });
+      return;
+    }
+    if (e.target.closest('[data-millexcel]')) {
+      e.preventDefault();
+      var rows = [['Date', 'Job #', 'Mill', 'In (kg)', 'Out (kg)', 'Loss (kg)', 'Loss %', 'Issued', 'Received', 'Fee', 'Net', 'Status']];
+      Milling.all().forEach(function (j) {
+        rows.push([fmtDate(j.jobDate), j.jobNumber, j.millSnapshot, j.inWeightKg, j.outWeightKg,
+          j.lossKg, j.lossPct, M.toR(j.issuedValue), M.toR(j.receivedValue), M.toR(j.feeAmount),
+          M.toR(j.netAmount), j.status]);
+      });
+      if (ERP.XLSX) {
+        ERP.XLSX.download([{ name: 'Milling jobs', rows: rows }], 'Milling-jobs-' + today() + '.xlsx',
+          { title: 'Milling jobs', author: ERP.Settings.get().businessName });
+        ERP.Audit.detached({ action: 'Milling jobs exported to Excel', entity: 'Report', entityId: 'milling' });
+      }
+      return;
+    }
+  });
+})(typeof window !== 'undefined' ? window : this);
+
+</script>
+<script>/* ── 33-invoice-search.js · INVOICE SEARCH — find an old invoice by number, customer, product, date or amount ── */
+/* ══════════════════════════════════════════════════════════════════════════
+   INVOICE SEARCH — finding an old invoice quickly
+
+   Client request (2026-09-19): "add a search option to find old invoices
+   easily by Invoice Number, Customer Name, Date, or Product Name or any
+   other."
+
+   The Sales & invoices screen already had a search box, but it was a single
+   substring test over one glued-together string, run per keystroke with a
+   full scan of the line-items table for every invoice. It could not find by
+   date (the date was never in the searched text, and the custom date range
+   the code half-supported had no controls), treated Urdu letter variants as
+   different letters, and rendered every invoice as a table row. This module
+   is the engine that replaces it; the screen itself lives in 05-ui-builder.js
+   (§37–39) and calls into ERP.InvoiceSearch.
+
+     - One cached, normalised text index per invoice, built in a single pass
+       and dropped whenever records change (Mirror.refresh), the same way
+       11-search.js keeps its palette index warm. The Urdu/English folding is
+       11-search's own ERP.Search.normalize, so ک/ك, ی/ي, ہ/ه and Arabic-Indic
+       digits all match each other.
+     - Every space-separated word in the box must be found (AND, any order):
+       "zam zam sella" finds an invoice for that shop that carries that
+       product. A hyphenated number stays together ("INV-2026-000123").
+     - "Search in" narrows those words to one kind of field — invoice /
+       order / dispatch / reference number, customer & phone, product,
+       amount, or notes — so "Taj" can mean the shop or the brand on purpose.
+     - A date typed into the box (12/09/2026, 2026-09-12, 12 Sep 2026,
+       Sep 2026, 09/2026) is read as a date FILTER, not as text, and the
+       screen says how it was read. Numeric dates are day-first (Pakistan);
+       a month-first reading is only tried when day-first is impossible.
+     - Customer names are matched against both the name printed on the
+       invoice (the snapshot — it never changes) and the shop's current
+       name, so an old invoice is found by either.
+
+   Deliberately NOT done here: fuzzy/typo matching (11-search's palette does
+   that; a filter list has to be predictable), a saved-searches feature, and
+   searching inside the invoice's hand-edited print text (12-invoice-editor).
+   ══════════════════════════════════════════════════════════════════════════ */
+(function (global) {
+'use strict';
+var ERP = global.ERP, M = global.Money, D = global.document;
+
+/* separates fields (and separate product lines) inside one index string; a
+   search word can never contain it, so a word can never straddle two fields */
+var SEP = '\u0001';
+
+var MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+var MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september',
+              'october', 'november', 'december'];
+var MONTH_RE = 'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|' +
+               'sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?';
+
+var SCOPES = [
+  ['all',      'Everything'],
+  ['number',   'Invoice / order no.'],
+  ['customer', 'Customer / phone'],
+  ['product',  'Product'],
+  ['amount',   'Amount'],
+  ['notes',    'Notes & other']
+];
+var SCOPE_FIELD = { number: 'number', product: 'product', amount: 'amount', notes: 'other' };
+
+var SORTS = [
+  ['newest', 'Newest first'],
+  ['oldest', 'Oldest first'],
+  ['high',   'Highest total'],
+  ['low',    'Lowest total'],
+  ['due',    'Highest balance due']
+];
+
+var DEFAULTS = { q: '', scope: 'all', period: 'all', from: '', to: '', min: '', max: '',
+                 status: 'all', region: 'all', wh: 'all', sort: 'newest', page: 1 };
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SMALL HELPERS
+   ══════════════════════════════════════════════════════════════════════════ */
+function pad2(n) { return (n < 10 ? '0' : '') + n; }
+function isoOf(y, m, d) { return y + '-' + pad2(m) + '-' + pad2(d); }
+function isoLocal(d) { return isoOf(d.getFullYear(), d.getMonth() + 1, d.getDate()); }
+function daysIn(y, m) { return new Date(y, m, 0).getDate(); }
+function today() { return global.todayISO ? global.todayISO() : isoLocal(new Date()); }
+function labelDate(iso) { return global.fmtDate ? global.fmtDate(iso) : iso; }
+function validISO(s) { return /^\d{4}-\d{2}-\d{2}$/.test(s || '') ? s : ''; }
+
+function norm(s) {
+  if (ERP.Search && ERP.Search.normalize) return ERP.Search.normalize(s);
+  return String(s === null || s === undefined ? '' : s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+/* every non-empty part folded, then joined so no search word can span two parts */
+function joinN(parts) {
+  var out = [];
+  parts.forEach(function (p) { var n = norm(p); if (n) out.push(n); });
+  return out.join(SEP);
+}
+function compact(s) { return norm(s).replace(/ /g, ''); }
+
+function toPaisa(v) {
+  if (v === undefined || v === null) return null;
+  var s = String(v).replace(/[,\s]|pkr|rs\.?/gi, '');
+  if (!s) return null;
+  var n = Number(s);
+  return isFinite(n) && n >= 0 ? Math.round(n * 100) : null;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   DATES TYPED INTO THE SEARCH BOX
+   ══════════════════════════════════════════════════════════════════════════ */
+function dayRange(y, m, d, src, dayFirst) {
+  y = +y; m = +m; d = +d;
+  if (y < 100) y += 2000;
+  if (y < 1990 || y > 2100 || m < 1 || m > 12 || d < 1 || d > daysIn(y, m)) return null;
+  var iso = isoOf(y, m, d);
+  return { from: iso, to: iso, label: labelDate(iso), src: src, dayFirst: !!dayFirst };
+}
+function monthRange(y, m, src) {
+  y = +y; m = +m;
+  if (y < 1990 || y > 2100 || m < 1 || m > 12) return null;
+  return { from: isoOf(y, m, 1), to: isoOf(y, m, daysIn(y, m)), label: MON3[m - 1] + ' ' + y, src: src };
+}
+function monthNo(word) { return MON3.map(function (x) { return x.toLowerCase(); }).indexOf(word.toLowerCase().slice(0, 3)) + 1; }
+
+/* Pull the dates out of the box, leaving the rest as search words. */
+function parse(raw) {
+  var s = String(raw === null || raw === undefined ? '' : raw), dates = [];
+  /* Arabic-Indic (٠-٩) and Persian/Urdu (۰-۹) digits become 0-9 first, so a
+     date typed on an Urdu keyboard is read as a date like any other */
+  s = s.replace(/[٠-٩۰-۹]/g, function (c) {
+    var k = c.charCodeAt(0);
+    return String(k >= 0x06F0 ? k - 0x06F0 : k - 0x0660);
+  });
+  /* `build` declares one parameter per capture group, then `src`; replace()
+     also passes the match offset and whole string, which must not leak in */
+  function take(re, build) {
+    var groups = build.length - 1;
+    s = s.replace(re, function (m) {
+      var args = Array.prototype.slice.call(arguments, 1, 1 + groups);
+      var r = build.apply(null, args.concat([m.trim()]));
+      if (!r) return m;                              /* not a real date — keep it as text */
+      dates.push(r);
+      return ' ';
+    });
+  }
+  var MR = '(' + MONTH_RE + ')';
+  /* 2026-09-12 · 2026/09/12 */
+  take(/\b(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})\b/g, function (y, m, d, src) { return dayRange(y, m, d, src); });
+  /* 12/09/2026 · 12-09-26 — day first; month first only when that is the sole valid reading */
+  take(/\b(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4}|\d{2})\b/g, function (a, b, y, src) {
+    return dayRange(y, b, a, src, true) || dayRange(y, a, b, src, false);
+  });
+  /* 12 Sep 2026 · 12th September, 2026 */
+  take(new RegExp('\\b(\\d{1,2})(?:st|nd|rd|th)?[\\s-]*' + MR + '(?![a-z])\\.?,?[\\s-]*(\\d{4})\\b', 'gi'),
+    function (d, mon, y, src) { return dayRange(y, monthNo(mon), d, src); });
+  /* Sep 12, 2026 */
+  take(new RegExp('\\b' + MR + '(?![a-z])\\.?[\\s-]*(\\d{1,2})(?:st|nd|rd|th)?,?[\\s-]+(\\d{4})\\b', 'gi'),
+    function (mon, d, y, src) { return dayRange(y, monthNo(mon), d, src); });
+  /* Sep 2026 · September 2026 */
+  take(new RegExp('\\b' + MR + '(?![a-z])\\.?,?[\\s-]*(\\d{4})\\b', 'gi'),
+    function (mon, y, src) { return monthRange(y, monthNo(mon), src); });
+  /* 2026 Sep */
+  take(new RegExp('\\b(\\d{4})[\\s-]+' + MR + '(?![a-z])', 'gi'),
+    function (y, mon, src) { return monthRange(y, monthNo(mon), src); });
+  /* 2026-09 · 09/2026 — only as a word of their own: the tail of a number
+     such as INV-2026-12 must stay text */
+  take(/(^|[\s,;])(\d{4})-(\d{1,2})(?=$|[\s,;])/g, function (pre, y, m, src) { return monthRange(y, m, src); });
+  take(/(^|[\s,;])(\d{1,2})[\/.](\d{4})(?=$|[\s,;])/g, function (pre, m, y, src) { return monthRange(y, m, src); });
+
+  var terms = s.split(/\s+/).map(norm).filter(Boolean);
+  return { terms: terms, dates: dates };
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE INDEX
+   ══════════════════════════════════════════════════════════════════════════ */
+var cache = null, stamp = '', version = 0;
+
+function dateText(iso) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || '');
+  if (!m) return '';
+  var mo = +m[2], d = +m[3];
+  return joinN([iso, d + ' ' + MON3[mo - 1] + ' ' + m[1], MONTHS[mo - 1],
+                pad2(d) + ' ' + m[2] + ' ' + m[1], d + ' ' + mo + ' ' + m[1]]);
+}
+
+function build() {
+  var S = ERP.S, byInv = {}, out = {};
+  S.invoiceItems.forEach(function (it) { (byInv[it.invoiceId] = byInv[it.invoiceId] || []).push(it); });
+  S.invoices.forEach(function (i) {
+    var items = (byInv[i.id] || []).slice().sort(function (a, b) { return a.sortOrder - b.sortOrder; });
+    var lines = items.map(function (x) {
+      return { n: norm([x.descriptionEnSnapshot, x.descriptionSnapshot, x.brandSnapshot].filter(Boolean).join(' ')),
+               name: x.descriptionEnSnapshot || x.descriptionSnapshot || '', qty: x.quantity };
+    });
+    var total = M.toR(i.grandTotal);
+    /* a total with paisa is also findable as typed, "25000.50" (String() drops the zero) */
+    var withPaisa = total % 1 ? [total.toFixed(2), Number(total).toLocaleString('en-US', { minimumFractionDigits: 2 })] : [];
+    var e = {
+      number: joinN([i.invoiceNumber, compact(i.invoiceNumber), i.orderNumber, i.dispatchNumber, i.referenceNo]),
+      customer: joinN([i.shopNameSnapshot, i.customerNameSnapshot, i.mobileSnapshot, compact(i.mobileSnapshot),
+                       i.regionSnapshot]),
+      product: lines.map(function (l) { return l.n; }).filter(Boolean).join(SEP),
+      amount: joinN([String(total), Number(total).toLocaleString('en-US')].concat(withPaisa)),
+      date: dateText(i.invoiceDate),
+      other: joinN([i.notes, i.description, i.salesperson, i.paymentMethod, i.warehouseSnapshot,
+                    ERP.STATUS_LABEL[i.status], ERP.STATUS_LABEL[i.paymentStatus]]),
+      items: lines
+    };
+    e.all = [e.number, e.customer, e.product, e.amount, e.date, e.other].filter(Boolean).join(SEP);
+    out[i.id] = e;
+  });
+  return out;
+}
+
+function ensure(force) {
+  var S = ERP.S, s = [S.invoices.length, S.invoiceItems.length, version].join('.');
+  if (!force && cache && s === stamp) return cache;
+  cache = build(); stamp = s;
+  return cache;
+}
+/* records change through one place, so that is where the index is dropped */
+if (ERP.Mirror) {
+  var origRefresh = ERP.Mirror.refresh;
+  ERP.Mirror.refresh = function () {
+    var r = origRefresh.apply(ERP.Mirror, arguments);
+    version++;
+    return r;
+  };
+}
+
+/* The shop's CURRENT name, found by id at search time (not cached in the
+   index) so a rename is picked up straight away; the name printed on the
+   invoice is in the index already, and both are searched. */
+function currentCustomerText() {
+  var src = ERP.sources || {};
+  var custs = src.CUSTS ? src.CUSTS() : (global.CUSTOMERS || []);
+  var byId = {}, memo = {};
+  custs.forEach(function (c) { byId[c.id] = c; });
+  return function (id) {
+    if (memo[id] !== undefined) return memo[id];
+    var c = byId[id], t = '';
+    if (c) {
+      t = joinN([c.sh, c.ow, c.nameUr, c.ph, compact(c.ph), c.wa, c.legacyCode,
+                 global.regionTxt ? global.regionTxt(c.region) : '']);
+    }
+    return (memo[id] = t);
+  };
+}
+
+/* a word matches if it is inside the field; a phrase with spaces may also
+   match with the spaces removed ("zam zam" ⇄ "zamzam", "0300 1234567" ⇄ the
+   phone stored without a dash) */
+function hasTerm(hays, t) {
+  var t2 = t.indexOf(' ') > -1 ? t.replace(/ /g, '') : '';
+  for (var i = 0; i < hays.length; i++) {
+    if (hays[i].indexOf(t) > -1 || (t2 && hays[i].indexOf(t2) > -1)) return true;
+  }
+  return false;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FILTERING
+   ══════════════════════════════════════════════════════════════════════════ */
+function presetRange(key) {
+  var t = today(), d = new Date(t + 'T00:00:00');
+  function back(days) { var x = new Date(d); x.setDate(x.getDate() - days); return isoLocal(x); }
+  switch (key) {
+    case 'last30':   return [back(30), t];
+    case 'last90':   return [back(90), t];
+    case 'lastyear': return [back(365), t];
+    default:         return ERP.Reports.range(key);
+  }
+}
+
+/* Everything the matcher and the screen both need to agree on, worked out
+   once per search. `problems` are inputs that can never match anything —
+   shown to the person rather than quietly returning a wrong list. */
+function prepare(state) {
+  var p = parse(state.q);
+  var scope = (state.scope === 'customer' || SCOPE_FIELD[state.scope]) ? state.scope : 'all';
+  var problems = [], ranges = null;
+  if (p.dates.length) {
+    ranges = p.dates;                                   /* a typed date replaces the date filter */
+  } else if (state.period === 'custom') {
+    var f = validISO(state.from), t = validISO(state.to);
+    if (f && t && f > t) problems.push('The “From” date is after the “To” date, so no invoice can match.');
+    if (f || t) ranges = [{ from: f || null, to: t || null }];
+  } else if (state.period && state.period !== 'all') {
+    var r = presetRange(state.period);
+    if (r && (r[0] || r[1])) ranges = [{ from: r[0], to: r[1] }];
+  }
+  var minP = toPaisa(state.min), maxP = toPaisa(state.max);
+  if (minP !== null && maxP !== null && minP > maxP) {
+    problems.push('The minimum total is above the maximum, so no invoice can match.');
+  }
+  return { p: p, scope: scope, ranges: ranges, minP: minP, maxP: maxP, problems: problems };
+}
+
+/* A function that says whether one invoice passes every active filter. The
+   words and dates are parsed once, here, not once per invoice. */
+function matcher(state) {
+  var pr = prepare(state), idx = ensure(), terms = pr.p.terms;
+  var cur = (pr.scope === 'all' || pr.scope === 'customer') && terms.length ? currentCustomerText() : null;
+  return function (inv) {
+    if (pr.problems.length) return false;
+    if (state.status && state.status !== 'all' && inv.status !== state.status) return false;
+    if (state.region && state.region !== 'all' && inv.regionId !== state.region) return false;
+    if (state.wh && state.wh !== 'all' && inv.warehouseId !== state.wh) return false;
+    if (pr.ranges) {
+      var d = inv.invoiceDate, ok = false;
+      for (var k = 0; k < pr.ranges.length && !ok; k++) {
+        var r = pr.ranges[k];
+        ok = (!r.from || d >= r.from) && (!r.to || d <= r.to);
+      }
+      if (!ok) return false;
+    }
+    if (pr.minP !== null && inv.grandTotal < pr.minP) return false;
+    if (pr.maxP !== null && inv.grandTotal > pr.maxP) return false;
+    if (terms.length) {
+      var e = idx[inv.id];
+      if (!e) { idx = ensure(true); e = idx[inv.id]; if (!e) return false; }
+      var hays = pr.scope === 'all' ? [e.all, cur(inv.customerId)]
+               : pr.scope === 'customer' ? [e.customer, cur(inv.customerId)]
+               : [e[SCOPE_FIELD[pr.scope]]];
+      for (var j = 0; j < terms.length; j++) if (!hasTerm(hays, terms[j])) return false;
+    }
+    return true;
+  };
+}
+
+function sortList(list, key) {
+  var due = {};
+  function dueOf(i) {
+    if (due[i.id] === undefined) {
+      due[i.id] = i.status === 'CANCELLED' || i.status === 'DRAFT' ? -1 : ERP.Invoices.outstanding(i);
+    }
+    return due[i.id];
+  }
+  function newer(a, b) {                               /* > 0 when a is newer than b */
+    if (a.invoiceDate !== b.invoiceDate) return a.invoiceDate < b.invoiceDate ? -1 : 1;
+    var x = a.createdAt || '', y = b.createdAt || '';
+    return x === y ? 0 : (x < y ? -1 : 1);
+  }
+  function newestFirst(a, b) { return newer(b, a); }
+  var cmp;
+  if (key === 'oldest') cmp = newer;
+  else if (key === 'high') cmp = function (a, b) { return (b.grandTotal - a.grandTotal) || newestFirst(a, b); };
+  else if (key === 'low') cmp = function (a, b) { return (a.grandTotal - b.grandTotal) || newestFirst(a, b); };
+  else if (key === 'due') cmp = function (a, b) { return (dueOf(b) - dueOf(a)) || newestFirst(a, b); };
+  else cmp = newestFirst;
+  return list.sort(cmp);
+}
+
+/* the filtered, sorted list the screen and the CSV export both use */
+function results(state) {
+  return sortList(ERP.Invoices.all().filter(matcher(state)), state.sort);
+}
+
+/* For a search that landed on a product, the lines that matched — so the
+   list can show WHY that invoice is there ("Taj Mahal Sella × 20"). Words
+   that the invoice number or the shop already explain are not counted. */
+function hitsFor(state) {
+  var pr = prepare(state), idx = ensure(), terms = pr.p.terms;
+  if (!terms.length || (pr.scope !== 'all' && pr.scope !== 'product')) return function () { return null; };
+  var cur = currentCustomerText();
+  return function (inv) {
+    var e = idx[inv.id];
+    if (!e) return null;
+    var want = terms;
+    if (pr.scope === 'all') {
+      var others = [e.number, e.customer, cur(inv.customerId)];
+      want = terms.filter(function (t) { return !hasTerm(others, t); });
+    }
+    if (!want.length) return null;
+    var hit = e.items.filter(function (x) {
+      return x.n && want.some(function (t) { return hasTerm([x.n], t); });
+    });
+    return hit.length ? { lines: hit.slice(0, 3), more: Math.max(0, hit.length - 3) } : null;
+  };
+}
+
+/* What to tell the person about how the box was read. */
+function describe(state) {
+  var pr = prepare(state), notes = [];
+  pr.p.dates.forEach(function (d) {
+    var span = d.from === d.to ? d.label : 'all of ' + d.label;
+    notes.push('“' + d.src + '” is read as ' + span + (d.dayFirst ? ' (day / month / year)' : '') +
+      (state.period && state.period !== 'all' ? ' — this replaces the date filter' : '') + '.');
+  });
+  return { notes: notes, problems: pr.problems, words: pr.p.terms };
+}
+
+/* is anything narrowing the list? (drives the Clear button and empty state) */
+function active(state) {
+  return !!(String(state.q || '').trim() || (state.period && state.period !== 'all') ||
+    (state.status && state.status !== 'all') || (state.region && state.region !== 'all') ||
+    (state.wh && state.wh !== 'all') || String(state.min || '').trim() || String(state.max || '').trim());
+}
+function reset(state) {
+  var keep = state.sort;
+  Object.keys(DEFAULTS).forEach(function (k) { state[k] = DEFAULTS[k]; });
+  state.sort = keep || DEFAULTS.sort;
+  return state;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   STYLE — only what the list's new pieces need
+   ══════════════════════════════════════════════════════════════════════════ */
+(function () {
+  if (!D || D.getElementById('fc-invsearch-css')) return;
+  var st = D.createElement('style'); st.id = 'fc-invsearch-css';
+  st.textContent =
+    '.fcb-filters{margin-top:-4px}' +
+    '.fcb-filters .f{min-width:0}' +
+    '.fcb-filters .f input[inputmode]{width:112px}' +
+    '.fcb-note{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;color:var(--muted);' +
+      'margin:2px 2px 10px}' +
+    '.fcb-note.warn{color:var(--bad,#b3261e);font-weight:600}' +
+    '.fcb-count{display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between;' +
+      'font-size:13px;color:var(--muted);margin:2px 2px 8px}' +
+    '.fcb-count b{color:var(--ink)}' +
+    '.fcb-pager{display:flex;align-items:center;gap:8px}' +
+    '.fcb-pager .pg{font-size:12.5px;padding:0 6px;white-space:nowrap}' +
+    '.fcb-hit{font-size:12px;color:var(--violet);margin-top:2px}' +
+    '@media (max-width:760px){body.fc-mobile .fcb-filters .f{flex:1 1 46%}' +
+      'body.fc-mobile .fcb-filters .f input{width:100%}}';
+  D.head.appendChild(st);
+})();
+
+ERP.InvoiceSearch = {
+  SCOPES: SCOPES, SORTS: SORTS, DEFAULTS: DEFAULTS,
+  parse: parse, matcher: matcher, results: results, hitsFor: hitsFor, describe: describe,
+  active: active, reset: reset, index: ensure, toPaisa: toPaisa
+};
+})(typeof window !== 'undefined' ? window : globalThis);
 
 </script>
 

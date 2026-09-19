@@ -37,6 +37,7 @@ database-backed sequences.
 | `payments` | `paymentAllocations` (`paymentId`) | `REC-` (in) · `PV-` (out) |
 | `expenses` | — | `EXP-2026-000001` |
 | `accountAdjustments` | — | `ACC-2026-000001` |
+| `millingJobs` (toll milling — 32-milling.js) | `millingJobItems` (`jobId`, `side: ISSUE\|RECEIVE`) | `MIL-2026-000001` — wheat issued to a mill, flour/chokar received back; settles into the mill's own `suppliers` khata via a patch to the ledger, not a separate ledger store |
 
 ### Stock
 
@@ -48,7 +49,8 @@ database-backed sequences.
 Movement kinds: `OPENING_STOCK · PURCHASE_IN · SALE_OUT · CUSTOMER_RETURN_IN ·
 CUSTOMER_RETURN_DAMAGED_IN · SUPPLIER_RETURN_OUT · TRANSFER_IN · TRANSFER_OUT · ADJUSTMENT_IN ·
 ADJUSTMENT_OUT · SALE_REVERSAL_IN · PURCHASE_REVERSAL_OUT · REPLACEMENT_OUT ·
-SUPPLIER_REPLACEMENT_IN · STOCK_WRITE_OFF · DISPATCH_OUT`
+SUPPLIER_REPLACEMENT_IN · STOCK_WRITE_OFF · DISPATCH_OUT · MILL_ISSUE_OUT · MILL_RECEIPT_IN ·
+MILL_ISSUE_REVERSAL_IN · MILL_RECEIPT_REVERSAL_OUT`
 
 ### Supporting
 

@@ -1,0 +1,3 @@
+# Real secrets never get committed. See erp-config.sample.php for the shape.
+erp-config.php
+erp-app/

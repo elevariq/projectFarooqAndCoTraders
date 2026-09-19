@@ -401,6 +401,267 @@ Asked to review both features above for edge cases before moving on. Found and f
     click-navigates correctly — all still passing). The actual visual fix was diagnosed by reading
     the CSS cascade against the client's screenshot and needs a live phone to fully confirm.
 
+## Server-side authentication & authorization (2026-09-16)
+
+The client-side-only account system (`22-users.js`'s PIN accounts, `19-collection-rbac.js`'s
+`ERP.RBAC`) was never a real security boundary — no login was mandatory, an account with no
+PIN was a free pass, `Session.role()` fell back to `'OWNER'` with nobody signed in, and the
+whole business database was **world-readable with no credentials at all**
+(`database/fresh-install-backup.json`, `data-exports/*.csv`, etc. — all `200`, no auth).
+Branch `feature/auth-server-enforced`, PR #1. Rolled out in phases, of which the first three
+are done and live:
+
+- **Phase 0 (live)**: per-directory `.htaccess` denies on `database/`, `data-exports/`, `docs/`,
+  `samples/`, `erp-upgrade/`, the orphaned `app/` duplicate, and `*.md`/`*.json`/`*.sql`/`*.prisma`
+  at the ERP root. The app's own runtime files (`index.html`, `farooq-co-erp.html`,
+  `farooq-erp-data.js`, `logo.png`) are untouched and still served — each directory got its own
+  deny file specifically so a mistake there couldn't take down the app root.
+- **Phase 1 (deployed)**: a PHP 8.3 API under `public_html/ERP/api/` (same-origin with the ERP,
+  works transparently through the base64 `srcdoc` launcher). Backed by a **new, dedicated**
+  MySQL database `u943531942_erpauth` — deliberately separate from `u943531942_facotraders`,
+  which stays empty and reserved for the eventual IndexedDB→MySQL business-data migration (see
+  below). Schema in `database/auth-schema.sql`: `auth_users`, `auth_sessions`,
+  `auth_login_attempts`, `auth_role_permissions` (seeded from the exact `ROLES` map in
+  `19-collection-rbac.js`, so the server is now the source of truth for what each role can do),
+  `auth_audit`. Endpoints: `login.php` (bcrypt, per-username+per-IP rate limiting, account
+  lockout after 5 failures, one generic error message so accounts can't be enumerated),
+  `logout.php`, `me.php`, `ticket.php` (offline grace-period reissue), `change-password.php`,
+  `users.php` (owner-only account CRUD). Every response sends `Cache-Control: no-store` — the
+  Hostinger CDN in front of this domain must never cache an authenticated response.
+  `scripts/auth-bootstrap.php` creates the first OWNER account over SSH only (refuses to run over
+  HTTP, refuses if any account already exists).
+- **Phase 2 (live)**: new module `erp-upgrade/31-auth.js` (`AUTH_MODE = 'observe'`). A server
+  sign-in becomes the source of truth for `ERP.Session`/`ERP.RBAC` — permission checks fail
+  **closed** once a server identity exists — but nobody is forced to sign in yet; with no server
+  session the app renders exactly as it did before this module existed. A "Company sign-in" link
+  sits next to the existing account chip. Includes an offline grace-period ticket (HMAC-signed
+  server-side, but the signature can't be verified client-side since the secret never reaches
+  the browser — only the ticket's own claimed expiry is enforced; documented in the module header
+  as the same category of limit as `22-users.js`'s own PIN comment) and a 15-minute idle lock
+  (re-verifies against the server if online, or a cached PBKDF2 password verifier if offline).
+- **Phase 3 (not done, deliberately)**: moving the app files behind `index.php`/`erp.php` so
+  sign-in becomes mandatory. Not attempted this session — flipping that gate risks locking the
+  client out of live billing software if anything is wrong, and needs Phase 2 to run clean for a
+  few days first, then a deliberate go-ahead.
+
+**Credentials**: the DB password for `u943531942_erpauth` and the ticket-signing secret are
+generated fresh (never extracted from the existing `dbhub` MCP credential) and live only in
+`private/erp-config.php` on the server and locally, gitignored — `private/erp-config.sample.php`
+is the committed template. The bootstrapped OWNER account (`username: owner`) has
+`must_change_password` set — the client should change it and this is a real gap: **no UI for
+changing a password was built yet**, only the `api/auth/change-password.php` endpoint and
+`ERP.Auth.changePassword()` exist. Adding that screen is unstarted follow-up work.
+
+**Verified this session**: full existing test suite (24 harnesses, 1,196 checks) unaffected;
+new `test-auth-client.mjs` (25 checks) covers observe-mode fallback, login/logout, fail-closed
+permissions, a valid vs. an expired offline ticket, and both idle-lock unlock paths — all via a
+mocked `fetch`, never depending on the live server. All 8 PHP files linted against the live
+server's actual PHP 8.3 binary before upload. Live smoke test via a real browser: public data
+now `403`, `_bootstrap.php`/`_session.php` return `403` on direct request, a full login round
+trip as the bootstrapped OWNER worked end-to-end and correctly rebound `ERP.Session`/`CURRENT_USER`,
+and a real bug found in that same smoke test (the "Company sign-in" link didn't disappear once
+signed in) was fixed and redeployed before this was called done.
+
+**Open decisions from this rollout — both confirmed by the user, 2026-09-16, no change needed**:
+`LANDED_COST_MANAGE`/`LANDED_COST_VIEW`/`EXPENSE_MANAGE` stay OWNER-only in
+`auth_role_permissions`, matching today's client-side behavior exactly. Phase 3 (mandatory
+sign-in) stays deferred — Phase 2 should run clean for a few days first before it's revisited.
+
+**Password-change screen added (2026-09-16, same day as Phase 2)**: the gap flagged right after
+Phase 2 shipped — a `must_change_password` flag existed with no UI to act on it — is closed.
+`31-auth.js` now shows a mandatory, non-dismissable "Change your password" overlay right after
+signing in when the server says the account must change it (set on every bootstrapped/owner-reset
+account), and a voluntary "Change password" link next to the account chip otherwise (replacing
+"Company sign-in" once actually signed in). Changing the password also clears the cached offline
+PBKDF2 verifier, since it was derived from the old password. Covered by 10 new checks in
+`test-auth-client.mjs` (35 total in that file now).
+
+**The `test-users.mjs` flake noted in the auth-rollout session above is now fixed (2026-09-16/17)**.
+It resurfaced during the Milling Jobs deploy — this time failing **consistently** (every standalone
+run on this machine, not the "1 in 3-4" rate originally seen; confirmed by the milling work's own
+git-stash isolation that it was still present with zero milling-related changes in the tree, so it
+remained a pre-existing issue, just now hitting a much higher rate under local machine load). Since
+it was now reliably blocking `scripts/deploy-erp.sh`'s test gate, it was fixed rather than deferred
+again. Root cause matched the diagnosis already on file: U22's click on a no-PIN account fires an
+async `Session.signIn()` whose `closeSignin()` completion could resolve after a fixed `sleep(300)`
+had already moved on to U23's PIN-account click, wiping that freshly-rendered `#siPin` input out
+from under it. Fixed in the test only (no application code touched) by replacing that fixed sleep
+with a small `waitUntil(condition, timeoutMs)` poll that waits for the actual settled state —
+session id changed and the dialog closed — before proceeding, so a slow resolve can no longer leak
+into the next step regardless of machine speed. Verified with 8 consecutive standalone runs, all
+clean, plus a full-suite rerun (26/26 harnesses green).
+
+## Milling jobs — toll milling (2026-09-16)
+
+A new client requirement, analysed from `clientNewReq/` (a gitignored working folder — see commit
+`d0f6d50`): Farooq & Co hand wheat to a flour mill and get flour bags plus chokar (bran) back, with
+some grain lost in grinding, and settle the difference in the mill's own account. This was a
+**second-hand reading** of the client's message (the photo it referenced, `new.jpeg`, was never
+actually in that folder) — confirmed against the ERP's own data rather than guessed: 25 of 32
+suppliers are flour mills, there is a `گندم 49 کلو` (wheat) product and two `چوکر` (chokar/bran)
+products, and a supplier record is literally named "Zam Zam chokar khata" with `categoryInferred:
+"Bran ledger account"` and a running balance. Deliberately **not** built: saved yield recipes /
+enforced conversion ratios (loss is calculated and shown, never enforced), an in-house/no-mill
+production mode, and editing a posted job (only Cancel, which reverses the stock — same as every
+other posted document in this app). Flagged for the client to confirm: whether the mill genuinely
+*buys* the wheat (net settlement, the default) or only charges a grinding fee while the wheat stays
+Farooq & Co's property (the job's own `settle: 'FEE_ONLY'` toggle covers this without a rebuild).
+
+New module `erp-upgrade/32-milling.js`, `DB_VER` 10 → 11 (`millingJobs`, `millingJobItems`). A
+"Milling job" is entered on its own screen ("Milling" under Inventory & supply): pick a mill (an
+existing supplier), list wheat issued and flour/chokar received back, each line in bags **and**
+kilograms — weight auto-fills from the product's existing `kg` field (already set on 100 of 136
+products) and stays editable for the real weighbridge figure. Four new stock-movement kinds
+(`MILL_ISSUE_OUT`, `MILL_RECEIPT_IN`, and their reversal pair) go through the one existing
+`ERP.Inventory.apply` write path — nothing new invented there. The only change to shared core logic
+in the whole feature: `Inventory.apply`'s moving-average-cost condition now also fires on
+`MILL_RECEIPT_IN`, not just `PURCHASE_IN`, since flour arriving from a mill is genuinely new costed
+stock; covered by a regression check that an ordinary purchase's moving average is bit-identical to
+before that change.
+
+**The real architectural gap this closed**: `ERP.Ledger.supplier` previously derived a mill's
+balance from exactly four sources (purchases, payments out, supplier returns, opening balance) —
+there was no way to debit or credit a mill's account for anything else, even though customers
+already had this via `ERP.Adjustments` (`16-khata.js`). `32-milling.js` patches
+`ERP.Ledger.supplier` the same way `16-khata.js` patches `ERP.Ledger.customer`, adding up to three
+rows per posted job (wheat issued reduces payable, flour/chokar received and the milling fee
+increase it) so the mill's Statement of Account, the payables total and printed statements all pick
+up milling jobs automatically, with no changes needed to any of those screens.
+
+Covered by `test-milling.mjs` (80 checks: validation, the full posting cycle, stock movements, the
+ledger patch including a `FEE_ONLY` job and a cancellation, the moving-average-cost regression, the
+printable document, and a full DOM-driven entry-screen walkthrough including the "mill goes inactive
+mid-draft stays selectable" edge case). Full existing suite (25 other harnesses) reruns clean.
+
+**Client's own paper ledger seen and cross-checked (2026-09-16, `clientNewReq/new.jpeg`, gitignored —
+real business figures)**: a stock-book page headed for a named flour mill, with the same four-column
+شکل (تعداد/وزن/ریٹ/رقم) rows summing to a large total, a deduction, and a net payable — confirming
+Net Settlement as the right default over a grinding-fee-only model (the totals are commodity-value
+figures in the tens of millions, not service-charge figures). Two things flagged for the client
+rather than guessed from the photo: some تفصیل product names on that page weren't confidently
+legible (byproduct grades — broken grain, sweepings — rather than clean SKU matches), and the top
+half of that page is a continuous آمد/نکاس/باقی (in/out/running-balance) weight ledger per mill,
+which the job-by-job model here doesn't reproduce as a single running column (each job carries its
+own weights; the mill's Statement of Account rolls them up, but not as one balance line the way the
+paper page shows it) — a scoped follow-up if the client specifically wants that view, not a rebuild.
+
+**Edge-case review (2026-09-16, same day)**: reviewed the module for the same class of edge cases
+the Area-filter/Statement-of-Account and Payroll reviews earlier this session found real bugs in.
+Two found and fixed:
+- **Removing every line on a side left a dead-end empty table**, with no row left to type into
+  except a separate "Add line" click — inconsistent with `27-landed-ui.js`'s own dynamic line list,
+  which always keeps at least one row present after a removal. Now does the same.
+- **A save-in-flight race**: Save is clicked (async), the entry is then abandoned (Cancel) and a
+  second, different draft started before the first save resolves. The save's completion handler was
+  unconditionally resetting the screen back to the list — which would have silently discarded
+  whatever had already been typed into that second draft. Now captures the specific draft object
+  being saved and only clears it from the screen if it is still the live one when the save lands.
+  Verified this matters by reverting the fix and confirming the new regression check fails, then
+  restoring it.
+
+Also added a Cancel action to the job detail card itself (previously only on the list row),
+matching how `30-payroll.js` duplicates its primary action in both places. Reviewed and confirmed
+**not** bugs, matching existing house precedent: a cancelled job's stock reversal is unguarded
+against going negative if the goods were already resold onward — same as `PURCHASE_REVERSAL_OUT` on
+a purchase edit; a zero rate is accepted on a NET job's line the same way `needRate` validation
+allows it everywhere else in the app (a deliberate free/promotional line, not a milling-specific
+gap).
+
+## Change shop on an invoice (2026-09-19)
+
+Business need: an invoice made out to the wrong shop must move to the right one — the shop and
+nothing else. A shop's khata is *derived* from invoices, so this is an account move, not a label
+fix. Previously the edit screen's Shop picker only rewrote `customerId`: receipts/allocations
+stayed with the old shop (new shop got the debit, old shop kept the credit), and the edit route
+re-validates stock against bags the invoice already took, so it failed once stock hit zero.
+
+- `ERP.Invoices.changeCustomer(id, newCustomerId, {reason})` (`02-services.js`), one transaction:
+  refreshes the invoice's shop snapshots (`Invoices.customerFields`, shared with `buildRecord`),
+  sets `previousBalance` from the **new** shop as of the day before the invoice date, moves the
+  receipts that belong *wholly* to this invoice (recomputing each one's stored `balanceBefore`/
+  `balanceAfter`, which the printed receipt shows) and any dispatch notes linked to it, drops stale
+  hand-typed shop/owner/code/contact/address/region/previousBalance overrides from the print
+  sheet (kept in its revision history), writes an audit entry. Lines, amounts, number, date and
+  stock are untouched — nothing is re-validated or re-deducted, no new number is spent.
+- `Invoices.reassignCheck(id[, newId])` reports what would block it without writing. Refused (with
+  a message naming the receipt/return): a receipt also applied to other invoices or partly left on
+  account; any customer return (its credit note/refund is a fact about the old shop); a cancelled
+  invoice. A reversed receipt does not block. Sales orders are deliberately left as they were.
+- `Invoices.save` now rejects changing the shop on a **posted** invoice (drafts are still free);
+  the edit screen locks the Region/Shop pickers for posted invoices with a hint.
+- UI: "Change shop" panel (`PANELS.changeshop`: Area → Shop starting on a blank choice, balance
+  before→after preview, optional reason), opened from the invoice list row and the document
+  viewer. Gated by the existing `TRANSACTION_CORRECT` permission (Owner/Manager/Accountant) — no
+  server-side permission change needed. Relax it in `04-documents.js`/`05-ui-builder.js` if wanted.
+- Integrity page: new `Health.allocationCheck()` warns about any receipt applied to an invoice that
+  belongs to a different shop — exactly what the old edit route could have left in live data. It
+  only detects; there is no auto-repair (reverse and re-enter the receipt, or Change shop).
+- Deliberately unchanged: stock movement notes and the source Sales Order keep the old shop name
+  (history, not accounting); moving is repeatable (a wrong move can be moved back).
+- `test-invoice-change-shop.mjs` (90 checks, mutation-tested: ten deliberate breakages each turn it red).
+- **Pre-existing bug found, NOT fixed (unrelated)**: only ONE draft invoice can ever exist — the
+  `invoices` store has a unique `invoiceNumber` index and drafts save with `invoiceNumber: ''`, so
+  saving a second draft fails with "Transaction failed". Needs its own fix (e.g. store no number
+  for drafts, or a non-unique/partial index) and a decision on existing data.
+
+## Invoice search — finding old invoices (2026-09-19)
+
+Client request: "add a search option to find old invoices easily by Invoice Number, Customer Name,
+Date, or Product Name or any other." The Sales & invoices screen already had a search box, but it
+couldn't really find *old* invoices: one substring test over a glued-together string (no Urdu letter
+folding, no multi-word matching), the invoice **date was never in the searched text** (and the
+`LIST.custom` date range the code half-supported had no controls at all), and it scanned the whole
+line-items table once per invoice per keystroke and drew every invoice as a DOM row.
+
+- New module `33-invoice-search.js` (`ERP.InvoiceSearch`) is the engine; the screen stays in
+  `05-ui-builder.js` §37–39 (`ERP.InvoiceList` is now just remembered state + `results()`/`reset()`/
+  `goPage()`); `06-wiring.js` got four small event edits (page reset, Clear, pager).
+- **Index**: one normalised text index per invoice, built in a single pass over `S.invoiceItems`
+  and dropped on `Mirror.refresh` (same approach as `11-search.js`, whose `ERP.Search.normalize`
+  supplies the Urdu/English folding). Fields kept separate so "Search in" can scope to: invoice /
+  order / dispatch / reference no., customer & phone, product, amount, notes & other.
+- Every space-separated word must be found (AND, any order); substring match, deliberately *not*
+  fuzzy (a filter list must be predictable — the Ctrl+K palette is the forgiving one). Phone numbers
+  and invoice numbers also match with dashes/spaces removed. A customer is matched by both the name
+  **printed on the invoice** (snapshot) and the shop's **current** name (looked up by id at search
+  time, not cached, so a rename is seen immediately).
+- **Dates typed into the box become a date filter**, not text: `12/09/2026`, `2026-09-12`,
+  `12 Sep 2026`, `Sep 12, 2026`, `Sep 2026`, `09/2026`, `2026-09`, also in Urdu digits. Numeric
+  dates are **day-first** (month-first only when day-first is impossible); the screen states how it
+  read the date. A typed date replaces the date preset. Month-only numeric forms must stand alone
+  so the tail of a number like `INV-2026-12` is not misread as December 2026.
+- New controls: Search-in scope, Sort (newest/oldest/highest total/lowest total/highest balance
+  due), date presets + Last 30 days / 3 months / 12 months / **Custom range** (From/To), Total
+  from/to, Clear filters, **50 rows per page** (KPI cards and CSV still cover every match), and a
+  "matched product lines" hint under the invoice number when a product search is why a row appears.
+- Inputs that can never match (From after To, minimum above maximum) show a warning and an empty
+  list instead of a quietly wrong one — the same principle as the Statement of Account date check.
+- **Pre-existing bug found and fixed while reviewing this (`02-services.js`, `Reports.range`)**: it
+  built dates with `toISOString()` (UTC) from local-midnight `Date`s, so anywhere east of Greenwich
+  — i.e. Pakistan, the client — "Yesterday" was two days ago, "This week" started on a Sunday and
+  "Last month" ran Jul 31–Aug 30 instead of Aug 1–31. Only the invoice list and the two period
+  pickers in `06-wiring.js` (~lines 527/547, statement/export periods) call it; all now get correct
+  local dates. Regression-tested in `test-invoice-search.mjs` under UTC, Asia/Karachi, Pacific/Auckland
+  and America/Los_Angeles, and mutation-checked (old code restored → 4 checks fail with exactly that
+  symptom). Other places that build dates from `toISOString()` were not audited.
+- Covered by `test-invoice-search.mjs` (115 checks: every field, scope, all date forms incl. the
+  day-first ambiguity and Urdu digits, ranges, presets, sorting, paisa totals, index freshness after
+  cancel/new invoice, "never scans line items per invoice", and the real screen controls, CSV and
+  paging). Full suite reruns clean.
+- **Not verified in a real browser**: the layout (two filter rows, mobile wrap) was only checked
+  through jsdom, which doesn't render CSS. Two Chrome-driven attempts failed because the automation
+  browser cannot open *any* localhost page (even a plain directory listing shows Chrome's error
+  page) — an environment limit, not an app fault. Eyeball it on a phone and a desktop after deploying.
+- Not done: fuzzy/typo matching in this list, saved searches, searching the hand-edited print text
+  (`12-invoice-editor.js`), Urdu month names in typed dates.
+
+**Deployed live 2026-09-19** (Change shop + Invoice search, together; commits `6bebbcd`..`f8b2e0c`) via
+`scripts/deploy-erp.sh` — full suite green first, Hostinger cache cleared for the ERP subdomain, and
+verified byte-identical on the server and over HTTPS. No IndexedDB schema change, so no browser-data
+migration was involved. **Rollback**: the previous live files are on the server in
+`/home/u943531942/backups/erp-deploy-20260919233433/` — copy `index.html`, `farooq-co-erp.html`,
+`farooq-erp-data.js` from there back into `public_html/ERP/`, then clear the cache again.
+
 ## Where to look for more detail
 
 - `docs/OPERATIONS.md` — full access inventory, exact commands used, and the deploy checklist.
