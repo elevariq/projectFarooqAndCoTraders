@@ -312,21 +312,26 @@ call — all seven statements succeeded, table cleaned up, database back to 0 ta
 
 ## Phase 3 rollout (login gate) — checklist
 
-Built and tested 2026-09-20; see `CLAUDE.md` → "Server-side authentication & authorization" for
-what it is. **A first `migrate` was run on 2026-09-20 and rolled back** after a gzip curl probe got a 403 from the CDN
-edge; that edge turned out to 403 gzip-accepting curl on the ORIGINAL site too, so the probe was
-misleading (see the incident note in CLAUDE.md). Consequence for this checklist: **the only
-authoritative test that the app loads is a real browser** — the script's curl checks are plain-request
-checks plus a control-relative gzip check that may say INCONCLUSIVE. The script is
-`scripts/gate-rollout.sh` (`status | migrate | enforce-on | enforce-off | rollback`); it needs the
-same SSH access as `deploy-erp.sh`. Every stage backs up first and is reversible.
+**STATUS: rolled out and ENFORCING since 2026-09-20.** Order actually run: `migrate` (a first attempt
+was rolled back on a misleading gzip-curl 403 — see below), `migrate` again, real-browser check,
+`finalize`, `deploy-erp.sh` (enforce-mode client), `enforce-on`, then a real-browser check that a
+signed-in session works and that cookie-less requests get only the sign-in page. This checklist is now
+the reference for **re-running or undoing** it, and for probing the host correctly. See `CLAUDE.md` →
+"Server-side authentication & authorization" for what it is and its known limits.
+
+**Read this before probing the host:** the Hostinger CDN edge answers a gzip-accepting **curl** with
+`403` even on the ORIGINAL static site (an untouched `/logo.png` is refused the same way), while real
+browsers get `200` + brotli. So **the only authoritative test that the app loads is a real browser**;
+the script's curl checks are plain-request checks plus a control-relative gzip check that reports
+INCONCLUSIVE when the control is refused too. The script is `scripts/gate-rollout.sh`
+(`status | migrate | finalize | enforce-on | enforce-off | rollback`); it needs the same SSH access as
+`deploy-erp.sh`. Every stage backs up first and is reversible.
 
 **Before you start**
 1. `git status` clean, everything on `main` (no branches/PRs — see "Git workflow" above).
-2. Decide who needs an account. Only `owner` exists as a server account. **Everyone else is locked
-   out at `enforce-on`.** There is no UI to create staff accounts yet — only the owner-only
-   `api/auth/users.php` endpoint (`create` action) — so either build that screen first or create the
-   few accounts by hand before flipping.
+2. Decide who needs an account. **Everyone without a server account is locked out at `enforce-on`.**
+   The owner creates them under Admin → Company accounts (module 34); each person should sign in once
+   before the flip. (As of 2026-09-20: two accounts, `owner` and `test`.)
 3. Know the emergency exit: `scripts/gate-rollout.sh enforce-off` (or set `'enforce_login' => false`
    in `private/erp-config.php` by hand). Instant, no redeploy.
 

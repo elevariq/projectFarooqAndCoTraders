@@ -10,11 +10,20 @@ GitHub: talhaazhar-ta):
 
 - **`farooqandcotraders.online`** — public homepage (`public_html/index.html`).
 - **`erp.farooqandcotraders.online`** — a subdomain pointing at `public_html/ERP`, serving a
-  **client-side-only ERP app**. No server backend. All business data (invoices, customers,
+  **client-side-only ERP app** (no server backend for business data — see the login-gate note below). All business data (invoices, customers,
   inventory, ledgers) lives in each browser's own IndexedDB (`farooqco_erp_ledger`). The static
   HTML/JS files here are the *application code*, not the data. **As of 2026-09-15 a real MySQL
   database has been provisioned for this project (see "MySQL database" below) but nothing in the
   app currently reads or writes it — its intended role isn't defined yet.**
+
+  **Since 2026-09-20 the ERP requires sign-in.** There is now a small PHP auth backend (accounts and
+  sessions only, in its own MySQL database `u943531942_erpauth` — never business data) and a login
+  gate in front of the app: an unauthenticated request — `curl`, a fresh browser — gets a `401`
+  sign-in page instead of the app. So a plain `curl` health check now reports `401` (that means
+  "healthy and gated"), and testing the live app needs a **signed-in real browser**. Note also that
+  the Hostinger CDN answers gzip-accepting `curl` with `403` even for the original static site — don't
+  read anything into that; use a real browser. Details, the kill-switch (`enforce-off`) and the
+  rollout scripts: "Server-side authentication & authorization" below and `docs/OPERATIONS.md`.
 
 Read `public_html/ERP/README.md` and `public_html/ERP/database/SCHEMA.md` for how the ERP itself
 is built — 25+ upgrade modules injected into one original HTML file, documented per-module in that
@@ -458,123 +467,99 @@ are done and live:
   the browser — only the ticket's own claimed expiry is enforced; documented in the module header
   as the same category of limit as `22-users.js`'s own PIN comment) and a 15-minute idle lock
   (re-verifies against the server if online, or a cached PBKDF2 password verifier if offline).
-- **Phase 3 — the login gate: ENFORCING on the live server since 2026-09-20 (`enforce_login => true`
-  in the server's `private/erp-config.php`, turned on by `scripts/gate-rollout.sh enforce-on`).
-  Sign-in is MANDATORY.** Verified right after, from a real Chrome session: a signed-in session
-  loads the app (Auth mode enforce, heartbeat running, Sign out shown, user-switch chip disabled);
-  a request with NO cookie — repeated, with cache-busting, and immediately after a signed-in load —
-  gets `401` + the sign-in page (4,419 bytes) for `/`, `/index.html`, `/farooq-co-erp.html`, `401 "Sign in
-  required."` for `/farooq-erp-data.js`, `403` for `/_app/…`, and none of the app or its data, so the
-  CDN is not sharing signed-in copies. **Not yet tested by anyone:** a fresh signed-OUT sign-in through
-  the sign-in page with a real password (the tester's browser was already signed in) — do it once in a
-  private window. **Only two server accounts exist (`owner`, and a `test` Manager created 2026-09-19/20);
-  everyone else who used the ERP is locked out until the owner adds them under Admin → Company
-  accounts.** Emergency exit: `scripts/gate-rollout.sh enforce-off`. Earlier state, kept for history —
-  it was DORMANT until then. Verified in a real Chrome session while dormant:
-  the app + its master data are served through `api/gate.php` from `ERP/_app/` (the root static
-  copies are removed — `finalize` done), byte-identical to the local build (SHA-256 checked in the
-  browser), brotli-compressed, ERP boots, `/_app/` is 403, `me.php` is 401, and the new client
-  (`31-auth.js` with heartbeat/sign-out) is deployed but inert while the server isn't enforcing.
-  Backups: `/home/u943531942/backups/gate-20260920005913/` (second, successful migrate) and
-  `.../gate-20260920004319/` (first attempt, rolled back). **Remaining: `scripts/gate-rollout.sh
-  enforce-on`** — see "Before `enforce-on`" below (staff accounts) — then a real-browser sign-in
-  test. Emergency exit: `enforce-off` or set `'enforce_login' => false`.
-  History — first attempt, **Incident, 2026-09-20 ~00:45 PKT:** `gate-rollout.sh
-  migrate` passed all of its checks and installed the gate dormant, but a follow-up probe showed
-  every request that sends `Accept-Encoding: gzip` (i.e. every real browser) got a **403 from the
-  Hostinger CDN edge** (`Server: hcdn`, a gzip'd error page) while bare `curl` (no Accept-Encoding)
-  got the app. The checks had been bare-curl only, so they could not see it. Rolled back within
-  minutes (`gate-rollout.sh rollback`; the pre-gate `.htaccess` and root files were restored from
-  `/home/u943531942/backups/gate-20260920004319/`). **Root cause NOT established** — it is unknown
-  whether the gzip 403 was caused by the gate (PHP-served response behind the CDN) or is a
-  property of that CDN/edge for curl clients generally. **Not re-verified after rollback** that a
-  gzip-accepting request returns 200 (further production probes were blocked by the permission
-  layer) — check that first: `curl -s -o /dev/null -w '%{http_code}' -H 'Accept-Encoding: gzip'
-  https://erp.farooqandcotraders.online/` must print 200, and the site must load in a real browser.
-  Left on the server after the rollback (harmless, inert): `_app/` with copies of the app files,
-  `api/gate.php`, `api/_gate_login.php`, and updated `api/_bootstrap.php`, `_session.php`,
-  `auth/login.php`, `auth/me.php` (backward compatible: they only add fields). The rollout script's
-  checks now send a browser User-Agent + gzip and require HTTP 200 with identical bytes
-  (`browser_check`, proven to fail against a server that 403s gzip). **UPDATE (same day, later): the rollback was very probably unnecessary.** After it, the
-  user ran `curl -H 'Accept-Encoding: gzip' https://erp.farooqandcotraders.online/` themselves and
-  still got **403** on the restored original layout — so the Hostinger edge refuses gzip-accepting
-  curl requests even for the original static site; the 403 seen during the migrate was almost
-  certainly that, not the gate. (Not yet proven with a real browser or a control request.) So a gzip
-  curl probe is meaningless on this host. `gate-rollout.sh` was reworked accordingly: plain-HEAD
-  probes for blocked/alive questions; `browser_check` compares against an untouched control
-  (`/logo.png`) and reports INCONCLUSIVE if the control is refused too; `migrate` no longer deletes
-  the root copies — a human opens the site in a REAL browser, then runs `finalize` (or `rollback`).
-  `enforce-on` refuses until `finalize` has removed the public static copies.
-  *Correction to what this file and `31-auth.js` used to say: Phase 3 was **not** "flip
-  `AUTH_MODE` to `'enforce'`" — nothing ever branched on that value, so the enforcement had to
-  be built.* What exists now:
-  - **`api/gate.php`** (+ `api/_gate_login.php`): the app files moved to `ERP/_app/` (denied to the
-    web); `ERP/.htaccess` rewrites `/`, `/index.html`, `/farooq-co-erp.html` and
-    `/farooq-erp-data.js` to the gate. Signed out ⇒ a `401` sign-in page (never the app, and never
-    the customer/supplier master data that is embedded in it); signed in ⇒ the file, with
-    `private, no-cache` + an ETag (revalidates as a tiny `304`, and a matching `If-None-Match`
-    can't bypass the check). **Fails closed**: enforcing + database unreachable ⇒ `503` retry page.
-  - **The kill-switch**: `'enforce_login' => true` in the server's `private/erp-config.php`. Absent
-    or false = **dormant** — the gate serves the files to anyone and doesn't even touch the DB, so
-    installing it changes nothing for anyone. Only a real boolean `true` enforces (a typo like
-    `"yes"` can't lock people out). Read on every request: flipping it is instant, no redeploy —
-    it is also the emergency "let everyone back in".
-  - **Client (`31-auth.js`)**: the server tells the client it is enforcing (`enforce` on
-    `me.php`/`login.php`) and `Auth.mode` follows. Enforce mode adds a once-a-minute **heartbeat**
-    (visible tab, unlocked screen only): a `401` locks the screen behind a sign-in *without a
-    reload* (so no lost work) instead of quietly falling back to the local Owner; a network
-    failure only locks once the offline grace ticket has also expired. "Sign out" reloads to the
-    gate; the module-22 "switch user" chip becomes display-only. `me.php` now also issues a fresh
-    offline ticket (a gate sign-in never sees `login.php`'s response, so without it the app would
-    hold no ticket and lock the moment a shop lost signal).
-  - **Rollout**: `scripts/gate-rollout.sh` — `status`, `migrate` (installs the gate *dormant*,
-    verifies identical bytes, auto-undoes on any failed check), `enforce-on`, `enforce-off`,
-    `rollback`. Order: `migrate` → `scripts/deploy-erp.sh` (ships the new client; `enforce-on` refuses
-    without it) → `enforce-on`. `deploy-erp.sh` now uploads to `_app/` and refuses to run before `migrate`.
-    Checklist: `docs/OPERATIONS.md` → "Phase 3 rollout (login gate)".
-  - **Tests**: `test-gate.mjs` (48 checks — the real PHP under `php -S` against SQLite: signed-in/out,
-    session expiry/idle/deactivation, fail-closed, kill-switch, `If-None-Match` bypass; mutation-
-    verified) and 27 new checks in `test-auth-client.mjs` (section H/I). It skips itself (exit 0) if
-    there is no `php` on the machine; CI has PHP. **Not covered by any test**: the `.htaccess`
-    rewrites under real Apache/LiteSpeed and the Hostinger CDN — `gate-rollout.sh migrate` and the
-    checklist verify those live.
-  - **Known limits, found in the 2026-09-20 review (deliberately not "fixed" — say so before relying on them)**:
+- **Phase 3 — the login gate: LIVE and ENFORCING since 2026-09-20.** Sign-in is mandatory: the app
+  and the customer/supplier master data embedded in it are no longer downloadable by anyone.
+  (Correction to what this file and `31-auth.js` used to say: Phase 3 was **not** "flip `AUTH_MODE`
+  to `'enforce'`" — nothing ever branched on that value, so the enforcement was built new.)
+  - **How it works.** The app files live in `ERP/_app/` (denied to the web). `ERP/.htaccess` rewrites
+    `/`, `/index.html`, `/farooq-co-erp.html` and `/farooq-erp-data.js` to `api/gate.php` (+
+    `api/_gate_login.php`). Signed out ⇒ `401` and a sign-in page (`401 "Sign in required."` for the
+    data file); signed in ⇒ the file, sent `private, no-cache` with an ETag (revalidates as a tiny
+    `304`; a matching `If-None-Match` can't bypass the check). **Fails closed**: enforcing + database
+    unreachable, or a broken/unreadable config ⇒ `503` retry page — never the app.
+  - **The kill-switch.** `'enforce_login' => true` in the server's `private/erp-config.php` (currently
+    **true**). Absent/false = dormant: the gate serves the files to anyone and never touches the DB.
+    Only a real boolean `true` enforces (`"yes"` doesn't — a typo can't lock people out). Read on every
+    request, so flipping it is instant with no redeploy: **`scripts/gate-rollout.sh enforce-off`** is the
+    emergency "let everyone back in" (or edit that one line by hand over SSH).
+  - **The client (`31-auth.js`).** The server says it is enforcing (`enforce` on `me.php`/`login.php`)
+    and `Auth.mode` follows. Enforce mode adds a once-a-minute **heartbeat** (visible tab, unlocked
+    screen only): a `401` locks the screen behind a sign-in *without a reload* (no lost work) instead of
+    quietly carrying on as the local Owner; a network failure only locks once the offline grace ticket
+    has also expired. "Sign out" reloads to the gate; the module-22 "switch user" chip is display-only.
+    `me.php` also issues a fresh offline ticket (a gate sign-in never sees `login.php`'s response, so
+    without it a device that lost signal would lock at once).
+  - **Staff accounts and screen access (module 34).** Admin → **Company accounts** (owner only; at
+    the very bottom of the left menu, or under *More* on a phone): add someone with a temporary
+    password (the server forces a change at first sign-in), change a role, reset a password, switch an
+    account off/on (a switched-off person is signed out within a minute). All rules stay server-side
+    (`api/auth/users.php`: owner only, CSRF, the last owner can't be demoted or switched off, audit-
+    logged). Screens are tied to permissions: Payroll `PAYROLL_MANAGE` and Company accounts
+    `ACCOUNTS_MANAGE` (given to no role ⇒ owner only, like `LANDED_COST_*`; no server table change),
+    Milling `PURCHASE_CREATE`, Statement of Account `COLLECTION_VIEW`. This is a browser-side
+    convenience, not a data boundary. Invoice search is not separately gated (part of Sales).
+  - **Live state, verified 2026-09-20 in a real Chrome session (the tester's own browser, already
+    signed in as the owner).** A signed-in session loads the app in enforce mode (heartbeat running,
+    Sign out shown, chip disabled). Cookie-less requests — repeated, cache-busted, and right after a
+    signed-in load — get `401` + the 4,419-byte sign-in page for `/`, `/index.html`,
+    `/farooq-co-erp.html`, `401` for the data file, `403` for `/_app/…`, and none of the app or its
+    data, so **the CDN is not sharing signed-in copies**. Served files are byte-identical to the local
+    build (SHA-256 checked in the browser) and brotli-compressed (~1 MB on the wire on a first load;
+    repeat loads are `304`s). **Never tested by anyone: a fresh signed-OUT sign-in through the sign-in
+    page with a real password** — do it once in a private window. **Two server accounts exist: `owner`
+    (password changed, working) and `test` (a Manager, created by the owner, never signed in).**
+    Everyone else who used the ERP via the old module-22 PIN accounts is locked out until the owner
+    adds them.
+  - **Operating it.** `scripts/gate-rollout.sh`: `status`, `migrate` (installs the gate dormant, keeps
+    the original root copies so `rollback` is instant), `finalize` (after a REAL-BROWSER check: removes
+    the shadowed root copies), `enforce-on` (refuses until `finalize` is done and the enforce-mode
+    client is deployed), `enforce-off`, `rollback`. `scripts/deploy-erp.sh` uploads to `_app/`
+    atomically (`*.uploading` then rename), refuses to run before `migrate`, and takes a lock
+    (`.git/deploy-erp.lock`) so two runs can't overlap. Backups on the server:
+    `/home/u943531942/backups/gate-20260920005913/` (the successful migrate),
+    `.../gate-20260920004319/` (first attempt), `.../erp-deploy-<timestamp>/` (each app deploy), and
+    `private/erp-config.php.bak-<timestamp>` (each kill-switch flip). Checklist:
+    `docs/OPERATIONS.md` → "Phase 3 rollout (login gate)".
+  - **Lesson from the first rollout attempt (2026-09-20) — read before probing this host.** The first
+    `migrate` was rolled back after a *gzip-accepting curl* got a **403 from the Hostinger CDN edge**
+    (`Server: hcdn`). It was a false alarm: that edge refuses gzip-accepting **curl** requests on the
+    ORIGINAL static site too (the owner's own curl on the restored layout still got 403; an untouched
+    `/logo.png` control is refused the same way), while real browsers get `200` + brotli. **A curl probe
+    with `Accept-Encoding: gzip` says nothing about what browsers get on this host; the only
+    authoritative test is a real browser** (the Claude-in-Chrome extension, or a human). The rollout
+    script therefore uses plain-HEAD probes for blocked/alive questions and a control-relative
+    `browser_check` (INCONCLUSIVE if the control is refused too), and the `migrate → real-browser
+    check → finalize` split exists for this reason.
+  - **Tests.** `test-gate.mjs` (57 checks: the real PHP under `php -S` against SQLite — signed in/out,
+    session expiry/idle/deactivation, fail-closed incl. broken config, kill-switch, `If-None-Match`
+    bypass, and the sign-in page's own script), `test-auth-client.mjs` (63, sections H/I = enforce
+    mode), `test-accounts.mjs` (40); all mutation-verified. `test-gate.mjs` skips itself (exit 0) if
+    there is no `php` on the machine; CI has PHP. **Not covered by any test**: the `.htaccess` rewrites
+    under real Apache/LiteSpeed and the CDN — those are verified live by the rollout steps.
+  - **Known limits (deliberately not "fixed" — say so before relying on them).**
     (a) *The gate protects the app files and the master data inside them, NOT the business data.*
-    Transactions live in each browser's IndexedDB; anyone with access to a signed-in browser
-    profile still has them. Real protection of that data needs the MySQL migration.
-    (b) *Lockout as a denial of service*: 5 wrong passwords lock an account for 15 min from any
-    IP, and `owner` is a guessable username — with a mandatory gate, a stranger can keep the
-    owner out. `enforce-off` is the escape hatch; a real fix (per-IP+user throttling instead of
-    a hard account lock) changes the login semantics and wants its own decision.
-    (c) *The Warehouse app inside the launcher has no heartbeat/lock* — it is protected at load
-    by the gate but keeps running if the session ends mid-use (only `31-auth.js`, i.e. the ERP,
-    watches the session).
-    (d) *Screen access is a browser-side convenience, not a data boundary.* Payroll (`PAYROLL_MANAGE`,
-    owner only), Company accounts (`ACCOUNTS_MANAGE`, owner only), Milling (`PURCHASE_CREATE`) and
-    Statement of Account (`COLLECTION_VIEW`) are now gated (module 34, 2026-09-20; previously they
-    had no check at all). The two new permission names are given to no role, like `LANDED_COST_*`,
-    so no server table change was needed. **Invoice search is not separately gated** — it is part
-    of Sales & invoices, which every role that can sell already sees.
-    (e) A page restored from the browser's back/forward cache after signing out shows its old
-    screen until its next heartbeat (≤1 min visible) — cosmetic, the data is local anyway.
-  - **Before `enforce-on` — open decisions for the client**: (1) only ONE server account exists
-    (`owner`; checked 2026-09-20 — active, password already changed, last sign-in 2026-09-17). Anyone
-    else who uses the ERP today via the old module-22 PIN accounts has **no** server account and
-    would be locked out. **The owner now has a screen for creating them** — Admin → "Company
-    accounts" (module 34, `test-accounts.mjs`, 40 checks): add someone with a temporary password
-    (the server forces them to change it at first sign-in), change a role, reset a password, switch
-    an account off/on (a switched-off person is signed out within a minute). Create the accounts
-    BEFORE `enforce-on`, and have each person do one real sign-in first. (2) Reloading a gated page with no signal fails (nothing can
-    be cached for a signed-in-only page); an already-open app keeps working offline. (3) The CDN
-    must be confirmed not to share a signed-in copy — the checklist has the exact test.
+    Transactions live in each browser's IndexedDB; anyone with access to a signed-in browser profile
+    still has them. Real protection of that data needs the MySQL migration.
+    (b) *Lockout as a denial of service*: 5 wrong passwords lock an account for 15 min from any IP, and
+    `owner` is a guessable username — with a mandatory gate a stranger can keep the owner out.
+    `enforce-off` is the escape hatch; a real fix (per-IP+user throttling instead of a hard account
+    lock) changes the login semantics and wants its own decision.
+    (c) *The Warehouse app inside the launcher has no heartbeat/lock* — protected at load by the gate,
+    but it keeps running if the session ends mid-use (only the ERP watches the session).
+    (d) *Reloading a gated page with no signal fails* (a signed-in-only page can't be cached); an app
+    that is already open keeps working offline within the grace ticket.
+    (e) A page restored from the browser's back/forward cache after signing out shows its old screen
+    until its next heartbeat — cosmetic, the data is local anyway.
+  - **Left to do.** (1) The private-window sign-in test above. (2) The owner adds real staff under
+    Company accounts, and switches off or deletes the `test` account if it was only a test.
+    (3) Decide on limit (b). (4) Bring the Warehouse app under the session watch, if it matters.
 
 **Credentials**: the DB password for `u943531942_erpauth` and the ticket-signing secret are
 generated fresh (never extracted from the existing `dbhub` MCP credential) and live only in
 `private/erp-config.php` on the server and locally, gitignored — `private/erp-config.sample.php`
-is the committed template. The bootstrapped OWNER account (`username: owner`) has
-`must_change_password` set — the client should change it and this is a real gap: **no UI for
-changing a password was built yet**, only the `api/auth/change-password.php` endpoint and
-`ERP.Auth.changePassword()` exist. Adding that screen is unstarted follow-up work.
+is the committed template. The bootstrapped OWNER account (`username: owner`) started with
+`must_change_password` set; the password-change screen was built the same day (see below) and the
+owner has since changed it (checked 2026-09-20).
 
 **Verified this session**: full existing test suite (24 harnesses, 1,196 checks) unaffected;
 new `test-auth-client.mjs` (25 checks) covers observe-mode fallback, login/logout, fail-closed
@@ -588,8 +573,9 @@ signed in) was fixed and redeployed before this was called done.
 
 **Open decisions from this rollout — both confirmed by the user, 2026-09-16, no change needed**:
 `LANDED_COST_MANAGE`/`LANDED_COST_VIEW`/`EXPENSE_MANAGE` stay OWNER-only in
-`auth_role_permissions`, matching today's client-side behavior exactly. Phase 3 (mandatory
-sign-in) stays deferred — Phase 2 should run clean for a few days first before it's revisited.
+`auth_role_permissions`, matching today's client-side behavior exactly. (The second decision — that
+Phase 3 stay deferred until Phase 2 had run clean for a few days — was honoured, then superseded:
+Phase 3 went live on 2026-09-20, see above.)
 
 **Password-change screen added (2026-09-16, same day as Phase 2)**: the gap flagged right after
 Phase 2 shipped — a `must_change_password` flag existed with no UI to act on it — is closed.
