@@ -29,8 +29,25 @@ APP_FILES=(index.html farooq-co-erp.html farooq-erp-data.js)
 
 rssh() { ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_HOST" "$@"; }
 rscp() { scp -P "$SSH_PORT" -o BatchMode=yes "$@"; }
-code() { curl -s -I -m 90 -o /dev/null -w '%{http_code}' "$1"; }   # HEAD: status only, never downloads the 3 MB body
+# Every probe imitates a real browser: a browser User-Agent and gzip accepted. This is not cosmetic — on
+# 2026-09-20 the first `migrate` passed its checks and left the site returning 403 to EVERY real browser,
+# because the checks were bare curl requests (no Accept-Encoding) and the CDN answered those differently.
+BROWSER_UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
+code() { curl -s -I -m 90 -A "$BROWSER_UA" -H 'Accept-Encoding: gzip, deflate, br' -o /dev/null -w '%{http_code}' "$1"; }   # HEAD: status only
+bcurl() { curl -s -m 300 -A "$BROWSER_UA" --compressed "$@"; }     # full GET the way a browser makes it
 die()  { echo "ERROR: $*" >&2; exit 1; }
+
+# browser_check URL EXPECTED_MD5 — GET the way a browser does (UA + gzip). Passes only on HTTP 200 AND identical bytes.
+browser_check() {
+  local url="$1" want="$2" tmp st got same; tmp="$(mktemp)"
+  st="$(bcurl -o "$tmp" -w '%{http_code}' "$url?verify=$RANDOM")" || st="000"
+  got="$(md5sum < "$tmp" | cut -d' ' -f1)"; rm -f "$tmp"
+  if [ "$want" = "$got" ]; then same="identical bytes"; else same="DIFFERENT bytes"; fi
+  if [ "$st" = "200" ] && [ "$want" = "$got" ]; then
+    echo "  OK    ${url#$SITE} (browser-style: gzip + browser UA -> 200, $same)"; return 0
+  fi
+  echo "  FAIL  ${url#$SITE} (browser-style request -> HTTP $st, $same)"; return 1
+}
 
 show_urls() {
   local u
@@ -83,20 +100,20 @@ cmd_migrate() {
   rscp "$ERP_DIR/.htaccess" "$SSH_HOST:$REMOTE_ERP/.htaccess"
 
   echo "==> Verifying: same status and IDENTICAL bytes for each app URL, /_app denied"
-  local bad=0 url want got
+  local bad=0 url want got st
   for f in "${APP_FILES[@]}"; do
     url="/$f"
     want="$(rssh "md5sum '$REMOTE_ERP/_app/$f' | cut -d' ' -f1")"
     got="$(curl -s -m 300 "$SITE$url?verify=$RANDOM" | md5sum | cut -d' ' -f1)"
-    if [ "$want" = "$got" ]; then echo "  OK    $url"; else echo "  FAIL  $url (bytes differ)"; bad=1; fi
+    if [ "$want" = "$got" ]; then echo "  OK    $url (plain request)"; else echo "  FAIL  $url (bytes differ, plain request)"; bad=1; fi
+    browser_check "$SITE$url" "$want" || bad=1
   done
   want="$(rssh "md5sum '$REMOTE_ERP/_app/index.html' | cut -d' ' -f1")"
   got="$(curl -s -m 300 "$SITE/?verify=$RANDOM" | md5sum | cut -d' ' -f1)"
   if [ "$want" = "$got" ]; then echo "  OK    /"; else echo "  FAIL  / (bytes differ)"; bad=1; fi
-  # informational: does the gate's output still get compressed on the wire (static files were)?
-  local wire; wire="$(curl -s -m 300 -H 'Accept-Encoding: gzip' -o /dev/null -w '%{size_download}' "$SITE/?sz=$RANDOM")"
-  if [ "${wire:-0}" -gt 0 ] && [ "$wire" -lt 1500000 ]; then echo "  OK    / travels compressed (${wire} bytes on the wire)"
-  else echo "  WARN  / is ${wire} bytes on the wire — not compressed. Works, but slow on mobile data; tell Claude to add gzip to api/gate.php."; fi
+  local wire; wire="$(bcurl -o /dev/null -w '%{http_code} %{size_download}' "$SITE/?sz=$RANDOM")"
+  echo "  INFO  browser-style GET / -> HTTP ${wire%% *}, ${wire##* } bytes on the wire (a 3 MB app should be well under 1 MB gzipped)"
+  [ "${wire%% *}" = "200" ] || { echo "  FAIL  browser-style GET / is not 200"; bad=1; }
   [ "$(code "$SITE/_app/index.html")" = "403" ] && echo "  OK    /_app/index.html is 403" || { echo "  FAIL  /_app/index.html is not 403"; bad=1; }
   [ "$(code "$SITE/api/auth/me.php")" = "401" ] && echo "  OK    /api/auth/me.php still answers 401 (API healthy)" || { echo "  FAIL  me.php not 401"; bad=1; }
 
@@ -182,6 +199,7 @@ cmd_rollback() {
 }
 
 case "${1:-}" in
+  --browser-check) SITE="$2"; browser_check "$2$3" "$4" ;;   # test hook: <site> <path> <md5>
   --print-config-edit) config_edit_cmd "$2" "$3" "${4:-test}" ;;   # test hook: prints the remote command, runs nothing
   status)       cmd_status ;;
   migrate)      cmd_migrate ;;

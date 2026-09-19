@@ -458,8 +458,28 @@ are done and live:
   the browser — only the ticket's own claimed expiry is enforced; documented in the module header
   as the same category of limit as `22-users.js`'s own PIN comment) and a 15-minute idle lock
   (re-verifies against the server if online, or a cached PBKDF2 password verifier if offline).
-- **Phase 3 — the login gate (BUILT and tested 2026-09-20; NOT yet installed or enabled on the
-  server)**. Correction to what this file and `31-auth.js` used to say: Phase 3 was **not** "flip
+- **Phase 3 — the login gate (BUILT and tested 2026-09-20; install ATTEMPTED and ROLLED BACK the
+  same day; NOT installed, NOT enabled)**. **Incident, 2026-09-20 ~00:45 PKT:** `gate-rollout.sh
+  migrate` passed all of its checks and installed the gate dormant, but a follow-up probe showed
+  every request that sends `Accept-Encoding: gzip` (i.e. every real browser) got a **403 from the
+  Hostinger CDN edge** (`Server: hcdn`, a gzip'd error page) while bare `curl` (no Accept-Encoding)
+  got the app. The checks had been bare-curl only, so they could not see it. Rolled back within
+  minutes (`gate-rollout.sh rollback`; the pre-gate `.htaccess` and root files were restored from
+  `/home/u943531942/backups/gate-20260920004319/`). **Root cause NOT established** — it is unknown
+  whether the gzip 403 was caused by the gate (PHP-served response behind the CDN) or is a
+  property of that CDN/edge for curl clients generally. **Not re-verified after rollback** that a
+  gzip-accepting request returns 200 (further production probes were blocked by the permission
+  layer) — check that first: `curl -s -o /dev/null -w '%{http_code}
+' -H 'Accept-Encoding: gzip'
+  https://erp.farooqandcotraders.online/` must print 200, and the site must load in a real browser.
+  Left on the server after the rollback (harmless, inert): `_app/` with copies of the app files,
+  `api/gate.php`, `api/_gate_login.php`, and updated `api/_bootstrap.php`, `_session.php`,
+  `auth/login.php`, `auth/me.php` (backward compatible: they only add fields). The rollout script's
+  checks now send a browser User-Agent + gzip and require HTTP 200 with identical bytes
+  (`browser_check`, proven to fail against a server that 403s gzip). **Do not run `migrate` again
+  until the cause is understood** — first probe, with the gate installed but before enforcing,
+  what a real browser gets, and whether `/api/gate.php?f=index` and `/api/auth/me.php` behave
+  differently for gzip requests. Correction to what this file and `31-auth.js` used to say: Phase 3 was **not** "flip
   `AUTH_MODE` to `'enforce'`" — nothing ever branched on that value, so the enforcement had to
   be built. What exists now:
   - **`api/gate.php`** (+ `api/_gate_login.php`): the app files moved to `ERP/_app/` (denied to the
