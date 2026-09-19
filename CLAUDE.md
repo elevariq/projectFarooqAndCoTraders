@@ -538,16 +538,22 @@ are done and live:
     (c) *The Warehouse app inside the launcher has no heartbeat/lock* — it is protected at load
     by the gate but keeps running if the session ends mid-use (only `31-auth.js`, i.e. the ERP,
     watches the session).
-    (d) *Payroll, Milling, Statement of Account and Invoice search have no permission checks*
-    (a pre-existing gap, not caused by Phase 3): once staff accounts exist, every role would see
-    salaries. Gate them before creating non-owner accounts.
+    (d) *Screen access is a browser-side convenience, not a data boundary.* Payroll (`PAYROLL_MANAGE`,
+    owner only), Company accounts (`ACCOUNTS_MANAGE`, owner only), Milling (`PURCHASE_CREATE`) and
+    Statement of Account (`COLLECTION_VIEW`) are now gated (module 34, 2026-09-20; previously they
+    had no check at all). The two new permission names are given to no role, like `LANDED_COST_*`,
+    so no server table change was needed. **Invoice search is not separately gated** — it is part
+    of Sales & invoices, which every role that can sell already sees.
     (e) A page restored from the browser's back/forward cache after signing out shows its old
     screen until its next heartbeat (≤1 min visible) — cosmetic, the data is local anyway.
   - **Before `enforce-on` — open decisions for the client**: (1) only ONE server account exists
     (`owner`; checked 2026-09-20 — active, password already changed, last sign-in 2026-09-17). Anyone
     else who uses the ERP today via the old module-22 PIN accounts has **no** server account and
-    would be locked out; there is still **no UI to create staff accounts** (only the owner-only
-    `api/auth/users.php` endpoint). (2) Reloading a gated page with no signal fails (nothing can
+    would be locked out. **The owner now has a screen for creating them** — Admin → "Company
+    accounts" (module 34, `test-accounts.mjs`, 40 checks): add someone with a temporary password
+    (the server forces them to change it at first sign-in), change a role, reset a password, switch
+    an account off/on (a switched-off person is signed out within a minute). Create the accounts
+    BEFORE `enforce-on`, and have each person do one real sign-in first. (2) Reloading a gated page with no signal fails (nothing can
     be cached for a signed-in-only page); an already-open app keeps working offline. (3) The CDN
     must be confirmed not to share a signed-in copy — the checklist has the exact test.
 

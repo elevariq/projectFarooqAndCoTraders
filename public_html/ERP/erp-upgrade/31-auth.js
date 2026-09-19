@@ -331,6 +331,9 @@ Auth.changePassword = function (currentPassword, newPassword) {
   });
 };
 
+/* the authenticated request helper, for 34-accounts.js (adds the CSRF header on writes, times out, same-origin) */
+Auth._request = request;
+
 Auth.can = function (perm) {
   var v = hasPerm(perm);
   return v === null ? null : v;

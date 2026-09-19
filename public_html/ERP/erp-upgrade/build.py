@@ -47,6 +47,7 @@ MODULES = [
     ("31-auth.js",           "AUTH — server-checked accounts, sessions and permissions (Phase 2: observe mode)"),
     ("32-milling.js",        "MILLING JOBS — toll milling: wheat out, flour + chokar back, net settled into the mill's khata"),
     ("33-invoice-search.js", "INVOICE SEARCH — find an old invoice by number, customer, product, date or amount"),
+    ("34-accounts.js",       "COMPANY ACCOUNTS — the owner's screen for server accounts; who may open Payroll, Milling, Statements"),
 ]
 
 MARKER = "<!-- FAROOQ & CO ERP — INVOICE, RECEIPT & DATABASE UPGRADE -->"
