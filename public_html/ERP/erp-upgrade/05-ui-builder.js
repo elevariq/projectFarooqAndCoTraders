@@ -679,56 +679,83 @@ B.save = function (asDraft) {
 /* ══════════════════════════════════════════════════════════════════════════
    INVOICE LIST (§37 §38 §39)
    ══════════════════════════════════════════════════════════════════════════ */
-var LIST = ERP.InvoiceList = { q: '', period: 'all', status: 'all', region: 'all', wh: 'all', custom: null };
+/* The search and filter rules live in 33-invoice-search.js (ERP.InvoiceSearch,
+   loaded later — it is only ever called at paint time). This object is just
+   the screen's remembered state; the keys are the ones ERP.InvoiceSearch.DEFAULTS
+   lists, and every data-fcfil control writes straight into it. */
+var LIST = ERP.InvoiceList = { q: '', scope: 'all', period: 'all', from: '', to: '', min: '', max: '',
+                               status: 'all', region: 'all', wh: 'all', sort: 'newest', page: 1 };
+var PAGE_SIZE = 50;
 
-function matches(inv) {
-  var q = LIST.q.toLowerCase().trim();
-  if (q) {
-    var items = ERP.Invoices.items(inv.id);
-    var hay = [inv.invoiceNumber, inv.shopNameSnapshot, inv.customerNameSnapshot, inv.mobileSnapshot,
-      inv.regionSnapshot, inv.orderNumber, inv.warehouseSnapshot, inv.referenceNo,
-      ERP.STATUS_LABEL[inv.status], M.toR(inv.grandTotal),
-      items.map(function (i) {
-        return i.descriptionSnapshot + ' ' + i.descriptionEnSnapshot + ' ' + i.brandSnapshot;
-      }).join(' ')].filter(Boolean).join(' ').toLowerCase();
-    if (hay.indexOf(q) === -1) return false;
-  }
-  if (LIST.status !== 'all' && inv.status !== LIST.status) return false;
-  if (LIST.region !== 'all' && inv.regionId !== LIST.region) return false;
-  if (LIST.wh !== 'all' && inv.warehouseId !== LIST.wh) return false;
-  if (LIST.period !== 'all') {
-    var r = LIST.period === 'custom' ? (LIST.custom || [null, null]) : ERP.Reports.range(LIST.period);
-    if (r[0] && inv.invoiceDate < r[0]) return false;
-    if (r[1] && inv.invoiceDate > r[1]) return false;
-  }
-  return true;
-}
+function matches(inv) { return ERP.InvoiceSearch.matcher(LIST)(inv); }
+LIST.results = function () { return ERP.InvoiceSearch.results(LIST); };
+LIST.reset = function () { ERP.InvoiceSearch.reset(LIST); };
+LIST.pages = 1;
+/* Prev / Next / First / Last, or a page number */
+LIST.goPage = function (to) {
+  var n = to === 'prev' ? LIST.page - 1 : to === 'next' ? LIST.page + 1
+        : to === 'first' ? 1 : to === 'last' ? LIST.pages : Number(to);
+  if (!isFinite(n)) return;
+  LIST.page = Math.min(Math.max(1, Math.round(n)), LIST.pages);
+  global.paint();
+  var top = global.document.querySelector('.fcb-count');
+  if (top && top.scrollIntoView) top.scrollIntoView({ block: 'nearest' });
+};
 
 global.PAGES.invoices = function () {
-  var all = ERP.Invoices.all().slice().sort(function (a, b) {
-    return a.invoiceDate === b.invoiceDate ? (a.createdAt < b.createdAt ? 1 : -1)
-                                           : (a.invoiceDate < b.invoiceDate ? 1 : -1);
-  });
-  var list = all.filter(matches);
+  var all = ERP.Invoices.all();
+  var list = LIST.results();
   var live = list.filter(function (i) { return i.status !== 'CANCELLED' && i.status !== 'DRAFT'; });
   var revenue = live.reduce(function (a, i) { return a + i.grandTotal; }, 0);
   var received = live.reduce(function (a, i) { return a + ERP.Invoices.paidFor(i.id); }, 0);
   var outstanding = live.reduce(function (a, i) { return a + ERP.Invoices.outstanding(i); }, 0);
 
+  /* Only one page of rows is drawn; the totals above still cover every
+     invoice that passes the filters. A narrowed-down list can leave the
+     remembered page past the end, so it is clamped rather than shown empty. */
+  LIST.pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  if (LIST.page > LIST.pages) LIST.page = LIST.pages;
+  if (!(LIST.page >= 1)) LIST.page = 1;
+  var first = (LIST.page - 1) * PAGE_SIZE;
+  var shown = list.slice(first, first + PAGE_SIZE);
+  var info = ERP.InvoiceSearch.describe(LIST);
+  var filtering = ERP.InvoiceSearch.active(LIST);
+  var hitsOf = ERP.InvoiceSearch.hitsFor(LIST);
+
   var periods = [['all', 'All dates'], ['today', 'Today'], ['yesterday', 'Yesterday'], ['week', 'This week'],
-                 ['month', 'This month'], ['lastmonth', 'Last month'], ['year', 'This year']];
+                 ['month', 'This month'], ['lastmonth', 'Last month'], ['last30', 'Last 30 days'],
+                 ['last90', 'Last 3 months'], ['year', 'This year'], ['lastyear', 'Last 12 months'],
+                 ['custom', 'Custom range…']];
   var statuses = [['all', 'All statuses']].concat(ERP.ENUM.invoiceStatus.map(function (s) {
     return [s, ERP.STATUS_LABEL[s]];
   }));
+  function options(pairs, cur) {
+    return pairs.map(function (p) {
+      return '<option value="' + esc(p[0]) + '"' + (cur === p[0] ? ' selected' : '') + '>' + esc(p[1]) + '</option>';
+    }).join('');
+  }
 
-  var rows = list.map(function (i) {
+  var pager = LIST.pages > 1
+    ? '<div class="fcb-pager">' +
+        '<button class="btn sm" data-fcpage="first"' + (LIST.page <= 1 ? ' disabled' : '') + ' aria-label="First page">«</button>' +
+        '<button class="btn sm" data-fcpage="prev"' + (LIST.page <= 1 ? ' disabled' : '') + '>‹ Prev</button>' +
+        '<span class="pg">Page ' + LIST.page + ' of ' + LIST.pages + '</span>' +
+        '<button class="btn sm" data-fcpage="next"' + (LIST.page >= LIST.pages ? ' disabled' : '') + '>Next ›</button>' +
+        '<button class="btn sm" data-fcpage="last"' + (LIST.page >= LIST.pages ? ' disabled' : '') + ' aria-label="Last page">»</button>' +
+      '</div>' : '';
+
+  var rows = shown.map(function (i) {
     var paid = ERP.Invoices.paidFor(i.id), due = ERP.Invoices.outstanding(i);
+    var hit = hitsOf(i);
     var cls = i.status === 'PAID' ? 'ok' : i.status === 'CANCELLED' ? 'neu'
             : i.status === 'DRAFT' ? 'neu' : i.status === 'PARTIALLY_PAID' ? 'low'
             : /RETURNED/.test(i.status) ? 'info' : 'bad';
     return '<tr data-row data-iso="' + i.invoiceDate + '" data-status="' + esc(ERP.STATUS_LABEL[i.status]) + '">' +
       '<td data-label="Invoice" class="fcb-key"><b class="mono">' + esc(i.invoiceNumber || 'Draft') + '</b>' +
-        (i.orderNumber ? '<div class="sub mono">' + esc(i.orderNumber) + '</div>' : '') + '</td>' +
+        (i.orderNumber ? '<div class="sub mono">' + esc(i.orderNumber) + '</div>' : '') +
+        (hit ? '<div class="fcb-hit">' + hit.lines.map(function (l) {
+            return esc(l.name) + (l.qty ? ' × ' + esc(l.qty) : '');
+          }).join(' · ') + (hit.more ? ' · +' + hit.more + ' more' : '') + '</div>' : '') + '</td>' +
       '<td data-label="Date">' + esc(fmtDate(i.invoiceDate)) + '</td>' +
       '<td data-label="Shop"><button class="lnk" data-cust="' + i.customerId + '">' +
         esc(i.shopNameSnapshot || '—') + '</button>' +
@@ -765,42 +792,76 @@ global.PAGES.invoices = function () {
     '</div>' +
     '<div class="bar">' +
       '<div class="tsearch">' + I('search') +
-        '<input placeholder="Invoice no, shop, phone, region, product, order, amount…" data-fcq value="' +
-        esc(LIST.q) + '"></div>' +
-      '<label class="fld">' + I('cal') + '<select data-fcfil="period">' + periods.map(function (p) {
-        return '<option value="' + p[0] + '"' + (LIST.period === p[0] ? ' selected' : '') + '>' + p[1] + '</option>';
-      }).join('') + '</select></label>' +
-      '<label class="fld">' + I('filter') + '<select data-fcfil="status">' + statuses.map(function (s) {
-        return '<option value="' + s[0] + '"' + (LIST.status === s[0] ? ' selected' : '') + '>' + s[1] + '</option>';
-      }).join('') + '</select></label>' +
-      '<label class="fld">' + I('pin') + '<select data-fcfil="region"><option value="all">All regions</option>' +
-        (global.REGIONS || []).map(function (r) {
-          return '<option value="' + r.id + '"' + (LIST.region === r.id ? ' selected' : '') + '>' +
-            esc(r.en) + '</option>';
-        }).join('') + '</select></label>' +
-      '<label class="fld">' + I('box') + '<select data-fcfil="wh"><option value="all">All warehouses</option>' +
-        (global.activeWh ? global.activeWh() : []).map(function (w) {
-          return '<option value="' + w.id + '"' + (LIST.wh === w.id ? ' selected' : '') + '>' +
-            esc(w.name) + '</option>';
-        }).join('') + '</select></label>' +
+        '<input placeholder="Find an invoice — number, shop, phone, product, date (12/09/2026), amount…" ' +
+        'data-fcq value="' + esc(LIST.q) + '" autocomplete="off" spellcheck="false" ' +
+        'aria-label="Search invoices"></div>' +
+      '<label class="fld" title="Which part of an invoice the words are looked for in">' + I('filter') +
+        '<select data-fcfil="scope" aria-label="Search in">' +
+        options(ERP.InvoiceSearch.SCOPES.map(function (s) {
+          return [s[0], s[0] === 'all' ? 'Search: everything' : 'Search: ' + s[1]];
+        }), LIST.scope) + '</select></label>' +
+      '<label class="fld" title="Order of the list">' + I('chart') +
+        '<select data-fcfil="sort" aria-label="Sort by">' + options(ERP.InvoiceSearch.SORTS, LIST.sort) +
+        '</select></label>' +
       '<div class="grow"></div>' +
       '<button class="btn" data-fcbact="exportcsv">' + I('sheet') + 'CSV</button>' +
       '<button class="btn" data-fcnew="order">' + I('doc') + 'New Order</button>' +
       '<button class="btn pri" data-fcnew="sale">' + I('plus') + 'New Invoice</button>' +
     '</div>' +
-    (rows.length ? '<div class="tw"><table class="fcb-list"><thead><tr>' +
-      '<th>Invoice #</th><th>Date</th><th>Customer / shop</th><th>Region</th><th class="c">Items</th>' +
-      '<th>Warehouse</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Balance</th>' +
-      '<th>Status</th><th class="c">Actions</th></tr></thead><tbody>' + rows.join('') + '</tbody></table></div>'
+    '<div class="bar fcb-filters">' +
+      '<label class="fld">' + I('cal') + '<select data-fcfil="period" aria-label="Date">' +
+        options(periods, LIST.period) + '</select></label>' +
+      (LIST.period === 'custom'
+        ? '<label class="f"><span>From</span><input type="date" data-fcfil="from" value="' + esc(LIST.from) + '"></label>' +
+          '<label class="f"><span>To</span><input type="date" data-fcfil="to" value="' + esc(LIST.to) + '"></label>'
+        : '') +
+      '<label class="fld">' + I('filter') + '<select data-fcfil="status" aria-label="Status">' +
+        options(statuses, LIST.status) + '</select></label>' +
+      '<label class="fld">' + I('pin') + '<select data-fcfil="region" aria-label="Region">' +
+        '<option value="all">All regions</option>' +
+        (global.REGIONS || []).map(function (r) {
+          return '<option value="' + esc(r.id) + '"' + (LIST.region === r.id ? ' selected' : '') + '>' +
+            esc(r.en) + '</option>';
+        }).join('') + '</select></label>' +
+      '<label class="fld">' + I('box') + '<select data-fcfil="wh" aria-label="Warehouse">' +
+        '<option value="all">All warehouses</option>' +
+        (global.activeWh ? global.activeWh() : []).map(function (w) {
+          return '<option value="' + esc(w.id) + '"' + (LIST.wh === w.id ? ' selected' : '') + '>' +
+            esc(w.name) + '</option>';
+        }).join('') + '</select></label>' +
+      '<label class="f"><span>Total from</span><input inputmode="decimal" data-fcfil="min" placeholder="0" value="' +
+        esc(LIST.min) + '"></label>' +
+      '<label class="f"><span>Total to</span><input inputmode="decimal" data-fcfil="max" placeholder="any" value="' +
+        esc(LIST.max) + '"></label>' +
+      (filtering ? '<button class="btn" data-fcbact="invclear">Clear filters</button>' : '') +
+    '</div>' +
+    info.problems.map(function (m) {
+      return '<div class="fcb-note warn">' + I('alert') + '<span>' + esc(m) + '</span></div>';
+    }).join('') +
+    info.notes.map(function (m) {
+      return '<div class="fcb-note">' + I('cal') + '<span>' + esc(m) + '</span></div>';
+    }).join('') +
+    (list.length
+      ? '<div class="fcb-count"><span>' +
+          (filtering ? '<b>' + list.length + '</b> of ' + all.length + ' invoices match' : '<b>' + all.length + '</b> invoices') +
+          (LIST.pages > 1 ? ' · showing ' + (first + 1) + '–' + (first + shown.length) : '') + '</span>' + pager + '</div>' +
+        '<div class="tw"><table class="fcb-list"><thead><tr>' +
+        '<th>Invoice #</th><th>Date</th><th>Customer / shop</th><th>Region</th><th class="c">Items</th>' +
+        '<th>Warehouse</th><th class="r">Total</th><th class="r">Paid</th><th class="r">Balance</th>' +
+        '<th>Status</th><th class="c">Actions</th></tr></thead><tbody>' + rows.join('') + '</tbody></table></div>' +
+        (LIST.pages > 1 ? '<div class="fcb-count"><span></span>' + pager + '</div>' : '')
     : '<div class="empty"><div class="ei">' + I('tag') + '</div><b>No invoices match</b>' +
-      '<p>Change the filters, or raise the first invoice for a shop.</p>' +
-      '<button class="btn pri" data-fcnew="sale">' + I('plus') + 'New Invoice</button></div>');
+      (filtering
+        ? '<p>Nothing on file fits these words and filters. Try fewer words, widen the dates, or search in “Everything”.</p>' +
+          '<button class="btn pri" data-fcbact="invclear">Clear filters</button>'
+        : '<p>Raise the first invoice for a shop.</p>' +
+          '<button class="btn pri" data-fcnew="sale">' + I('plus') + 'New Invoice</button>') + '</div>');
 };
 
 LIST.exportCsv = function () {
   var rows = [['Invoice', 'Date', 'Shop', 'Owner', 'Region', 'Warehouse', 'Items', 'Bags', 'Subtotal',
                'Discount', 'Charges', 'Grand total', 'Paid', 'Balance', 'Status']];
-  ERP.Invoices.all().filter(matches).forEach(function (i) {
+  LIST.results().forEach(function (i) {
     rows.push([i.invoiceNumber || 'DRAFT', i.invoiceDate, i.shopNameSnapshot, i.customerNameSnapshot,
       i.regionSnapshot, i.warehouseSnapshot, i.lineCount, i.totalQty,
       M.toR(i.subtotal), M.toR(i.discountAmount),

@@ -69,6 +69,7 @@ them.
 | `30-payroll.js` | Employee list, monthly salary rate, and salary payments (MVP) |
 | `31-auth.js` | Server-checked accounts, sessions and permissions (Phase 2: observe mode) |
 | `32-milling.js` | Milling jobs — toll milling: wheat out, flour + chokar back, net settled into the mill's khata |
+| `33-invoice-search.js` | Invoice search — find an old invoice by number, customer, product, date or amount; paged list |
 
 To rebuild `app/farooq-co-erp.html` and `app/index.html` after changing a module:
 

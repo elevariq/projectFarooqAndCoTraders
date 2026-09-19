@@ -767,6 +767,7 @@ D.addEventListener('click', function (e) {
       return;
     }
     if (a === 'exportcsv') { ERP.InvoiceList.exportCsv(); return; }
+    if (a === 'invclear') { ERP.InvoiceList.reset(); global.paint(); return; }
     if (a === 'backup') { doBackup(); return; }
     if (a === 'exportbiz') { exportBusinessCsv(); return; }
     if (a === 'savesettings') { saveSettingsForm(); return; }
@@ -795,6 +796,10 @@ D.addEventListener('click', function (e) {
     }
     return;
   }
+
+  /* invoice list paging */
+  var pg = h('[data-fcpage]');
+  if (pg) { e.preventDefault(); if (!pg.disabled) ERP.InvoiceList.goPage(pg.dataset.fcpage); return; }
 
   /* invoice list row actions */
   var ia = h('[data-fcinv]');
@@ -829,7 +834,7 @@ D.addEventListener('click', function (e) {
 D.addEventListener('input', function (e) {
   var el = e.target;
   if (el.id === 'fcbPick') { B.pickerQuery = el.value; B.pickerOpen = true; ERP.BuilderRender.results(); return; }
-  if (el.dataset.fcq !== undefined) { ERP.InvoiceList.q = el.value; repaintList(); return; }
+  if (el.dataset.fcq !== undefined) { ERP.InvoiceList.q = el.value; ERP.InvoiceList.page = 1; repaintList(); return; }
   if (el.dataset.fcline) {
     var ix = +el.dataset.ix, k = el.dataset.fcline;
     if (!B.draft || !B.draft.items[ix]) return;
@@ -882,7 +887,11 @@ D.addEventListener('change', function (e) {
     ERP.BuilderRender.lines(); return;
   }
   if (el.dataset.fcretcond && B.draft === null) { return; }
-  if (el.dataset.fcfil) { ERP.InvoiceList[el.dataset.fcfil] = el.value; repaintList(); return; }
+  if (el.dataset.fcfil) {
+    ERP.InvoiceList[el.dataset.fcfil] = el.value;
+    if (el.dataset.fcfil !== 'sort') ERP.InvoiceList.page = 1;    /* a new order keeps its place; a new filter starts over */
+    repaintList(); return;
+  }
   if (el.id === 'fcPayCust') {
     var box = D.getElementById('fcPayBal');
     if (box) box.innerHTML = I('wallet') + '<div><p>Outstanding balance: <b>' +
