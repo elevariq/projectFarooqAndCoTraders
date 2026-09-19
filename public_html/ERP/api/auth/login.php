@@ -129,6 +129,7 @@ json_out([
     'permissions'        => $permissions,
     'mustChangePassword' => (bool)$user['must_change_password'],
     'csrf'               => $csrf,
+    'enforce'            => auth_enforcing($CFG),
     'offlineTicket'      => $offlineTicket,
     'expiresAt'          => $expiresAt,
 ]);

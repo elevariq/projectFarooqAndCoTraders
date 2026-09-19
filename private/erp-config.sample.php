@@ -31,6 +31,14 @@ return [
         'idle_ttl_min'     => 2 * 60,    // 2 hours
     ],
 
+    // Phase 3 login gate — THE KILL-SWITCH. Leave this out (or false) and the
+    // ERP app files are served to anyone, exactly as before Phase 3. Set it to
+    // the boolean true and api/gate.php only serves them to a signed-in
+    // session. Only a real `true` enforces ("yes" or 1 do not — a typo can't
+    // lock anyone out). Read on every request, so flipping it takes effect at
+    // once with no redeploy: it is also the emergency "let everyone back in".
+    // 'enforce_login' => true,
+
     // Offline grace period after a successful online login (see docs/OPERATIONS.md).
     'offline_grace_hours' => 12,
 

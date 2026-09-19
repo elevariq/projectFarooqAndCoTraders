@@ -1,17 +1,32 @@
 # Farooq & Co Traders ERP — root access control
 #
-# Added 2026-09-16 (auth project, Phase 0). This file ONLY blocks specific file
-# patterns at this level (the *.md reports). The sensitive subdirectories
-# (database/, data-exports/, docs/, samples/, erp-upgrade/, app/) each carry
-# their OWN .htaccess denying all access — see those files. This file
-# deliberately does NOT contain a blanket deny, because that would also block
-# index.html / farooq-co-erp.html / farooq-erp-data.js / logo.png, which must
-# stay reachable until the login gate (Phase 3 of the auth project) is live.
+# Phase 0 (2026-09-16): blocks the *.md/*.json/*.sql/*.prisma files at this
+# level; the sensitive subdirectories (database/, data-exports/, docs/,
+# samples/, erp-upgrade/, app/) each carry their OWN .htaccess denying all.
 #
-# Verify after deploy + CDN cache clear:
-#   curl -I https://erp.farooqandcotraders.online/README.md            -> 403
-#   curl -I https://erp.farooqandcotraders.online/database/fresh-install-backup.json -> 403
-#   curl -I https://erp.farooqandcotraders.online/index.html           -> 200 (unchanged)
+# Phase 3 (login gate): the app itself no longer lives at this level. The three
+# files below were moved into _app/ (denied to the web outright) and these
+# rewrites hand their public URLs to api/gate.php, which decides — from the
+# 'enforce_login' switch in private/erp-config.php — whether to serve them to
+# anyone (dormant, the state before Phase 3) or only to a signed-in session.
+#
+# There is deliberately NO [QSA] on these rules: the query string is dropped,
+# so a caller can never supply their own ?f= to pick another target. (The
+# browser still sees its own ?app=erp — only the internal request is rewritten.)
+#
+# Verify after every deploy (+ CDN cache clear) — see docs/OPERATIONS.md,
+# "Phase 3 rollout":
+#   curl -I https://erp.farooqandcotraders.online/                      -> 200 (dormant) / 401 (enforced)
+#   curl -I https://erp.farooqandcotraders.online/_app/index.html       -> 403
+#   curl -I https://erp.farooqandcotraders.online/README.md             -> 403
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^$                       api/gate.php?f=index [L]
+  RewriteRule ^index\.html$            api/gate.php?f=index [L]
+  RewriteRule ^farooq-co-erp\.html$    api/gate.php?f=erp   [L]
+  RewriteRule ^farooq-erp-data\.js$    api/gate.php?f=data  [L]
+</IfModule>
 
 <IfModule mod_authz_core.c>
   <FilesMatch "\.(md|json|sql|prisma)$">

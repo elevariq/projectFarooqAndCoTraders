@@ -50,8 +50,12 @@ second one for `erp.*`. Confirmed via `hosting_listWebsiteSubdomainsV1` and DNS:
   loads, while the real root copy sat untouched since the initial import. Fixed 2026-09-16: the
   script now uploads to the real root first, and to `app/` second only for parity (harmless,
   since nothing serves from there). **If you ever add a new top-level file the app needs at
-  runtime (there's already `farooq-erp-data.js`, required alongside `farooq-co-erp.html`), it
-  must exist at `ERP/` root, not just under `app/`.**
+  runtime, it must exist at `ERP/` root, not just under `app/`.** *(Updated 2026-09-20: the claim
+  that `farooq-erp-data.js` is "required alongside `farooq-co-erp.html`" was wrong — nothing loads
+  it. And once the Phase 3 login gate is installed, the three app files —
+  `index.html`, `farooq-co-erp.html`, `farooq-erp-data.js` — live in `ERP/_app/` and are reached
+  only through `api/gate.php`; a NEW runtime file added at the root would be public, so anything
+  that must be protected needs its own route in `.htaccess` + `gate.php`'s `GATE_FILES`.)*
 - **DNS**: `@` and `erp` are both `ALIAS` records pointing at Hostinger's CDN
   (`*.cdn.hstgr.net`), which routes by hostname to the right document root on this one account.
   `erp` is not a different server or a different account — it's the same SSH login, same
@@ -202,10 +206,18 @@ Back up the live file first if it's not a brand-new page (`ssh ... cp index.html
    the backup/upload steps.
 4. Backs up the live files to `/home/u943531942/backups/erp-deploy-<timestamp>/` on the server
    before touching anything.
-5. Uploads the freshly built `index.html`, `farooq-co-erp.html` and `farooq-erp-data.js` to the
-   **ERP document root** (`public_html/ERP/`, what the site actually serves — see the correction
-   under "These are NOT two separate filesystems" above), then uploads the same build to the
-   legacy `app/` folder too, for parity only.
+5. Uploads the freshly built `index.html`, `farooq-co-erp.html` and `farooq-erp-data.js` to
+   **`public_html/ERP/_app/`** — *since Phase 3 (2026-09-20, once `gate-rollout.sh migrate` has been
+   run; see "Server-side authentication")* the app is no longer a static file at the ERP root:
+   the public URLs are rewritten to `api/gate.php`, which reads them from `_app/`. Before that
+   migration the target was the ERP root itself (what the site served — see the correction under
+   "These are NOT two separate filesystems" above). The script refuses to run if `_app/` isn't on
+   the server, so it can't put the app back where nothing protects it. It then uploads the same
+   build to the legacy `app/` folder too, for parity only.
+   *Note:* `farooq-erp-data.js` is not actually loaded by the app (the only mention in
+   `farooq-co-erp.html` is a comment; the same master data is embedded inline). It is still
+   published and gated, because a public copy of the customer/supplier list is exactly what the
+   gate exists to close.
 6. Reminds you to clear the Hostinger cache (the script itself can't call the MCP tool — from a
    Claude session, call `hosting_clearWebsiteCacheV1` for `erp.farooqandcotraders.online` right
    after; from a plain terminal, clear it in hPanel).
@@ -446,10 +458,47 @@ are done and live:
   the browser — only the ticket's own claimed expiry is enforced; documented in the module header
   as the same category of limit as `22-users.js`'s own PIN comment) and a 15-minute idle lock
   (re-verifies against the server if online, or a cached PBKDF2 password verifier if offline).
-- **Phase 3 (not done, deliberately)**: moving the app files behind `index.php`/`erp.php` so
-  sign-in becomes mandatory. Not attempted this session — flipping that gate risks locking the
-  client out of live billing software if anything is wrong, and needs Phase 2 to run clean for a
-  few days first, then a deliberate go-ahead.
+- **Phase 3 — the login gate (BUILT and tested 2026-09-20; NOT yet installed or enabled on the
+  server)**. Correction to what this file and `31-auth.js` used to say: Phase 3 was **not** "flip
+  `AUTH_MODE` to `'enforce'`" — nothing ever branched on that value, so the enforcement had to
+  be built. What exists now:
+  - **`api/gate.php`** (+ `api/_gate_login.php`): the app files moved to `ERP/_app/` (denied to the
+    web); `ERP/.htaccess` rewrites `/`, `/index.html`, `/farooq-co-erp.html` and
+    `/farooq-erp-data.js` to the gate. Signed out ⇒ a `401` sign-in page (never the app, and never
+    the customer/supplier master data that is embedded in it); signed in ⇒ the file, with
+    `private, no-cache` + an ETag (revalidates as a tiny `304`, and a matching `If-None-Match`
+    can't bypass the check). **Fails closed**: enforcing + database unreachable ⇒ `503` retry page.
+  - **The kill-switch**: `'enforce_login' => true` in the server's `private/erp-config.php`. Absent
+    or false = **dormant** — the gate serves the files to anyone and doesn't even touch the DB, so
+    installing it changes nothing for anyone. Only a real boolean `true` enforces (a typo like
+    `"yes"` can't lock people out). Read on every request: flipping it is instant, no redeploy —
+    it is also the emergency "let everyone back in".
+  - **Client (`31-auth.js`)**: the server tells the client it is enforcing (`enforce` on
+    `me.php`/`login.php`) and `Auth.mode` follows. Enforce mode adds a once-a-minute **heartbeat**
+    (visible tab, unlocked screen only): a `401` locks the screen behind a sign-in *without a
+    reload* (so no lost work) instead of quietly falling back to the local Owner; a network
+    failure only locks once the offline grace ticket has also expired. "Sign out" reloads to the
+    gate; the module-22 "switch user" chip becomes display-only. `me.php` now also issues a fresh
+    offline ticket (a gate sign-in never sees `login.php`'s response, so without it the app would
+    hold no ticket and lock the moment a shop lost signal).
+  - **Rollout**: `scripts/gate-rollout.sh` — `status`, `migrate` (installs the gate *dormant*,
+    verifies identical bytes, auto-undoes on any failed check), `enforce-on`, `enforce-off`,
+    `rollback`. Order: `migrate` → `scripts/deploy-erp.sh` (ships the new client; `enforce-on` refuses
+    without it) → `enforce-on`. `deploy-erp.sh` now uploads to `_app/` and refuses to run before `migrate`.
+    Checklist: `docs/OPERATIONS.md` → "Phase 3 rollout (login gate)".
+  - **Tests**: `test-gate.mjs` (48 checks — the real PHP under `php -S` against SQLite: signed-in/out,
+    session expiry/idle/deactivation, fail-closed, kill-switch, `If-None-Match` bypass; mutation-
+    verified) and 23 new checks in `test-auth-client.mjs` (section H/I). It skips itself (exit 0) if
+    there is no `php` on the machine; CI has PHP. **Not covered by any test**: the `.htaccess`
+    rewrites under real Apache/LiteSpeed and the Hostinger CDN — `gate-rollout.sh migrate` and the
+    checklist verify those live.
+  - **Before `enforce-on` — open decisions for the client**: (1) only ONE server account exists
+    (`owner`; checked 2026-09-20 — active, password already changed, last sign-in 2026-09-17). Anyone
+    else who uses the ERP today via the old module-22 PIN accounts has **no** server account and
+    would be locked out; there is still **no UI to create staff accounts** (only the owner-only
+    `api/auth/users.php` endpoint). (2) Reloading a gated page with no signal fails (nothing can
+    be cached for a signed-in-only page); an already-open app keeps working offline. (3) The CDN
+    must be confirmed not to share a signed-in copy — the checklist has the exact test.
 
 **Credentials**: the DB password for `u943531942_erpauth` and the ticket-signing secret are
 generated fresh (never extracted from the existing `dbhub` MCP credential) and live only in

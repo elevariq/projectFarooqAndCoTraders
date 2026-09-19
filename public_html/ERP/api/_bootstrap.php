@@ -61,16 +61,26 @@ function new_id(string $prefix): string {
 }
 
 try {
-    $dsn = sprintf(
+    // 'dsn' is an optional override used only by the local test harness
+    // (test-gate.mjs runs the real endpoints against SQLite). The live
+    // config never sets it, so production always takes the MySQL branch.
+    $dsn = $CFG['db']['dsn'] ?? sprintf(
         'mysql:host=%s;port=%d;dbname=%s;charset=%s',
         $CFG['db']['host'], $CFG['db']['port'], $CFG['db']['name'], $CFG['db']['charset']
     );
-    $pdo = new PDO($dsn, $CFG['db']['user'], $CFG['db']['pass'], [
+    $pdo = new PDO($dsn, $CFG['db']['user'] ?? null, $CFG['db']['pass'] ?? null, [
         PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES   => false,
     ]);
+    if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') {
+        // the queries use MySQL's NOW(); SQLite (tests only) has no such function
+        $pdo->sqliteCreateFunction('NOW', fn() => date('Y-m-d H:i:s'), 0);
+    }
 } catch (Throwable $e) {
     error_log('[erp-api] DB connect failed: ' . $e->getMessage());
+    // The gate (gate.php) serves HTML, not JSON, and defines this hook so a
+    // person staring at a browser tab gets a readable "try again" page.
+    if (function_exists('erp_db_unavailable')) erp_db_unavailable();
     json_error('Could not reach the database.', 503);
 }

@@ -11,6 +11,16 @@ declare(strict_types=1);
  */
 const AUTH_ALL_PERMS_ROLE = 'OWNER';
 
+/**
+ * Phase 3 kill-switch. True only when private/erp-config.php explicitly says
+ * 'enforce_login' => true. Absent or false = the gate is dormant and the app
+ * files are served to anyone, exactly as they were before Phase 3 existed.
+ * Turning it off is a one-line config edit — no redeploy, no code change.
+ */
+function auth_enforcing(array $CFG): bool {
+    return ($CFG['enforce_login'] ?? false) === true;
+}
+
 function auth_cookie_name(array $CFG): string {
     return $CFG['session']['cookie_name'] ?? '__Host-fcsid';
 }

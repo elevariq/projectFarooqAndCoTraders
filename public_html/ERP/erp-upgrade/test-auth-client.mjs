@@ -291,6 +291,146 @@ async function main() {
     w.close();
   }
 
+  /* ── H: ENFORCE MODE (Phase 3) — the server says sign-in is mandatory ── */
+  {
+    const nowSec = () => Math.floor(Date.now() / 1000);
+    const ticketFor = (perms, expIn) => fakeTicket({ uid: 'usr_1', role: perms.includes('*') ? 'OWNER' : 'SALES', perms, exp: nowSec() + expIn });
+    const meOwner = (extra) => ({ status: 200, data: Object.assign({
+      user: { id: 'usr_1', username: 'owner', displayName: 'Farooq Ahmed' }, role: 'OWNER', permissions: OWNER_PERMS,
+      csrf: 'c1', enforce: true, offlineTicket: ticketFor(OWNER_PERMS, 43200),
+    }, extra || {}) });
+
+    let meMode = 'ok', meCalls = 0, logoutCalls = 0, loginCalls = 0;
+    const routes = {
+      'me.php': () => {
+        meCalls++;
+        if (meMode === 'ok') return meOwner();
+        if (meMode === 'sales') return { status: 200, data: { user: { id: 'usr_1', username: 'owner', displayName: 'Farooq Ahmed' }, role: 'SALES', permissions: SALES_PERMS, csrf: 'c1', enforce: true } };
+        if (meMode === '401') return { status: 401, data: { error: 'Not signed in.' } };
+        if (meMode === '500') return { status: 500, data: { error: 'boom' } };
+        if (meMode === 'down') throw new Error('network down');
+        return meOwner();
+      },
+      'login.php': (body) => {
+        loginCalls++;
+        if (body.password === 'right-pw') { meMode = 'ok'; return meOwner(); }
+        return { status: 401, data: { error: 'That username or password is not right.' } };
+      },
+      'logout.php': () => { logoutCalls++; return { status: 200, data: { ok: true } }; },
+    };
+    const store = { idb: new FDBFactory() };
+    const w = boot(store, mockFetch(routes));
+    const ERP = await ready(w);
+    await sleep(200);
+    let reloads = 0; ERP.Auth._reload = () => { reloads++; };
+
+    check('H1 the server\'s enforce:true flips Auth.mode to "enforce"', ERP.Auth.mode === 'enforce');
+    check('H2 the heartbeat starts in enforce mode', ERP.Auth._internal.heartbeatRunning() === true);
+    check('H3 me.php\'s ticket was cached — a gate-signed-in device has NO other source for one',
+      !!store.ls[ERP.Auth._internal.TICKET_KEY] && !!ERP.Auth._internal.validCachedTicket());
+
+    w.go('dashboard'); await sleep(150);
+    const chip = w.document.getElementById('fcUserChip');
+    check('H4 the module-22 "switch user" chip is display-only (disabled)', !!chip && chip.disabled === true);
+    chip && chip.click(); await sleep(50);
+    const si = w.document.getElementById('fcSignin');
+    check('H5 clicking it opens no local user picker', !si || !si.classList.contains('on'));
+    check('H6 no "Company sign-in" link (already signed in) but a "Sign out" link is offered',
+      !w.document.getElementById('fcCompanyLink') && !!w.document.getElementById('fcSignOutLink'));
+
+    /* the heartbeat picks up a server-side role change without a reload */
+    meMode = 'sales';
+    await ERP.Auth._internal.beat();
+    check('H7 a heartbeat refreshes permissions from the server (role change takes effect live)',
+      ERP.Auth.role === 'SALES' && ERP.RBAC.can('PROFIT_VIEW') === false && ERP.RBAC.can('SALES_CREATE') === true);
+    meMode = 'ok'; await ERP.Auth._internal.beat();
+    check('H8 …and back again', ERP.Auth.role === 'OWNER' && ERP.RBAC.can('PROFIT_VIEW') === true);
+
+    /* a blip is not a sign-out */
+    meMode = '500'; await ERP.Auth._internal.beat();
+    check('H9 a server 500 does NOT lock the screen', ERP.Auth.locked === false);
+    meMode = 'down'; await ERP.Auth._internal.beat();
+    check('H10 no network with a still-valid offline ticket does NOT lock (shop-floor signal loss)', ERP.Auth.locked === false && ERP.Auth.online === false);
+    meMode = 'ok'; await ERP.Auth._internal.beat();
+
+    /* hidden tab: no traffic, and it must not keep the server session alive */
+    const before = meCalls;
+    Object.defineProperty(w.document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    await ERP.Auth._internal.beat();
+    check('H11 a hidden tab sends no heartbeat', meCalls === before);
+    Object.defineProperty(w.document, 'visibilityState', { configurable: true, get: () => 'visible' });
+
+    /* the timer really drives beat() */
+    ERP.Auth._internal.stopHeartbeat(); ERP.Auth.HEARTBEAT_MS = 40;
+    const b2 = meCalls; ERP.Auth._internal.startHeartbeat(); await sleep(220);
+    check('H12 the interval calls the server on its own', meCalls > b2, 'calls ' + b2 + ' -> ' + meCalls);
+    ERP.Auth._internal.stopHeartbeat(); ERP.Auth.HEARTBEAT_MS = 60000; ERP.Auth._internal.startHeartbeat();
+
+    /* the session dies mid-use */
+    meMode = '401'; await ERP.Auth._internal.beat();
+    const lock = w.document.getElementById('fcAuthLock');
+    check('H13 a 401 while enforced locks the screen behind a sign-in', ERP.Auth.locked === true && !!lock && lock.classList.contains('on'));
+    check('H14 …and says the session ended (not "you have been idle")', /session has ended/i.test(lock.textContent) && !/idle/i.test(lock.textContent));
+    check('H15 the identity is kept, so the app does NOT quietly fall back to being the local Owner', !!ERP.Auth.identity && ERP.Auth.role === 'OWNER');
+    const c1 = meCalls; await ERP.Auth._internal.beat();
+    check('H16 while locked no further heartbeats are sent', meCalls === c1);
+
+    /* wrong password stays locked; right password recovers */
+    const pw = w.document.getElementById('fcLockPw'); pw.value = 'nope';
+    w.document.getElementById('fcLockGo').click(); await sleep(150);
+    check('H17 a wrong password leaves it locked, with the server\'s message',
+      ERP.Auth.locked === true && /not right/i.test(w.document.getElementById('fcLockErr').textContent));
+    w.document.getElementById('fcLockPw').value = 'right-pw';
+    w.document.getElementById('fcLockGo').click(); await sleep(250);
+    check('H18 the right password signs back in on the spot — no page reload, no lost work',
+      ERP.Auth.locked === false && !w.document.getElementById('fcAuthLock').classList.contains('on') && loginCalls >= 2 && reloads === 0);
+
+    /* offline for longer than the grace ticket */
+    store.ls[ERP.Auth._internal.TICKET_KEY] = JSON.stringify({ ticket: ticketFor(OWNER_PERMS, -60), savedAt: Date.now() });
+    meMode = 'down'; await ERP.Auth._internal.beat();
+    const lock2 = w.document.getElementById('fcAuthLock');
+    check('H19 offline AND the grace ticket has expired: locks, and says why',
+      ERP.Auth.locked === true && lock2.classList.contains('on') && /offline too long/i.test(lock2.textContent));
+    delete store.ls[ERP.Auth._internal.VERIFIER_KEY];
+    ERP.Auth.online = false;
+    w.document.getElementById('fcLockPw').value = 'right-pw';
+    w.document.getElementById('fcLockGo').click(); await sleep(150);
+    check('H20 offline unlock with no cached verifier says "connect" rather than blaming the password',
+      /connect to the internet/i.test(w.document.getElementById('fcLockErr').textContent));
+    ERP.Auth.online = true; meMode = 'ok';
+    w.document.getElementById('fcLockPw').value = 'right-pw';
+    w.document.getElementById('fcLockGo').click(); await sleep(250);
+    check('H21 once back online it unlocks', ERP.Auth.locked === false);
+
+    /* sign out */
+    w.go('dashboard'); await sleep(150);
+    w.document.getElementById('fcSignOutLink').click(); await sleep(250);
+    check('H22 "Sign out" tells the server, clears the identity, stops the heartbeat and reloads to the gate',
+      logoutCalls === 1 && ERP.Auth.identity === null && ERP.Auth._internal.heartbeatRunning() === false && reloads === 1);
+    check('H23 signing out drops the cached ticket', !store.ls[ERP.Auth._internal.TICKET_KEY]);
+    w.close();
+  }
+
+  /* ── I: the same module with the server NOT enforcing — must be the Phase 2 behaviour, untouched ── */
+  {
+    const store = { idb: new FDBFactory() };
+    const w = boot(store, mockFetch({
+      'me.php': () => ({ status: 200, data: { user: { id: 'usr_1', username: 'owner', displayName: 'Farooq Ahmed' }, role: 'OWNER', permissions: OWNER_PERMS, csrf: 'c1', enforce: false } }),
+    }));
+    const ERP = await ready(w);
+    await sleep(200);
+    check('I1 enforce:false keeps Auth.mode "observe"', ERP.Auth.mode === 'observe');
+    check('I2 no heartbeat runs in observe mode', ERP.Auth._internal.heartbeatRunning() === false);
+    w.go('dashboard'); await sleep(150);
+    const chip = w.document.getElementById('fcUserChip');
+    check('I3 the chip stays clickable and there is no Sign out link (Phase 2 UI unchanged)',
+      !!chip && chip.disabled === false && !w.document.getElementById('fcSignOutLink'));
+    let reloaded = 0; ERP.Auth._reload = () => { reloaded++; };
+    await ERP.Auth.logout(); await sleep(50);
+    check('I4 signing out in observe mode does not reload the page', reloaded === 0);
+    w.close();
+  }
+
   check('Z1 nothing threw during the whole session', errors.length === 0, errors.slice(0, 3).join(' | '));
   console.log('\n' + out.join('\n') + '\n\n' + pass + ' passed, ' + fail + ' failed\n');
   process.exit(fail ? 1 : 0);

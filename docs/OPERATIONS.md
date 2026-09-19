@@ -309,3 +309,73 @@ CURRENT_USER(), NOW()` (got back `u943531942_facotraders`, `11.8.9-MariaDB-log`,
 still empty), then a second full CRUD round trip (`CREATE TABLE _claude_mcp_test`, `INSERT`,
 `SELECT`, `UPDATE`, `SELECT`, `DELETE`, `DROP TABLE`) as a single multi-statement `execute_sql`
 call — all seven statements succeeded, table cleaned up, database back to 0 tables.
+
+## Phase 3 rollout (login gate) — checklist
+
+Built and tested 2026-09-20; see `CLAUDE.md` → "Server-side authentication & authorization" for
+what it is. Nothing here has been run against the live server yet. The script is
+`scripts/gate-rollout.sh` (`status | migrate | enforce-on | enforce-off | rollback`); it needs the
+same SSH access as `deploy-erp.sh`. Every stage backs up first and is reversible.
+
+**Before you start**
+1. `git status` clean, everything on `main` (no branches/PRs — see "Git workflow" above).
+2. Decide who needs an account. Only `owner` exists as a server account. **Everyone else is locked
+   out at `enforce-on`.** There is no UI to create staff accounts yet — only the owner-only
+   `api/auth/users.php` endpoint (`create` action) — so either build that screen first or create the
+   few accounts by hand before flipping.
+3. Know the emergency exit: `scripts/gate-rollout.sh enforce-off` (or set `'enforce_login' => false`
+   in `private/erp-config.php` by hand). Instant, no redeploy.
+
+**Stage 1 — `scripts/gate-rollout.sh migrate`** (installs the gate *dormant*; nothing changes for users)
+- Backs up to `/home/u943531942/backups/gate-<ts>/` (and records the path in `gate-latest.txt`),
+  creates `_app/` and copies the live app files into it *server-side*, uploads the gate + the two
+  updated endpoints (`login.php`, `me.php` — backward compatible: they only gain new fields),
+  lints every PHP file with the **server's** PHP, then switches `.htaccess` on.
+- It then checks the four app URLs return **byte-identical** content to before, `/_app/…` is `403`
+  and `me.php` is still `401`. Any failure ⇒ the old `.htaccess` is restored automatically. Only
+  then does it delete the now-unreachable root copies and re-verify (this proves the rewrite, not a
+  stray static file, is serving the app).
+- Afterwards **clear the Hostinger cache** for `erp.farooqandcotraders.online`
+  (`hosting_clearWebsiteCacheV1`, or hPanel). This matters more than usual: the four URLs used to
+  be plain static files, so the CDN may hold cached copies of them that would keep being served
+  after the gate is on.
+- Open the ERP in a real browser and use it for a bit. It must behave exactly as before, including
+  on a phone. (The rewrite is the one thing no local test can prove.)
+
+**Stage 1b — `scripts/deploy-erp.sh`** (ships the enforce-mode client)
+- `migrate` copies the app bytes that were *live at the time* into `_app/`, which predate the
+  enforce-mode client (heartbeat, Sign out, display-only user chip). Run the normal deploy now so
+  `_app/` holds the new build; clear the cache; check the app still works as before. `enforce-on`
+  refuses to run until the server's app contains the new client.
+
+**Stage 2 — `scripts/gate-rollout.sh enforce-on`**
+- Prints how many active accounts exist, sets `enforce_login => true` (backing up the config as
+  `erp-config.php.bak-<ts>`), then checks signed-**out** requests to the four URLs are `401`. If any
+  isn't, it flips back to `false` by itself.
+- Clear the Hostinger cache again. Then, by hand:
+  1. Signed out (private window): `https://erp.farooqandcotraders.online/` shows the sign-in page.
+  2. Sign in as the owner ⇒ the launcher opens, the ERP works, the topbar shows **Sign out** and
+     the user chip no longer opens the old "switch user" picker.
+  3. **CDN check — the important one.** While that signed-in tab is open, run
+     `curl -s -o /dev/null -w '%{http_code}\n' https://erp.farooqandcotraders.online/farooq-erp-data.js`
+     (and `/`, `/farooq-co-erp.html`) from a shell with **no cookie**. All must be `401`. A `200`
+     means the CDN is sharing a signed-in copy with strangers — run `enforce-off` immediately and
+     switch off caching for the site (`hosting_toggleCachelessModeV1`) before trying again.
+  4. Sign out ⇒ back on the sign-in page. Sign in again ⇒ fine.
+  5. Idle test: leave it 15 minutes ⇒ the lock screen; the password unlocks it.
+- Things that will look like bugs but are by design: reloading a gated page with **no signal** fails
+  (a signed-in-only page can't be cached; an already-open app keeps working offline); opening the ERP
+  from a link in WhatsApp/Google lands on the sign-in page for a blink, then steps in by itself (the
+  session cookie is `SameSite=Strict`, so it isn't sent on a cross-site click; the page re-asks from
+  inside the site).
+
+**Emergency / rollback**
+- App locked out or misbehaving ⇒ `enforce-off` (opens it to everyone, keeps the gate installed).
+- Gate itself misbehaving ⇒ `rollback` (restores the pre-gate `.htaccess` and puts the root files
+  back from `_app/`). Then clear the cache. The gate files stay on the server but are inert.
+- Manual, if the script can't run: in `private/erp-config.php` set `'enforce_login' => false`
+  (or delete the line). The gate then serves the files to anyone again.
+
+**Routine deploys afterwards**: `scripts/deploy-erp.sh` uploads to `_app/` (it refuses to run if
+`_app/` is absent). It does not touch the PHP files or `.htaccess`; changes to those are uploaded
+by hand with `scp` (`migrate` is a one-time step and refuses to run a second time).

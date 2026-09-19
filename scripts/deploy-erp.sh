@@ -6,8 +6,11 @@
 #   2. Reconstructs the local build-staging area and rebuilds via build.py.
 #   3. Runs every test-*.mjs harness; aborts the deploy if any fails.
 #   4. Backs up the live files it's about to overwrite (timestamped, on the server).
-#   5. Uploads the rebuilt files to the ERP document root (what erp.farooqandcotraders.online
-#      actually serves) and, for parity, to the legacy app/ copy nothing else links to.
+#   5. Uploads the rebuilt files to ERP/_app/ (Phase 3 login gate: api/gate.php reads the app from
+#      there, and the public URLs are rewritten to the gate — they are no longer files at the ERP
+#      root) and, for parity, to the legacy app/ copy nothing else links to.
+#      It REFUSES to run if _app/ isn't on the server yet (run scripts/gate-rollout.sh migrate
+#      first): it must never drop the app back at the ERP root, where nothing protects it.
 #   6. Clears the Hostinger CDN/server cache so the change is visible immediately.
 #   7. Curls both live URLs to confirm a 200 after deploy.
 #
@@ -59,18 +62,25 @@ for f in test-*.mjs; do
   node "$f"
 done
 
+echo "==> Checking the login-gate layout exists on the server (ERP/_app/ and api/gate.php)"
+if ! ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_HOST" "test -d '$REMOTE_ERP/_app' && test -f '$REMOTE_ERP/api/gate.php'"; then
+  echo "Refusing to deploy: $REMOTE_ERP/_app or api/gate.php is missing on the server." >&2
+  echo "Run scripts/gate-rollout.sh migrate first — this script must not put the app back at the ERP root." >&2
+  exit 1
+fi
+
 echo "==> All tests passed. Backing up live files before overwrite"
 TS="$(date +%Y%m%d%H%M%S)"
 ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_HOST" \
   "mkdir -p /home/u943531942/backups/erp-deploy-$TS && \
-   cp '$REMOTE_ERP/index.html' '$REMOTE_ERP/farooq-co-erp.html' '$REMOTE_ERP/farooq-erp-data.js' \
+   cp '$REMOTE_ERP/_app/index.html' '$REMOTE_ERP/_app/farooq-co-erp.html' '$REMOTE_ERP/_app/farooq-erp-data.js' \
      /home/u943531942/backups/erp-deploy-$TS/ 2>/dev/null; \
    cp -r '$REMOTE_ERP/app' /home/u943531942/backups/erp-deploy-$TS/app"
 
-echo "==> Uploading rebuilt files to the ERP document root (what the live site actually serves)"
+echo "==> Uploading rebuilt files to ERP/_app/ (what api/gate.php serves — the public URLs are rewritten to it)"
 scp -P "$SSH_PORT" -o BatchMode=yes \
   dist/index.html dist/farooq-co-erp.html dist/farooq-erp-data.js \
-  "$SSH_HOST:$REMOTE_ERP/"
+  "$SSH_HOST:$REMOTE_ERP/_app/"
 
 echo "==> Uploading the same build to app/ too (legacy copy, kept in sync for parity)"
 scp -P "$SSH_PORT" -o BatchMode=yes \
@@ -86,7 +96,7 @@ echo "==> Verifying"
 sleep 2
 for url in "https://farooqandcotraders.online/" "https://erp.farooqandcotraders.online/"; do
   code="$(curl -s -o /dev/null -w '%{http_code}' "$url")"
-  echo "  $url -> $code"
+  echo "  $url -> $code   (200 while the gate is dormant; 401 once enforcing — that is the sign-in page)"
 done
 
 echo "==> Done. Backup of the previous live files is at /home/u943531942/backups/erp-deploy-$TS on the server."

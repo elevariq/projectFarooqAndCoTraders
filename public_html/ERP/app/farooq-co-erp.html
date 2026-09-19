@@ -610,6 +610,7 @@ table.dt tr.tot-row td,table.dt tr.open-row td{background:#F7F7F7;font-weight:70
 
 
 
+
 <!-- FAROOQ & CO ERP — PRE-BOOT GUARD --><script>
 /* ══════════════════════════════════════════════════════════════════════════
    FAROOQ & CO TRADERS — ERP UPGRADE · MODULE 00a
@@ -23051,9 +23052,19 @@ D.addEventListener('click', function (e) {
        rendering exactly as before if the API is unreachable or nobody has
        signed in with a server account. Nothing that worked yesterday stops
        working today.
-     Phase 3 (flip AUTH_MODE to 'enforce', a one-line change once Phase 2
-       has run clean for a few days): rendering itself is gated on a valid
-       session, and the app files move behind index.php/erp.php.
+     Phase 3 (the login gate — api/gate.php, switched by 'enforce_login' in
+       the server's private/erp-config.php): the app files can only be
+       fetched with a valid session, so by the time this code runs the person
+       is already signed in. The server tells us it is enforcing (`enforce:
+       true` on /me.php and /login.php), and Auth.mode becomes 'enforce'.
+       There is no client-side switch to flip: a browser can never be the
+       thing that decides the gate is open. What enforce mode adds here:
+         - a session that ends mid-use (12 h cap, account switched off, sign-out
+           on another device) locks the screen behind a sign-in instead of
+           quietly carrying on as the local Owner — see the heartbeat below;
+         - "Sign out" returns to the server's sign-in page;
+         - the module-22 "switch user" chip becomes display-only, since the
+           server account is the identity now.
 
    OFFLINE GRACE PERIOD: the ERP is used on shop-floor devices that lose
    signal. A successful online sign-in returns a short-lived signed ticket
@@ -23074,10 +23085,11 @@ var ERP = global.ERP; if (!ERP) return;
 var D = global.document;
 if (!D) return;
 
-var AUTH_MODE = 'observe';           /* 'observe' | 'enforce' — see header */
+var AUTH_MODE = 'observe';           /* starting value only; the server's `enforce` flag sets it — see header */
 var API_BASE = 'api/auth/';
 var TICKET_KEY = 'farooqco_auth_ticket';
 var IDLE_MS_DEFAULT = 15 * 60 * 1000;
+var HEARTBEAT_MS_DEFAULT = 60 * 1000;
 
 function esc(s) {
   return String(s === null || s === undefined ? '' : s)
@@ -23091,6 +23103,7 @@ function say(m) { return global.say ? global.say(m) : null; }
 var Auth = ERP.Auth = {
   mode: AUTH_MODE,
   IDLE_MS: IDLE_MS_DEFAULT,
+  HEARTBEAT_MS: HEARTBEAT_MS_DEFAULT,
   identity: null,        /* { id, username, displayName } once signed in server-side */
   role: null,
   permissions: null,      /* array; ['*'] means "all", matching the API */
@@ -23222,6 +23235,9 @@ function storeVerifier(password) {
     } catch (e) {}
   });
 }
+function hasVerifier() {
+  try { return !!global.localStorage.getItem(VERIFIER_KEY); } catch (e) { return false; }
+}
 function checkVerifier(password) {
   var raw;
   try { raw = global.localStorage.getItem(VERIFIER_KEY); } catch (e) { raw = null; }
@@ -23253,6 +23269,7 @@ function applyIdentity(resp) {
   Auth.permissions = resp.permissions || [];
   Auth.csrf = resp.csrf || null;
   Auth.mustChangePassword = !!resp.mustChangePassword;
+  if (resp.enforce !== undefined) Auth.mode = resp.enforce ? 'enforce' : 'observe';
   if (resp.offlineTicket) storeTicket(resp.offlineTicket);
 
   if (ERP.Session) {
@@ -23268,6 +23285,7 @@ function applyIdentity(resp) {
     ERP.RBAC.label = function () { return Auth.role || ''; };
   }
   try { global.CURRENT_USER = Auth.identity ? Auth.identity.displayName : global.CURRENT_USER; } catch (e) {}
+  if (Auth.mode === 'enforce') startHeartbeat();
 }
 
 function applyFromTicket(payload) {
@@ -23317,8 +23335,19 @@ Auth.logout = function () {
     .then(function () {
       clearIdentity();
       stopIdleWatch();
+      stopHeartbeat();
       try { global.paint(); } catch (e) {}
+      /* enforced: there is nothing to go back to in this page — reload the
+         top window and the gate will answer with its sign-in page */
+      if (Auth.mode === 'enforce') Auth._reload();
     });
+};
+
+/* reloads the WHOLE page, not just the app iframe the launcher runs us in.
+   A separate function so the test harness can observe it (jsdom cannot navigate). */
+Auth._reload = function () {
+  try { global.top.location.reload(); }
+  catch (e) { try { global.location.reload(); } catch (e2) {} }
 };
 
 Auth.changePassword = function (currentPassword, newPassword) {
@@ -23371,6 +23400,65 @@ Auth.refresh = function () {
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
+   SESSION HEARTBEAT — enforce mode only.
+   The gate proved who you were when the page loaded; this notices when that
+   stops being true while the page stays open (12 h session cap, an owner
+   switching the account off, signing out from another device). Without it an
+   open tab would keep running as if nothing happened — and, worse, fall back
+   to the local "Owner" role, which is precisely what enforcing is meant to end.
+   Asks the server once a minute, only while the screen is unlocked and the tab
+   is visible, so an abandoned tab neither keeps the server session alive nor
+   hammers the API. The 15-minute idle lock (below) is what actually bounds
+   how long an unattended screen stays open.
+   A network failure never locks by itself — shop-floor devices lose signal —
+   unless the offline grace ticket has also run out.
+   ══════════════════════════════════════════════════════════════════════════ */
+var HB = { timer: null, wired: false };
+
+function beat() {
+  if (Auth.mode !== 'enforce' || !Auth.identity || Auth.locked) return Promise.resolve();
+  if (D.visibilityState === 'hidden') return Promise.resolve();
+  return request('me.php').then(function (r) {
+    if (r.status === 200) { Auth.online = true; applyIdentity(r.data); return; }
+    if (r.status === 401) { sessionEnded(); return; }
+    /* anything else (a 5xx blip): not evidence the session is gone */
+  }).catch(function () {
+    Auth.online = false;
+    if (!validCachedTicket()) sessionEnded('offline');
+  });
+}
+function onVisible() { if (D.visibilityState === 'visible') beat(); }
+function onOnline() { beat(); }
+
+function startHeartbeat() {
+  if (HB.timer) return;
+  HB.timer = global.setInterval(beat, Auth.HEARTBEAT_MS);
+  if (!HB.wired) {
+    HB.wired = true;
+    D.addEventListener('visibilitychange', onVisible);
+    global.addEventListener('online', onOnline);
+  }
+}
+function stopHeartbeat() {
+  if (HB.timer) global.clearInterval(HB.timer);
+  HB.timer = null;
+  if (HB.wired) {
+    HB.wired = false;
+    D.removeEventListener('visibilitychange', onVisible);
+    global.removeEventListener('online', onOnline);
+  }
+}
+
+/* the server says we are no longer signed in (or the offline window is over) */
+function sessionEnded(why) {
+  if (!Auth.identity || Auth.locked) return;
+  Auth.locked = true;
+  renderLock(why === 'offline'
+    ? 'You have been offline too long. Reconnect to keep working.'
+    : 'Your session has ended. Sign in again to continue.');
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
    IDLE LOCK — only engages once a server identity is active, so it never
    affects anyone still solely on the module-22 PIN system (Phase 2).
    ══════════════════════════════════════════════════════════════════════════ */
@@ -23418,6 +23506,11 @@ function unlockWith(password) {
   if (!payload) {
     return Promise.reject({ validation: ['The offline sign-in window has expired. Connect to the internet to continue.'] });
   }
+  if (!hasVerifier()) {
+    /* signed in through the gate's own page, so no password was ever cached on
+       this device — nothing offline can honestly check it against */
+    return Promise.reject({ validation: ['Connect to the internet to unlock.'] });
+  }
   return checkVerifier(password).then(function (ok) {
     if (!ok) return Promise.reject({ validation: ['That password is not right.'] });
     applyFromTicket(payload);
@@ -23437,12 +23530,12 @@ var LOCK_CSS = `
 `;
 (function () { var s = D.createElement('style'); s.id = 'fc-authlock-css'; s.textContent = LOCK_CSS; D.head.appendChild(s); })();
 
-function renderLock() {
+function renderLock(message) {
   var host = D.getElementById('fcAuthLock');
   if (!host) { host = D.createElement('div'); host.id = 'fcAuthLock'; D.body.appendChild(host); }
   var name = Auth.identity ? Auth.identity.displayName : '';
   host.innerHTML =
-    '<div class="box"><b>' + esc(name) + ', you have been idle</b>' +
+    '<div class="box"><b>' + (message ? esc(message) : esc(name) + ', you have been idle') + '</b>' +
     '<p style="color:var(--muted);font-size:13px">Enter your password to keep going.</p>' +
     '<input id="fcLockPw" type="password" placeholder="Password" autocomplete="off">' +
     '<div class="err" id="fcLockErr"></div>' +
@@ -23484,7 +23577,7 @@ var FORM_CSS = `
 #fcServerAuth .box{max-width:360px;width:100%;background:var(--surface);border-radius:16px;padding:20px}
 #fcServerAuth input{width:100%;padding:10px;border:1.5px solid var(--line);border-radius:var(--r-sm);margin-top:10px}
 #fcServerAuth .err{color:#C0392B;font-size:12.5px;margin-top:8px;min-height:16px}
-#fcCompanyLink{font-size:12px;color:var(--muted);background:none;border:none;cursor:pointer;text-decoration:underline;padding:4px}
+#fcCompanyLink,#fcSignOutLink{font-size:12px;color:var(--muted);background:none;border:none;cursor:pointer;text-decoration:underline;padding:4px}
 `;
 (function () { var s = D.createElement('style'); s.id = 'fc-serverauth-css'; s.textContent = FORM_CSS; D.head.appendChild(s); })();
 
@@ -23509,6 +23602,7 @@ function closeServerAuth() {
 D.addEventListener('click', function (e) {
   if (!e.target.closest) return;
   if (e.target.id === 'fcCompanyLink') { e.preventDefault(); openServerAuth(); return; }
+  if (e.target.id === 'fcSignOutLink') { e.preventDefault(); Auth.logout(); return; }
   if (e.target.id === 'fcAuthCancel') { closeServerAuth(); return; }
   if (e.target.id === 'fcAuthGo') {
     var u = D.getElementById('fcAuthUser'), p = D.getElementById('fcAuthPass');
@@ -23593,6 +23687,21 @@ function ensureCompanyLink() {
   if (!chip) return;
   var signInBtn = D.getElementById('fcCompanyLink');
   var pwBtn = D.getElementById('fcChangePwLink');
+  var outBtn = D.getElementById('fcSignOutLink');
+  var enforced = Auth.mode === 'enforce' && !!Auth.identity;
+  /* enforced: the server account IS the identity, so the module-22 "tap to
+     switch user" chip must not offer to become someone else. Disabled buttons
+     dispatch no click, which also covers keyboard activation. */
+  chip.disabled = enforced;
+  if (enforced) chip.title = 'Signed in as ' + (Auth.identity.displayName || '') + ' — use Sign out to change user';
+  if (enforced) {
+    if (!outBtn) {
+      outBtn = D.createElement('button');
+      outBtn.id = 'fcSignOutLink';
+      outBtn.textContent = 'Sign out';
+      chip.parentNode.insertBefore(outBtn, chip);
+    }
+  } else if (outBtn) { outBtn.remove(); }
   if (Auth.identity) {
     if (signInBtn) signInBtn.remove();
     if (!pwBtn) {
@@ -23627,7 +23736,9 @@ Auth._internal = {
   decodeTicketPayload: decodeTicketPayload, validCachedTicket: validCachedTicket,
   lockScreen: lockScreen, unlockWith: unlockWith,
   startIdleWatch: startIdleWatch, stopIdleWatch: stopIdleWatch,
-  openChangePw: openChangePw, closeChangePw: closeChangePw
+  openChangePw: openChangePw, closeChangePw: closeChangePw,
+  beat: beat, startHeartbeat: startHeartbeat, stopHeartbeat: stopHeartbeat,
+  heartbeatRunning: function () { return !!HB.timer; }
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
