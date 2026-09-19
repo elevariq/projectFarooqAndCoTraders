@@ -469,8 +469,7 @@ are done and live:
   whether the gzip 403 was caused by the gate (PHP-served response behind the CDN) or is a
   property of that CDN/edge for curl clients generally. **Not re-verified after rollback** that a
   gzip-accepting request returns 200 (further production probes were blocked by the permission
-  layer) — check that first: `curl -s -o /dev/null -w '%{http_code}
-' -H 'Accept-Encoding: gzip'
+  layer) — check that first: `curl -s -o /dev/null -w '%{http_code}' -H 'Accept-Encoding: gzip'
   https://erp.farooqandcotraders.online/` must print 200, and the site must load in a real browser.
   Left on the server after the rollback (harmless, inert): `_app/` with copies of the app files,
   `api/gate.php`, `api/_gate_login.php`, and updated `api/_bootstrap.php`, `_session.php`,
@@ -479,9 +478,10 @@ are done and live:
   (`browser_check`, proven to fail against a server that 403s gzip). **Do not run `migrate` again
   until the cause is understood** — first probe, with the gate installed but before enforcing,
   what a real browser gets, and whether `/api/gate.php?f=index` and `/api/auth/me.php` behave
-  differently for gzip requests. Correction to what this file and `31-auth.js` used to say: Phase 3 was **not** "flip
+  differently for gzip requests.
+  *Correction to what this file and `31-auth.js` used to say: Phase 3 was **not** "flip
   `AUTH_MODE` to `'enforce'`" — nothing ever branched on that value, so the enforcement had to
-  be built. What exists now:
+  be built.* What exists now:
   - **`api/gate.php`** (+ `api/_gate_login.php`): the app files moved to `ERP/_app/` (denied to the
     web); `ERP/.htaccess` rewrites `/`, `/index.html`, `/farooq-co-erp.html` and
     `/farooq-erp-data.js` to the gate. Signed out ⇒ a `401` sign-in page (never the app, and never

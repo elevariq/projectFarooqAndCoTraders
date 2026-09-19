@@ -313,7 +313,10 @@ call — all seven statements succeeded, table cleaned up, database back to 0 ta
 ## Phase 3 rollout (login gate) — checklist
 
 Built and tested 2026-09-20; see `CLAUDE.md` → "Server-side authentication & authorization" for
-what it is. Nothing here has been run against the live server yet. The script is
+what it is. **A first `migrate` was run on 2026-09-20 and rolled back after real browsers (gzip-accepting
+requests) got a 403 from the CDN edge — see the incident note in CLAUDE.md and do not repeat Stage 1
+until that is understood.** The probes in this checklist must imitate a browser (User-Agent + gzip);
+the script now does. The script is
 `scripts/gate-rollout.sh` (`status | migrate | enforce-on | enforce-off | rollback`); it needs the
 same SSH access as `deploy-erp.sh`. Every stage backs up first and is reversible.
 
