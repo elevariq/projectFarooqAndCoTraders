@@ -371,6 +371,9 @@ async function main() {
     const lock = w.document.getElementById('fcAuthLock');
     check('H13 a 401 while enforced locks the screen behind a sign-in', ERP.Auth.locked === true && !!lock && lock.classList.contains('on'));
     check('H14 …and says the session ended (not "you have been idle")', /session has ended/i.test(lock.textContent) && !/idle/i.test(lock.textContent));
+    ERP.Auth._internal.lockScreen();    /* the 15-minute idle timer firing while already locked */
+    check('H14b an idle lock firing while "session ended" is showing does not overwrite that message',
+      /session has ended/i.test(w.document.getElementById('fcAuthLock').textContent));
     check('H15 the identity is kept, so the app does NOT quietly fall back to being the local Owner', !!ERP.Auth.identity && ERP.Auth.role === 'OWNER');
     const c1 = meCalls; await ERP.Auth._internal.beat();
     check('H16 while locked no further heartbeats are sent', meCalls === c1);

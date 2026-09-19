@@ -492,6 +492,22 @@ are done and live:
     there is no `php` on the machine; CI has PHP. **Not covered by any test**: the `.htaccess`
     rewrites under real Apache/LiteSpeed and the Hostinger CDN — `gate-rollout.sh migrate` and the
     checklist verify those live.
+  - **Known limits, found in the 2026-09-20 review (deliberately not "fixed" — say so before relying on them)**:
+    (a) *The gate protects the app files and the master data inside them, NOT the business data.*
+    Transactions live in each browser's IndexedDB; anyone with access to a signed-in browser
+    profile still has them. Real protection of that data needs the MySQL migration.
+    (b) *Lockout as a denial of service*: 5 wrong passwords lock an account for 15 min from any
+    IP, and `owner` is a guessable username — with a mandatory gate, a stranger can keep the
+    owner out. `enforce-off` is the escape hatch; a real fix (per-IP+user throttling instead of
+    a hard account lock) changes the login semantics and wants its own decision.
+    (c) *The Warehouse app inside the launcher has no heartbeat/lock* — it is protected at load
+    by the gate but keeps running if the session ends mid-use (only `31-auth.js`, i.e. the ERP,
+    watches the session).
+    (d) *Payroll, Milling, Statement of Account and Invoice search have no permission checks*
+    (a pre-existing gap, not caused by Phase 3): once staff accounts exist, every role would see
+    salaries. Gate them before creating non-owner accounts.
+    (e) A page restored from the browser's back/forward cache after signing out shows its old
+    screen until its next heartbeat (≤1 min visible) — cosmetic, the data is local anyway.
   - **Before `enforce-on` — open decisions for the client**: (1) only ONE server account exists
     (`owner`; checked 2026-09-20 — active, password already changed, last sign-in 2026-09-17). Anyone
     else who uses the ERP today via the old module-22 PIN accounts has **no** server account and

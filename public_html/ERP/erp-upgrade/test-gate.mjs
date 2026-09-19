@@ -15,6 +15,7 @@ import os from 'os';
 import path from 'path';
 import { spawn, spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
+import { JSDOM } from 'jsdom';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ERP = path.resolve(HERE, '..');
@@ -157,6 +158,51 @@ async function main() {
     const sneaky = await get('/', { headers: { 'If-None-Match': etag } });
     check('E8 enforced: a matching If-None-Match does NOT bypass the sign-in check', sneaky.status === 401 && !has(sneaky, MARK.index));
     check('E9 /api/gate.php with an unknown target is a plain 404', (await get('/api/gate.php?f=nope')).status === 404 && (await get('/api/gate.php?f=../../x')).status === 404);
+  }
+
+  /* ── the sign-in page's own script: what a person actually experiences ── */
+  {
+    const html = (await get('/')).body;
+    const script = (html.match(/<script>([\s\S]*?)<\/script>/) || [])[1] || '';
+    check('P0 the sign-in page carries its script', script.length > 200);
+    const run = ({ me = 401, login, netFail = false, flag = false }) => {
+      const dom = new JSDOM(html); const doc = dom.window.document;
+      const calls = { replace: [], fetch: [] }, store = flag ? { fcGateGo: String(Date.now()) } : {};
+      const loc = { pathname: '/', search: '?app=erp', replace: u => calls.replace.push(u) };
+      const ss = { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } };
+      const fx = (url) => {
+        calls.fetch.push(url);
+        if (netFail) return Promise.reject(new Error('offline'));
+        const isMe = /me\.php/.test(url);
+        return Promise.resolve({ status: isMe ? me : login.status, json: async () => (isMe ? {} : login.data) });
+      };
+      new Function('document', 'location', 'sessionStorage', 'fetch', 'window', script)(doc, loc, ss, fx, { fetch: fx });
+      const submit = (u, p) => { doc.getElementById('u').value = u; doc.getElementById('p').value = p; doc.getElementById('f').dispatchEvent(new dom.window.Event('submit', { cancelable: true })); };
+      return { doc, calls, store, submit };
+    };
+    let r = run({ me: 200 }); await sleep(40);
+    check('P1 already signed in but the SameSite cookie was withheld (clicked from WhatsApp/Google): it steps straight in, keeping ?app=',
+      r.calls.replace.length === 1 && r.calls.replace[0] === '/?app=erp');
+    r = run({ me: 200, flag: true }); await sleep(40);
+    check('P2 …but never loops: a recent attempt suppresses a second automatic step-in', r.calls.replace.length === 0 && !r.calls.fetch.some(u => /me\.php/.test(u)));
+    r = run({ me: 401 }); await sleep(40);
+    check('P3 not signed in: it just waits for the person to type', r.calls.replace.length === 0);
+    r = run({}); r.submit('', ''); await sleep(20);
+    check('P4 an empty form is refused client-side without calling the server',
+      /Enter your username/.test(r.doc.getElementById('e').textContent) && !r.calls.fetch.some(u => /login\.php/.test(u)));
+    r = run({ login: { status: 401, data: { error: 'That username or password is not right.' } } });
+    r.submit('owner', 'nope'); await sleep(40);
+    check('P5 a wrong password shows the server\'s message, clears the password and re-enables the button',
+      /not right/.test(r.doc.getElementById('e').textContent) && r.doc.getElementById('p').value === '' &&
+      r.doc.getElementById('b').disabled === false && r.doc.getElementById('b').textContent === 'Sign in' && r.calls.replace.length === 0);
+    r = run({ login: { status: 423, data: { error: 'Too many attempts. Try again in a few minutes.' } } });
+    r.submit('owner', 'x'); await sleep(40);
+    check('P6 a lockout message is shown as written', /Too many attempts/.test(r.doc.getElementById('e').textContent));
+    r = run({ netFail: true }); r.submit('owner', 'x'); await sleep(40);
+    check('P7 no connection gives a plain "could not reach the server", and the form recovers',
+      /Could not reach the server/.test(r.doc.getElementById('e').textContent) && r.doc.getElementById('b').disabled === false);
+    r = run({ login: { status: 200, data: { user: {} } } }); r.submit('owner', 'right'); await sleep(40);
+    check('P8 a successful sign-in reloads into the app (same URL, query kept)', r.calls.replace.length === 1 && r.calls.replace[0] === '/?app=erp');
   }
 
   /* ── sign in ── */

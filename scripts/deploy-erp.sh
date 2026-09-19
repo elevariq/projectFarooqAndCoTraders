@@ -78,9 +78,13 @@ ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_HOST" \
    cp -r '$REMOTE_ERP/app' /home/u943531942/backups/erp-deploy-$TS/app"
 
 echo "==> Uploading rebuilt files to ERP/_app/ (what api/gate.php serves — the public URLs are rewritten to it)"
-scp -P "$SSH_PORT" -o BatchMode=yes \
-  dist/index.html dist/farooq-co-erp.html dist/farooq-erp-data.js \
-  "$SSH_HOST:$REMOTE_ERP/_app/"
+# Upload under temporary names, then rename in one step: a visitor loading the page mid-upload
+# would otherwise be served a half-written 3 MB file. (rename is atomic on the same filesystem)
+for f in index.html farooq-co-erp.html farooq-erp-data.js; do
+  scp -P "$SSH_PORT" -o BatchMode=yes "dist/$f" "$SSH_HOST:$REMOTE_ERP/_app/$f.uploading"
+done
+ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_HOST" \
+  "cd '$REMOTE_ERP/_app' && for f in index.html farooq-co-erp.html farooq-erp-data.js; do mv -f \"\$f.uploading\" \"\$f\"; done"
 
 echo "==> Uploading the same build to app/ too (legacy copy, kept in sync for parity)"
 scp -P "$SSH_PORT" -o BatchMode=yes \

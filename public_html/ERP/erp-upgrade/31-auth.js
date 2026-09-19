@@ -449,6 +449,7 @@ function stopIdleWatch() {
 }
 function lockScreen() {
   if (!Auth.identity) return;
+  if (Auth.locked) return;     /* already locked (e.g. "session ended") — don't overwrite that message with "idle" */
   Auth.locked = true;
   renderLock();
 }
