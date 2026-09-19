@@ -604,6 +604,57 @@ re-validates stock against bags the invoice already took, so it failed once stoc
   saving a second draft fails with "Transaction failed". Needs its own fix (e.g. store no number
   for drafts, or a non-unique/partial index) and a decision on existing data.
 
+## Invoice search — finding old invoices (2026-09-19)
+
+Client request: "add a search option to find old invoices easily by Invoice Number, Customer Name,
+Date, or Product Name or any other." The Sales & invoices screen already had a search box, but it
+couldn't really find *old* invoices: one substring test over a glued-together string (no Urdu letter
+folding, no multi-word matching), the invoice **date was never in the searched text** (and the
+`LIST.custom` date range the code half-supported had no controls at all), and it scanned the whole
+line-items table once per invoice per keystroke and drew every invoice as a DOM row.
+
+- New module `33-invoice-search.js` (`ERP.InvoiceSearch`) is the engine; the screen stays in
+  `05-ui-builder.js` §37–39 (`ERP.InvoiceList` is now just remembered state + `results()`/`reset()`/
+  `goPage()`); `06-wiring.js` got four small event edits (page reset, Clear, pager).
+- **Index**: one normalised text index per invoice, built in a single pass over `S.invoiceItems`
+  and dropped on `Mirror.refresh` (same approach as `11-search.js`, whose `ERP.Search.normalize`
+  supplies the Urdu/English folding). Fields kept separate so "Search in" can scope to: invoice /
+  order / dispatch / reference no., customer & phone, product, amount, notes & other.
+- Every space-separated word must be found (AND, any order); substring match, deliberately *not*
+  fuzzy (a filter list must be predictable — the Ctrl+K palette is the forgiving one). Phone numbers
+  and invoice numbers also match with dashes/spaces removed. A customer is matched by both the name
+  **printed on the invoice** (snapshot) and the shop's **current** name (looked up by id at search
+  time, not cached, so a rename is seen immediately).
+- **Dates typed into the box become a date filter**, not text: `12/09/2026`, `2026-09-12`,
+  `12 Sep 2026`, `Sep 12, 2026`, `Sep 2026`, `09/2026`, `2026-09`, also in Urdu digits. Numeric
+  dates are **day-first** (month-first only when day-first is impossible); the screen states how it
+  read the date. A typed date replaces the date preset. Month-only numeric forms must stand alone
+  so the tail of a number like `INV-2026-12` is not misread as December 2026.
+- New controls: Search-in scope, Sort (newest/oldest/highest total/lowest total/highest balance
+  due), date presets + Last 30 days / 3 months / 12 months / **Custom range** (From/To), Total
+  from/to, Clear filters, **50 rows per page** (KPI cards and CSV still cover every match), and a
+  "matched product lines" hint under the invoice number when a product search is why a row appears.
+- Inputs that can never match (From after To, minimum above maximum) show a warning and an empty
+  list instead of a quietly wrong one — the same principle as the Statement of Account date check.
+- **Pre-existing bug found and fixed while reviewing this (`02-services.js`, `Reports.range`)**: it
+  built dates with `toISOString()` (UTC) from local-midnight `Date`s, so anywhere east of Greenwich
+  — i.e. Pakistan, the client — "Yesterday" was two days ago, "This week" started on a Sunday and
+  "Last month" ran Jul 31–Aug 30 instead of Aug 1–31. Only the invoice list and the two period
+  pickers in `06-wiring.js` (~lines 527/547, statement/export periods) call it; all now get correct
+  local dates. Regression-tested in `test-invoice-search.mjs` under UTC, Asia/Karachi, Pacific/Auckland
+  and America/Los_Angeles, and mutation-checked (old code restored → 4 checks fail with exactly that
+  symptom). Other places that build dates from `toISOString()` were not audited.
+- Covered by `test-invoice-search.mjs` (115 checks: every field, scope, all date forms incl. the
+  day-first ambiguity and Urdu digits, ranges, presets, sorting, paisa totals, index freshness after
+  cancel/new invoice, "never scans line items per invoice", and the real screen controls, CSV and
+  paging). Full suite reruns clean.
+- **Not verified in a real browser**: the layout (two filter rows, mobile wrap) was only checked
+  through jsdom, which doesn't render CSS. Two Chrome-driven attempts failed because the automation
+  browser cannot open *any* localhost page (even a plain directory listing shows Chrome's error
+  page) — an environment limit, not an app fault. Eyeball it on a phone and a desktop after deploying.
+- Not done: fuzzy/typo matching in this list, saved searches, searching the hand-edited print text
+  (`12-invoice-editor.js`), Urdu month names in typed dates.
+
 ## Where to look for more detail
 
 - `docs/OPERATIONS.md` — full access inventory, exact commands used, and the deploy checklist.
