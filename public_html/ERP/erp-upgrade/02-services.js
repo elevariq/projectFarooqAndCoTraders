@@ -1512,7 +1512,13 @@ var Ledger = ERP.Ledger = {
 var Reports = ERP.Reports = {
   range: function (key) {
     var t = todayISO(), d = new Date(t + 'T00:00:00');
-    function iso(x) { return x.toISOString().slice(0, 10); }
+    /* local calendar date — toISOString() is UTC, which moved every date built
+       from a local-midnight Date back one day east of Greenwich (in Pakistan,
+       "Yesterday" was two days ago and "Last month" ran Jul 31–Aug 30) */
+    function iso(x) {
+      return x.getFullYear() + '-' + String(x.getMonth() + 1).padStart(2, '0') + '-' +
+             String(x.getDate()).padStart(2, '0');
+    }
     function shift(n) { var y = new Date(d); y.setDate(y.getDate() + n); return iso(y); }
     switch (key) {
       case 'today':     return [t, t];
