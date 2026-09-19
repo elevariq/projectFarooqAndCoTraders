@@ -475,10 +475,16 @@ are done and live:
   `api/gate.php`, `api/_gate_login.php`, and updated `api/_bootstrap.php`, `_session.php`,
   `auth/login.php`, `auth/me.php` (backward compatible: they only add fields). The rollout script's
   checks now send a browser User-Agent + gzip and require HTTP 200 with identical bytes
-  (`browser_check`, proven to fail against a server that 403s gzip). **Do not run `migrate` again
-  until the cause is understood** — first probe, with the gate installed but before enforcing,
-  what a real browser gets, and whether `/api/gate.php?f=index` and `/api/auth/me.php` behave
-  differently for gzip requests.
+  (`browser_check`, proven to fail against a server that 403s gzip). **UPDATE (same day, later): the rollback was very probably unnecessary.** After it, the
+  user ran `curl -H 'Accept-Encoding: gzip' https://erp.farooqandcotraders.online/` themselves and
+  still got **403** on the restored original layout — so the Hostinger edge refuses gzip-accepting
+  curl requests even for the original static site; the 403 seen during the migrate was almost
+  certainly that, not the gate. (Not yet proven with a real browser or a control request.) So a gzip
+  curl probe is meaningless on this host. `gate-rollout.sh` was reworked accordingly: plain-HEAD
+  probes for blocked/alive questions; `browser_check` compares against an untouched control
+  (`/logo.png`) and reports INCONCLUSIVE if the control is refused too; `migrate` no longer deletes
+  the root copies — a human opens the site in a REAL browser, then runs `finalize` (or `rollback`).
+  `enforce-on` refuses until `finalize` has removed the public static copies.
   *Correction to what this file and `31-auth.js` used to say: Phase 3 was **not** "flip
   `AUTH_MODE` to `'enforce'`" — nothing ever branched on that value, so the enforcement had to
   be built.* What exists now:

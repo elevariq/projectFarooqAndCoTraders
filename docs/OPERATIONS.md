@@ -313,10 +313,11 @@ call — all seven statements succeeded, table cleaned up, database back to 0 ta
 ## Phase 3 rollout (login gate) — checklist
 
 Built and tested 2026-09-20; see `CLAUDE.md` → "Server-side authentication & authorization" for
-what it is. **A first `migrate` was run on 2026-09-20 and rolled back after real browsers (gzip-accepting
-requests) got a 403 from the CDN edge — see the incident note in CLAUDE.md and do not repeat Stage 1
-until that is understood.** The probes in this checklist must imitate a browser (User-Agent + gzip);
-the script now does. The script is
+what it is. **A first `migrate` was run on 2026-09-20 and rolled back** after a gzip curl probe got a 403 from the CDN
+edge; that edge turned out to 403 gzip-accepting curl on the ORIGINAL site too, so the probe was
+misleading (see the incident note in CLAUDE.md). Consequence for this checklist: **the only
+authoritative test that the app loads is a real browser** — the script's curl checks are plain-request
+checks plus a control-relative gzip check that may say INCONCLUSIVE. The script is
 `scripts/gate-rollout.sh` (`status | migrate | enforce-on | enforce-off | rollback`); it needs the
 same SSH access as `deploy-erp.sh`. Every stage backs up first and is reversible.
 
@@ -342,8 +343,11 @@ same SSH access as `deploy-erp.sh`. Every stage backs up first and is reversible
   (`hosting_clearWebsiteCacheV1`, or hPanel). This matters more than usual: the four URLs used to
   be plain static files, so the CDN may hold cached copies of them that would keep being served
   after the gate is on.
-- Open the ERP in a real browser and use it for a bit. It must behave exactly as before, including
-  on a phone. (The rewrite is the one thing no local test can prove.)
+- `migrate` leaves the original root copies in place (shadowed by the rewrite), so `rollback` is instant.
+- **Open the ERP in a REAL browser** (private window; ideally a phone on mobile data), open the Office
+  app and use it for a minute. It must behave exactly as before. (The rewrite and the CDN are the two
+  things no local test can prove.) Then `scripts/gate-rollout.sh finalize` removes the shadowed root
+  copies and re-verifies; if anything looked wrong, `rollback` instead.
 
 **Stage 1b — `scripts/deploy-erp.sh`** (ships the enforce-mode client)
 - `migrate` copies the app bytes that were *live at the time* into `_app/`, which predate the

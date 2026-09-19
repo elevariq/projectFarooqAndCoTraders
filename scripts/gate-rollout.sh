@@ -5,12 +5,14 @@
 #   scripts/gate-rollout.sh migrate       install the gate DORMANT. Nothing changes for anyone: the same
 #                                         four URLs still return the same bytes, they just travel through
 #                                         api/gate.php now. Auto-restores the old .htaccess if any check fails.
+#   scripts/gate-rollout.sh finalize      after checking the site in a REAL browser: remove the shadowed root copies.
 #   scripts/gate-rollout.sh enforce-on    flip the kill-switch: sign-in becomes mandatory.
 #   scripts/gate-rollout.sh enforce-off   flip it back: the app is open to everyone again (emergency exit —
 #                                         instant, no redeploy).
 #   scripts/gate-rollout.sh rollback      undo `migrate` entirely: old .htaccess and root files restored.
 #
-# Order: migrate -> (clear Hostinger cache) -> verify by hand -> enforce-on -> (clear cache) -> verify.
+# Order: migrate -> clear cache -> REAL-BROWSER check -> finalize -> deploy-erp.sh -> clear cache -> enforce-on -> clear cache -> REAL-BROWSER check.
+# (A real browser is the only authoritative test: the CDN edge answers curl-with-gzip differently from browsers.)
 # The script cannot call the Hostinger MCP: clear the CDN cache for erp.farooqandcotraders.online from a
 # Claude session (hosting_clearWebsiteCacheV1) or hPanel after `migrate` and after `enforce-on`.
 # See docs/OPERATIONS.md "Phase 3 rollout" for the full checklist and what to look for.
@@ -29,17 +31,31 @@ APP_FILES=(index.html farooq-co-erp.html farooq-erp-data.js)
 
 rssh() { ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_HOST" "$@"; }
 rscp() { scp -P "$SSH_PORT" -o BatchMode=yes "$@"; }
-# Every probe imitates a real browser: a browser User-Agent and gzip accepted. This is not cosmetic — on
-# 2026-09-20 the first `migrate` passed its checks and left the site returning 403 to EVERY real browser,
-# because the checks were bare curl requests (no Accept-Encoding) and the CDN answered those differently.
+# Probe types (learned the hard way, 2026-09-20):
+#  - code()  : PLAIN HEAD, no Accept-Encoding. Used for "is it blocked / is the API alive" questions.
+#  - bcurl() : imitates a browser (User-Agent + gzip) -- but the Hostinger CDN edge answers 403 to curl
+#              clients that send Accept-Encoding: gzip EVEN ON THE ORIGINAL STATIC SITE, so a gzip probe
+#              on its own proves nothing. browser_check therefore always compares against a CONTROL
+#              (an untouched static file, /logo.png) and reports INCONCLUSIVE if the control is refused too.
+#              The real answer to "does a browser get the app?" is a human opening it in a real browser
+#              (the `migrate` -> browser check -> `finalize` split exists for exactly that).
 BROWSER_UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
-code() { curl -s -I -m 90 -A "$BROWSER_UA" -H 'Accept-Encoding: gzip, deflate, br' -o /dev/null -w '%{http_code}' "$1"; }   # HEAD: status only
-bcurl() { curl -s -m 300 -A "$BROWSER_UA" --compressed "$@"; }     # full GET the way a browser makes it
+NEEDS_HUMAN=0
+code() { curl -s -I -m 90 -o /dev/null -w '%{http_code}' "$1"; }
+bcurl() { curl -s -m 300 -A "$BROWSER_UA" --compressed "$@"; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
 
-# browser_check URL EXPECTED_MD5 — GET the way a browser does (UA + gzip). Passes only on HTTP 200 AND identical bytes.
+# browser_check URL EXPECTED_MD5 — GET the way a browser does (UA + gzip). Passes on HTTP 200 + identical bytes.
+# If the CONTROL (/logo.png, an untouched static file) is refused with the same kind of request, the edge is
+# blocking this probe style regardless of what we deployed: reports INCONCLUSIVE, sets NEEDS_HUMAN, returns 0.
 browser_check() {
-  local url="$1" want="$2" tmp st got same; tmp="$(mktemp)"
+  local url="$1" want="$2" tmp st got same ctl; tmp="$(mktemp)"
+  ctl="$(bcurl -o /dev/null -w '%{http_code}' "$SITE/logo.png?ctl=$RANDOM")" || ctl="000"
+  if [ "$ctl" != "200" ]; then
+    echo "  ????  ${url#$SITE} INCONCLUSIVE — the control (/logo.png) is also refused with this probe (HTTP $ctl), so the edge is"
+    echo "        blocking gzip curl in general; this says nothing about the gate. A real browser must confirm."
+    NEEDS_HUMAN=1; rm -f "$tmp"; return 0
+  fi
   st="$(bcurl -o "$tmp" -w '%{http_code}' "$url?verify=$RANDOM")" || st="000"
   got="$(md5sum < "$tmp" | cut -d' ' -f1)"; rm -f "$tmp"
   if [ "$want" = "$got" ]; then same="identical bytes"; else same="DIFFERENT bytes"; fi
@@ -111,9 +127,6 @@ cmd_migrate() {
   want="$(rssh "md5sum '$REMOTE_ERP/_app/index.html' | cut -d' ' -f1")"
   got="$(curl -s -m 300 "$SITE/?verify=$RANDOM" | md5sum | cut -d' ' -f1)"
   if [ "$want" = "$got" ]; then echo "  OK    /"; else echo "  FAIL  / (bytes differ)"; bad=1; fi
-  local wire; wire="$(bcurl -o /dev/null -w '%{http_code} %{size_download}' "$SITE/?sz=$RANDOM")"
-  echo "  INFO  browser-style GET / -> HTTP ${wire%% *}, ${wire##* } bytes on the wire (a 3 MB app should be well under 1 MB gzipped)"
-  [ "${wire%% *}" = "200" ] || { echo "  FAIL  browser-style GET / is not 200"; bad=1; }
   [ "$(code "$SITE/_app/index.html")" = "403" ] && echo "  OK    /_app/index.html is 403" || { echo "  FAIL  /_app/index.html is not 403"; bad=1; }
   [ "$(code "$SITE/api/auth/me.php")" = "401" ] && echo "  OK    /api/auth/me.php still answers 401 (API healthy)" || { echo "  FAIL  me.php not 401"; bad=1; }
 
@@ -123,23 +136,37 @@ cmd_migrate() {
     die "migrate aborted and undone (site is back on plain static files; root copies were never removed)."
   fi
 
-  echo "==> Gate is routing correctly. Removing the now-unreachable public copies at the ERP root"
-  echo "    (so enforcing can't be undermined by a stray static copy if the rewrite ever stopped applying)"
+  echo
+  echo "DONE — gate installed DORMANT, routing the app URLs. Backup: $BK"
+  echo "The ORIGINAL root copies are still on the server (shadowed by the rewrite), so 'rollback' is instant."
+  if [ "$NEEDS_HUMAN" = 1 ]; then
+    echo "!! The automated gzip check was INCONCLUSIVE (see above) — a human MUST do the next step."
+  fi
+  echo
+  echo "NEXT (do not skip):"
+  echo "  1. Clear the Hostinger cache for erp.farooqandcotraders.online."
+  echo "  2. In a REAL browser (private window, and ideally a phone on mobile data) open $SITE/ ,"
+  echo "     open the Office app and use it for a minute. It must behave exactly as before."
+  echo "  3. Works  -> scripts/gate-rollout.sh finalize     (removes the shadowed root copies)"
+  echo "     Broken -> scripts/gate-rollout.sh rollback     (instant)"
+}
+
+cmd_finalize() {
+  local BK; BK="$(rssh "cat '$BACKUPS/gate-latest.txt'")" || die "no gate backup recorded — was migrate run?"
+  [ "$(code "$SITE/_app/index.html")" = "403" ] || die "the gate isn't installed (run migrate first)."
+  echo "==> Removing the now-shadowed public copies at the ERP root (so a stray static copy can never undermine enforcing)"
   rssh "cd '$REMOTE_ERP' && rm -f index.html farooq-co-erp.html farooq-erp-data.js"
   echo "==> Re-verifying with the root copies gone (proves the rewrite is what serves the app)"
-  bad=0
+  local bad=0 url
   for url in / /index.html /farooq-co-erp.html /farooq-erp-data.js; do
     [ "$(code "$SITE$url?v=$RANDOM")" = "200" ] && echo "  OK    $url 200" || { echo "  FAIL  $url"; bad=1; }
   done
   if [ "$bad" != 0 ]; then
     echo "==> Root copies gone and the app URLs failed — putting them back NOW" >&2
     rssh "cd '$REMOTE_ERP' && cp -p _app/index.html _app/farooq-co-erp.html _app/farooq-erp-data.js . && cp -p '$BK/.htaccess' .htaccess"
-    die "migrate undone."
+    die "finalize undone."
   fi
-  echo
-  echo "DONE — gate installed DORMANT. Backup: $BK"
-  echo "Next: clear the Hostinger cache for erp.farooqandcotraders.online, open the app in a browser and use it"
-  echo "for a minute, then run: scripts/gate-rollout.sh enforce-on"
+  echo "DONE. Clear the cache, re-check in a real browser, then: scripts/gate-rollout.sh deploy-erp (scripts/deploy-erp.sh) and enforce-on."
 }
 
 # The shell text that edits the server config: back it up, replace the enforce_login line if there is one,
@@ -163,6 +190,9 @@ set_enforce() {  # $1 = true|false
 
 cmd_enforce_on() {
   [ "$(code "$SITE/_app/index.html")" = "403" ] || die "the gate isn't installed (run migrate first)."
+  if rssh "test -f '$REMOTE_ERP/index.html' || test -f '$REMOTE_ERP/farooq-erp-data.js'"; then
+    die "public static copies of the app still sit at the ERP root — run 'finalize' first, or enforcing can be bypassed by requesting them directly."
+  fi
   # migrate copies the LIVE app bytes into _app/ — which predate the enforce-mode client. Enforcing with that
   # old client would work but has no heartbeat, no Sign out and a live user-switch chip.
   rssh "grep -q 'SESSION HEARTBEAT' '$REMOTE_ERP/_app/farooq-co-erp.html'" \
@@ -202,6 +232,7 @@ case "${1:-}" in
   --browser-check) SITE="$2"; browser_check "$2$3" "$4" ;;   # test hook: <site> <path> <md5>
   --print-config-edit) config_edit_cmd "$2" "$3" "${4:-test}" ;;   # test hook: prints the remote command, runs nothing
   status)       cmd_status ;;
+  finalize)     cmd_finalize ;;
   migrate)      cmd_migrate ;;
   enforce-on)   cmd_enforce_on ;;
   enforce-off)  cmd_enforce_off ;;
