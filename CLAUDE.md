@@ -655,6 +655,13 @@ line-items table once per invoice per keystroke and drew every invoice as a DOM 
 - Not done: fuzzy/typo matching in this list, saved searches, searching the hand-edited print text
   (`12-invoice-editor.js`), Urdu month names in typed dates.
 
+**Deployed live 2026-09-19** (Change shop + Invoice search, together; commits `6bebbcd`..`f8b2e0c`) via
+`scripts/deploy-erp.sh` — full suite green first, Hostinger cache cleared for the ERP subdomain, and
+verified byte-identical on the server and over HTTPS. No IndexedDB schema change, so no browser-data
+migration was involved. **Rollback**: the previous live files are on the server in
+`/home/u943531942/backups/erp-deploy-20260919233433/` — copy `index.html`, `farooq-co-erp.html`,
+`farooq-erp-data.js` from there back into `public_html/ERP/`, then clear the cache again.
+
 ## Where to look for more detail
 
 - `docs/OPERATIONS.md` — full access inventory, exact commands used, and the deploy checklist.
