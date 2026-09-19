@@ -223,6 +223,13 @@ git push
 ./scripts/deploy-erp.sh
 ```
 
+**Git workflow (standing instruction from the user, 2026-09-19): no branches, no pull requests.**
+Work directly on `main`. Commit everything (`git add -A`), push to `origin main`, and never open
+or merge a PR. "Commit all, push all, merge all" means nothing is left uncommitted, unpushed or
+sitting on a side branch at the end of a task. If a stray branch or open PR turns up, fold it into
+`main` and push. (The one PR this project ever had, #1 auth Phases 0–2, was merged 2026-09-19.)
+Commit messages still carry no Claude attribution — see `docs/OPERATIONS.md`.
+
 **General rules, either site:**
 - Never edit live files directly over SSH/FTP as the primary way of making a change — edit
   locally, build/test, commit, push, *then* deploy. The server copy is a deploy target, not a

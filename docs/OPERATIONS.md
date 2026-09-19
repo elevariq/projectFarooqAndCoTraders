@@ -120,6 +120,16 @@ No live-server files were touched for any of this — it's entirely local build 
 `app/*.html` already reflects a correct build; this fix is about being able to produce the *next*
 one.
 
+## Git workflow: straight to main, no PRs (standing instruction, 2026-09-19)
+
+- Commit directly on `main` and `git push origin main`. Do not create feature branches or pull
+  requests. Commit all, push all, merge all — nothing left uncommitted, unpushed or on a side
+  branch when a task ends.
+- The only PR the project ever had (#1, server-enforced auth Phases 0–2, branch
+  `feature/auth-server-enforced`) was merged into `main` on 2026-09-19 (merge commit `c13d7ee`).
+- CI still runs on every push to `main` touching `erp-upgrade/` or `app/`; with no PR gate, a red
+  check means fix forward and don't deploy that commit.
+
 ## Commit message conventions for this repo
 
 - Describe *why*, not just *what* — the file diff already shows what changed.
