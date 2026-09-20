@@ -834,6 +834,14 @@ D.addEventListener('click', function (e) {
   /* receipts / statements opened from other screens */
   var rc = h('[data-fcreceipt]');
   if (rc) { e.preventDefault(); ERP.Viewer.open(ERP.DocModel.receipt(rc.dataset.fcreceipt)); return; }
+  /* start a shop payment (either direction) from the Payments screen with no shop chosen */
+  var po = h('[data-fcpayopen]');
+  if (po) {
+    e.preventDefault();
+    if (po.dataset.fcpayopen === 'refund') REFUND_FOR = null; else PAY_FOR = null;
+    global.openPanel(po.dataset.fcpayopen);
+    return;
+  }
   var db = h('.fcdb');
   if (db) { e.preventDefault(); global.go('settings'); return; }
 
@@ -1282,10 +1290,58 @@ global.PAGES.purchases = function () {
   }).replace('<th class="r">Documents</th>', '<th class="r">Actions</th>');
 };
 
-/* 8. Payments screen: receipts open the new printable receipt. */
+/* 8. Payments screen: receipts open the new printable receipt.
+      Client request (2026-09-20, the same one as 2026-09-16, which had only
+      been answered on a shop's own pages): "you have 'amount received' here,
+      but we also make payments TO some customers — cash they then deposit."
+      So this screen — where the received money is — now has the other
+      direction too: a "Pay a shop" button beside the receive button, and its
+      own "Paid to shops" list (Payments.outgoing() is suppliers only by
+      design, so those payments were on no list here except the plain
+      "Receipts & vouchers" log at the bottom). */
+function paidToShopsSection() {
+  var list = ERP.Payments.refunds().slice().sort(function (a, b) {
+    return a.paymentDate < b.paymentDate ? 1 : a.paymentDate > b.paymentDate ? -1 : 0;
+  });
+  var total = list.reduce(function (s, p) { return s + p.amount; }, 0);
+  return '<div class="sec-t">Paid to shops <span>' + list.length + ' payment' + (list.length === 1 ? '' : 's') +
+      (list.length ? ' · ' + M.fmtPlain(total) : '') + '</span>' +
+      '<div class="r"><button class="btn sm pri" data-fcpayopen="refund">' + I('plus') + 'Pay a shop</button></div></div>' +
+    '<div class="card" id="fcPaidToShops">' + (list.length
+      ? '<div class="tw"><table class="fcb-list"><thead><tr><th>Date</th><th>Shop</th><th>Region</th><th>Method</th>' +
+        '<th class="r">Amount</th><th>Reference</th><th class="r">Voucher</th></tr></thead><tbody>' +
+        list.slice(0, 200).map(function (p) {
+          var c = global.custBy(p.partyId);
+          return '<tr><td>' + esc(fmtDate(p.paymentDate)) + '</td>' +
+            '<td class="t-main">' + esc(c ? c.sh : p.partyNameSnapshot) + '</td>' +
+            '<td>' + global.regionLbl(c ? c.region : null) + '</td><td>' + esc(p.method) + '</td>' +
+            '<td class="num r"><b>' + M.fmtPlain(p.amount) + '</b></td>' +
+            '<td class="mono">' + esc(p.reference || '—') + '</td>' +
+            '<td class="r"><button class="btn sm" data-fcreceipt="' + p.id + '">' + I('doc') + 'Voucher</button></td></tr>';
+        }).join('') + '</tbody></table></div>'
+      : '<div class="card-b"><p class="hint">No payments to shops yet. Use “Pay a shop” when you hand a shop cash ' +
+        'or return money — a numbered voucher is made for every payment.</p></div>') +
+    '</div>';
+}
+
 var origPayments = global.PAGES.payments;
 global.PAGES.payments = function () {
   var html = typeof origPayments === 'function' ? origPayments() : origPayments;
+  /* The two buttons that start a payment from here name no shop, so they must
+     not inherit the one an earlier "Receive payment" / "Pay this shop" on some
+     shop's page left behind (PAY_FOR / REFUND_FOR are never cleared) — a
+     stale pre-selection on a money screen pays the wrong shop. They go through
+     data-fcpayopen, which clears it first. */
+  /* The two buttons share one wrapper so on a phone they sit side by side (or
+     wrap together) instead of stacking raggedly beside the wrapped heading. */
+  html = html.replace('<button class="btn sm pri" data-panel="payment">',
+      '<span style="display:inline-flex;flex-wrap:wrap;gap:8px;justify-content:flex-end">' +
+      '<button class="btn sm pri" data-fcpayopen="payment">')
+    .replace('Record payment</button>',
+      'Receive payment</button><button class="btn sm" data-fcpayopen="refund">' + I('wallet') + 'Pay a shop</button></span>');
+  var mark = '<div class="sec-t">Supplier payments';
+  html = html.indexOf(mark) >= 0 ? html.replace(mark, function () { return paidToShopsSection() + mark; })
+                                 : html + paidToShopsSection();
   return html + '<div class="card"><div class="card-h"><h3>Receipts &amp; vouchers</h3>' +
     '<span class="pill neu">' + ERP.S.payments.length + '</span></div><div class="card-b">' +
     (ERP.S.payments.length ? '<div class="tw"><table class="fcb-list"><thead><tr><th>Number</th><th>Date</th>' +

@@ -422,6 +422,15 @@ flow) — it just had no standalone entry point. Added:
 
 Covered by `test-pay-a-shop.mjs` (37 checks).
 
+**Same request came again 2026-09-20/21 — "Pay a shop" on the Payments screen itself.** The client's voice note ("you have *amount
+received* up above… but we also give some customers cash, they take it to the bank") was about the **Payments** screen, where only
+"Receive payment" existed; "Pay a shop" lived only on a shop's khata/profile and the Statement of Account. Now, in `06-wiring.js` §8:
+"Pay a shop" sits beside "Receive payment" in the Customer payments header, and a new **Paid to shops** list (date, shop, region,
+method, amount, reference, Voucher button; `Payments.refunds()` — payments to shops were previously on no list except the raw
+"Receipts & vouchers" log) sits above Supplier payments. Both header buttons go through `data-fcpayopen`, which clears `PAY_FOR` /
+`REFUND_FOR` first so a shop chosen earlier on some other page can't be pre-selected on a money screen. `test-pay-a-shop.mjs` is 55
+checks (S1–S17). Looked at in real headless Chrome (desktop + 390px phone). No API/schema change → app deploy only.
+
 **Payroll** — client's item 4 was one line ("Payroll = Employee salary management system") with
 no fields, salary structure, or screenshot, even after a follow-up. Built as a deliberately
 minimal MVP rather than guessing at a real HR/accrual model:

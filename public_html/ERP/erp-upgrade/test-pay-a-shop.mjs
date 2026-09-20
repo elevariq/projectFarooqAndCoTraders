@@ -235,6 +235,88 @@ async function main() {
   const cb6 = $('#panel .x') || $('[data-close]') || $('#scrim'); if (cb6) click(cb6);
   ERP.setPayFor && ERP.setPayFor(null);
 
+  /* ══════════════════════════════════════════════════════════════════════
+     THE PAYMENTS SCREEN — where "amount received" lives (client, 2026-09-20:
+     "you have amount received here, but we also pay some customers")
+     ══════════════════════════════════════════════════════════════════════ */
+  const closePanel = async () => { const b = $('#panel .x') || $('[data-close]') || $('#scrim'); if (b) click(b); await sleep(80); };
+  const shopRows = () => $$('#fcPaidToShops tbody tr');
+  const c2 = w.CUSTOMERS[w.CUSTOMERS.length - 1];   /* deliberately not the first shop */
+  check('S0 setup: two different shops', c2.id !== w.CUSTOMERS[0].id && c2.id !== c1.id);
+
+  w.go('payments'); await sleep(150);
+  const refundsNow = ERP.Payments.refunds();
+  check('S1 there are already payments to shops from the sections above', refundsNow.length >= 2, String(refundsNow.length));
+  check('S2 the receive and the pay-a-shop buttons sit together in the Customer payments header',
+    !!$('[data-fcpayopen="payment"]') && !!$('[data-fcpayopen="payment"]').parentNode.querySelector('[data-fcpayopen="refund"]'));
+  check('S3 "Paid to shops" has its own button too', !!$('.sec-t [data-fcpayopen="refund"]') &&
+    $$('[data-fcpayopen="refund"]').length === 2);
+  check('S4 "Paid to shops" is its own list, above Supplier payments',
+    !!$('#fcPaidToShops') && D.body.innerHTML.indexOf('id="fcPaidToShops"') < D.body.innerHTML.indexOf('>Supplier payments'));
+  check('S5 it has one row per payment made to a shop', shopRows().length === refundsNow.length,
+    `${shopRows().length} vs ${refundsNow.length}`);
+  check('S6 each row names the shop and has a voucher button',
+    shopRows().every(r => r.querySelector('[data-fcreceipt]')) &&
+    refundsNow.every(p => $('#fcPaidToShops').textContent.includes((w.custBy(p.partyId) || {}).sh)));
+  const sumP = refundsNow.reduce((s, p) => s + p.amount, 0);
+  check('S7 the section heading carries the total paid to shops',
+    $('#fcPaidToShops').previousElementSibling.textContent.includes(M.fmtPlain(sumP)),
+    $('#fcPaidToShops').previousElementSibling.textContent);
+  const supHead = $$('.sec-t').find(s => /^Supplier payments/.test(s.textContent.trim()));
+  check('S8 payments to shops are still kept out of the supplier list',
+    !!supHead && !refundsNow.some(p => supHead.nextElementSibling.textContent.includes(p.receiptNumber)));
+
+  /* the buttons open with no shop chosen — a leftover from an earlier
+     "Pay this shop" / "Receive payment" must not leak in */
+  ERP.setRefundFor(c2.id); ERP.setPayFor(c2.id);
+  click($('[data-fcpayopen="refund"]')); await sleep(150);
+  check('S9 "Pay a shop" from this screen does not inherit an earlier shop',
+    $('#fcRefundCust') && $('#fcRefundCust').value !== c2.id && $('#fcRefundArea').value === '',
+    $('#fcRefundCust') ? $('#fcRefundCust').value : 'panel did not open');
+  await closePanel();
+  click($('[data-fcpayopen="payment"]')); await sleep(150);
+  check('S10 nor does "Receive payment" from this screen',
+    $('#fcPayCust') && $('#fcPayCust').value !== c2.id && $('#fcPayArea').value === '',
+    $('#fcPayCust') ? $('#fcPayCust').value : 'panel did not open');
+  await closePanel();
+
+  /* pay a shop straight from this screen */
+  click($('[data-fcpayopen="refund"]')); await sleep(150);
+  change($('#fcRefundCust'), c2.id);
+  const balC2 = ERP.Ledger.customerBalance(c2.id);
+  $('[data-f="amt"]').value = '7500'; $('[data-f="ref"]').value = 'CASH-HAND';
+  click($('[data-save="1"]')); await sleep(350);
+  check('S11 saving from the Payments screen pays that shop',
+    ERP.Ledger.customerBalance(c2.id) === balC2 + M.toP(7500));
+  check('S12 the screen shows the new payment at once', shopRows().length === refundsNow.length + 1,
+    `${shopRows().length} vs ${refundsNow.length + 1}`);
+  check('S13 with its reference', $('#fcPaidToShops').textContent.includes('CASH-HAND'));
+  if ($('[data-fcv="close"]')) click($('[data-fcv="close"]'));
+  await sleep(80);
+  click($('#fcPaidToShops [data-fcreceipt]')); await sleep(150);
+  check('S14 a row\'s Voucher button opens the printable voucher', !!$('[data-fcv="close"]'));
+  if ($('[data-fcv="close"]')) click($('[data-fcv="close"]'));
+  await sleep(80);
+
+  /* a reversed payment is not "paid to a shop" any more */
+  const newest = ERP.Payments.refunds().find(p => p.reference === 'CASH-HAND');
+  await ERP.Payments.reverse(newest.id, 'test');
+  w.go('payments'); await sleep(150);
+  check('S15 a reversed payment leaves the list', shopRows().length === refundsNow.length &&
+    !$('#fcPaidToShops').textContent.includes('CASH-HAND'));
+
+  /* nothing paid yet → an explanation, not an empty box */
+  const w2 = boot({});
+  for (let i = 0; i < 400 && !(w2.ERP && w2.ERP.ready); i++) await sleep(25);
+  await sleep(250);
+  w2.go('payments'); await sleep(150);
+  const box2 = w2.document.querySelector('#fcPaidToShops');
+  check('S16 with no payments to shops it says so and points at the button',
+    box2 && /No payments to shops yet/.test(box2.textContent) && !box2.querySelector('table') &&
+    !!w2.document.querySelector('[data-fcpayopen="refund"]'));
+  check('S17 and the heading counts zero', box2.previousElementSibling.textContent.includes('0 payments'));
+  w2.close();
+
   console.log('\n' + out.join('\n') + `\n\n${pass} passed, ${fail} failed\n`);
   w.close();
   process.exit(fail ? 1 : 0);
