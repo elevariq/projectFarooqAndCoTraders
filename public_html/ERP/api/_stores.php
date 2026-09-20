@@ -45,6 +45,7 @@ return [
     'salaryPayments' => ['table' => 'salary_payments', 'pk' => 'id'],
     'millingJobs' => ['table' => 'milling_jobs', 'pk' => 'id'],
     'millingJobItems' => ['table' => 'milling_job_items', 'pk' => 'id'],
+    'millingArrivals' => ['table' => 'milling_arrivals', 'pk' => 'id'],
     'syncQueue' => ['table' => 'sync_queue', 'pk' => 'opId'],
     'legacy' => ['table' => 'legacy', 'pk' => 'k'],
 ];

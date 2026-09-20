@@ -68,7 +68,7 @@ them.
 | `29-statement-of-account.js` | One Finance screen for either party's full ledger |
 | `30-payroll.js` | Employee list, monthly salary rate, and salary payments (MVP) |
 | `31-auth.js` | Server-checked accounts, sessions and permissions; the change-password box (opened from Company accounts → My account) |
-| `32-milling.js` | Milling jobs — toll milling: wheat out, flour + chokar back, net settled into the mill's khata |
+| `32-milling.js` | Milling jobs — toll milling: wheat out, flour + chokar back, net settled into the mill's khata; finished goods can stay at the mill (Punjab) and arrive in loads — the "Stock at mills" screen |
 | `33-invoice-search.js` | Invoice search — find an old invoice by number, customer, product, date or amount; paged list |
 | `34-accounts.js` | Company accounts screen — "My account" (change password) for everyone signed in, the staff list for the owner; who may open Payroll, Milling, Statements |
 | `35-topbar.js` | The top bar — one 58px row on every screen, the avatar account menu, no dead controls (warehouse picker and fake sync pill removed) |

@@ -68,6 +68,7 @@ const T = {
   salaryPayments: { pk: 'id', cols: ['salaryNumber:s:u', 'employeeId', 'paymentDate'] },
   millingJobs: { pk: 'id', cols: ['jobNumber:s:u', 'millId', 'jobDate'] },
   millingJobItems: { pk: 'id', cols: ['jobId', 'productId'] },
+  millingArrivals: { pk: 'id', cols: ['arrivalNumber:s:u', 'millId', 'arrivalDate'] },
   syncQueue: { pk: 'opId', cols: ['state'] },
   legacy: { pk: 'k' }
 };

@@ -103,6 +103,10 @@ var STORES = {
      needed here. ── */
   millingJobs:           { keyPath: 'id',    idx: { jobNumber: ['jobNumber', true], millId: 'millId', jobDate: 'jobDate' } },
   millingJobItems:       { keyPath: 'id',    idx: { jobId: 'jobId', productId: 'productId' } },
+  /* v12 — loads of finished goods that leave a mill and arrive in one of our
+     warehouses (32-milling.js). One record per load, its lines embedded; what is
+     still lying at the mill is computed (produced − arrived), never stored. */
+  millingArrivals:       { keyPath: 'id',    idx: { arrivalNumber: ['arrivalNumber', true], millId: 'millId', arrivalDate: 'arrivalDate' } },
   syncQueue:             { keyPath: 'opId',  idx: { state: 'state' } },
   legacy:                { keyPath: 'k' }   /* orders, dispatch, activity, rules, users, devices … */
 };
@@ -113,9 +117,10 @@ var STORE_NAMES = Object.keys(STORES);
    Opening that database under this schema would corrupt it, so this build
    uses its own name and adopts the old one on first run instead. */
 var DB_NAME = 'farooqco_erp_ledger';
-var DB_VER  = 11;  /* … v7 price history and approvals · v8 user accounts · v9 landed cost ·
+var DB_VER  = 12;  /* … v7 price history and approvals · v8 user accounts · v9 landed cost ·
                        v10 payroll (employees, salaryPayments) ·
-                       v11 milling jobs (millingJobs, millingJobItems) */
+                       v11 milling jobs (millingJobs, millingJobItems) ·
+                       v12 milling arrivals (millingArrivals) */
 var OLD_DB_NAME = 'farooqco_erp';
 var LS_KEY  = 'farooqco_erp_idb_mirror';
 var LEGACY_LS_KEY = 'farooqco_erp_v1';

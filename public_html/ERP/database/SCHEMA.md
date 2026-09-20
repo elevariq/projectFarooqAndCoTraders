@@ -37,7 +37,8 @@ database-backed sequences.
 | `payments` | `paymentAllocations` (`paymentId`) | `REC-` (in) · `PV-` (out) |
 | `expenses` | — | `EXP-2026-000001` |
 | `accountAdjustments` | — | `ACC-2026-000001` |
-| `millingJobs` (toll milling — 32-milling.js) | `millingJobItems` (`jobId`, `side: ISSUE\|RECEIVE`) | `MIL-2026-000001` — wheat issued to a mill, flour/chokar received back; settles into the mill's own `suppliers` khata via a patch to the ledger, not a separate ledger store |
+| `millingJobs` (toll milling — 32-milling.js) | `millingJobItems` (`jobId`, `side: ISSUE\|RECEIVE`) | `MIL-2026-000001` — wheat issued to a mill, flour/chokar received back; settles into the mill's own `suppliers` khata via a patch to the ledger, not a separate ledger store. `receiveMode` (`AT_MILL` / `DELIVERED`, absent = `DELIVERED`) says whether the finished goods went into a warehouse or are still lying at the mill |
+| `millingArrivals` (loads of finished goods reaching a warehouse from a mill — 32-milling.js) | — (lines embedded in `lines[]`) | `MAR-2026-000001` — takes bags off the balance lying at the mill (produced − arrived, computed, never stored) and adds them to a warehouse; moves goods only, no money |
 
 ### Stock
 

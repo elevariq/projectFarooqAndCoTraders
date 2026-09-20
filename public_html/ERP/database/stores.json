@@ -175,6 +175,10 @@
   "table": "milling_job_items",
   "pk": "id"
  },
+ "millingArrivals": {
+  "table": "milling_arrivals",
+  "pk": "id"
+ },
  "syncQueue": {
   "table": "sync_queue",
   "pk": "opId"

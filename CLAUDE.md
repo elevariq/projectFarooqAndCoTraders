@@ -738,6 +738,56 @@ a purchase edit; a zero rate is accepted on a NET job's line the same way `needR
 allows it everywhere else in the app (a deliberate free/promotional line, not a milling-specific
 gap).
 
+## Stock lying at the mill — Punjab stock (2026-09-20)
+
+Client voice notes (two, pasted into a session; the second confirmed "it is fine just like this" for the existing job and added the
+Punjab part): the mill in Punjab is handed wheat **by weight**, makes flour plus two or three by-products, and the finished goods are
+often **left lying there** — "if 30,000 bags are made, we add it to our stock, noting that 30,000 bags are lying in Punjab; whatever
+arrives here we deduct from that; whatever balance remains with them, the account is settled". The ERP needs a section that shows how
+much weight was given, what was made, and exactly which products are still at the mill before they arrive.
+
+**What the module did before (checked against the notes):** wheat out by weight, several products back, loss shown, net settled into the
+mill's khata — all right. But every "received" line went **straight into our warehouse when the job was saved**, so goods lying at the
+mill could not be represented at all. That was the gap.
+
+- **A job now says where its finished goods are** — `receiveMode`: `AT_MILL` (the new-job default on screen: the produced goods are
+  recorded, the mill's account is credited exactly as before, but **no warehouse stock is added**) or `DELIVERED` (added to the warehouse
+  now — how every job worked before). A stored job **without the field means `DELIVERED`**, so existing data and the service default are
+  unchanged; only the screen defaults to `AT_MILL`.
+- **Arrival = one load reaching a warehouse** (`ERP.Milling.receiveArrival`, `MAR-…`, new store `millingArrivals`, lines embedded, DB_VER
+  11→12). It adds the bags to the chosen warehouse and takes them off the balance at the mill. **Moves goods, not money** — the value was
+  put on the mill's account when the job was posted, so an arrival never touches the supplier khata. Cost per bag on the stock movement =
+  the job's own rate for that product (so the warehouse's moving average follows). It reuses the existing `MILL_RECEIPT_IN` /
+  `MILL_RECEIPT_REVERSAL_OUT` movement kinds (refType `MILL_ARRIVAL` / `MILL_ARRIVAL_CANCEL`), so **nothing in shared core (`02-services.js`)
+  changed** and stock value (module 37) reads arrivals like any receipt.
+- **The balance at the mill is computed, not stored**: per mill + product, produced (posted `AT_MILL` jobs' RECEIVE lines) − arrived
+  (posted arrivals), in bags and kg, valued at the job's cost per bag. `ERP.Milling.atMill / atMillBalance / atMillTotals`.
+- **Rules:** an arrival can never be more bags than are at the mill (same product on two lines is added first); goods at a different mill
+  don't count; no job ⇒ "Record the milling job that produced it first". **A job whose goods have already arrived cannot be cancelled**
+  (names the bags; cancel the arrivals first) — otherwise the balance would go negative. Cancelling an arrival puts the bags back at the
+  mill and takes them out of the warehouse again (unguarded against negative stock, like every other reversal here). Double-click safe
+  (`clientOpId`). Weights are not guarded (a load can weigh a little differently from what the mill wrote); the kg column just shows the
+  difference.
+- **Screens:** Inventory & supply → **Stock at mills** (`PAGES.millstock`): cards (wheat given, made, arrived, still at the mill + worth),
+  the per-product table, the list of loads (latest 100, Excel has all), a mill filter that falls back to "All mills" if its mill no longer
+  holds anything, **Goods arrived** (mill → warehouse → date → vehicle/bilti → products with "N bags at the mill" beside each, weight
+  auto-fills from the bag size, a before/after table, refuses too many on screen and in the service), Print per load, Cancel, Excel.
+  The job entry gets "Where are the finished goods?"; the job list marks "Goods at the mill"; the printed job says where they are.
+  Recording/cancelling needs `PURCHASE_CREATE`, like the jobs; viewing is open. Browser-side roles only, as elsewhere.
+- **Form look + icons (same day):** the boxes in the job and arrival line tables (product, bags, weight, basis, rate) sat outside `label.f`, so they showed as plain browser boxes; they now match the app's fields (38px, 8px corners, themed border, violet focus, right-aligned numbers, "Bags"/"kg" hints; the phone already stacks them as labelled cards). Module 32's icon helper read `window.icon`, which does not exist (the base app's is `window.I`), so every icon on the Milling screens was silently blank — fixed here (modules 28/29/30 still have the same line). Looked at in real headless Chrome, desktop + 390px phone.
+- **Tests:** `test-milling-atmill.mjs` (80 checks: the flow with three by-products, both mills, every refusal, cancel rules, legacy jobs,
+  the screens driven through the DOM, the two documents, restart), mutation-checked with four deliberate breakages (an at-mill job still
+  stocking the warehouse, no bag limit on an arrival, job cancel ignoring arrivals, an arrival not adding stock — each turns it red).
+  `test-milling.mjs` (80) is unchanged and still green.
+- **DEPLOY ORDER (new store):** `millingArrivals` is a new table. **Apply `database/schema-mariadb.sql`'s `milling_arrivals` table to the live
+  database and run `scripts/deploy-api.sh` BEFORE `scripts/deploy-erp.sh`**, otherwise the first arrival is refused as an unknown store
+  ("NOT saved"). A job saved with the new field needs nothing on the server (the `doc` JSON holds it).
+- **Not built / to confirm with the client:** the wheat is taken from one of *our* warehouses' stock; if wheat is bought and sent to the mill
+  without ever being in a warehouse, the issue is refused for lack of stock (unless negative stock is allowed) — say so and a "not from our
+  stock" option can be added. Goods lying at the mill are **not** in the Dashboard / Stock-value totals (they are not in a warehouse); the
+  Stock-at-mills cards show their worth separately. No per-load weight-difference report; no "as at a past date" view; no edit of a posted
+  arrival (cancel and re-enter). **Not seen by anyone on the live site or a phone.**
+
 ## Change shop on an invoice (2026-09-19)
 
 Business need: an invoice made out to the wrong shop must move to the right one — the shop and

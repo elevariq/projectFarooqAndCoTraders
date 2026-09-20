@@ -708,6 +708,21 @@ CREATE TABLE IF NOT EXISTS `milling_job_items` (
   KEY `ix_product_id` (`product_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS `milling_arrivals` (
+  `pk` VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_nopad_bin NOT NULL COMMENT 'record key = id',
+  `doc` LONGTEXT NOT NULL,
+  `rev` INT UNSIGNED NOT NULL DEFAULT 1,
+  `row_updated_at` TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  `arrival_number` VARCHAR(191) GENERATED ALWAYS AS (NULLIF(JSON_VALUE(`doc`,'$.arrivalNumber'),'')) STORED,
+  `mill_id` VARCHAR(191) GENERATED ALWAYS AS (NULLIF(JSON_VALUE(`doc`,'$.millId'),'')) STORED,
+  `arrival_date` VARCHAR(191) GENERATED ALWAYS AS (NULLIF(JSON_VALUE(`doc`,'$.arrivalDate'),'')) STORED,
+  PRIMARY KEY (`pk`),
+  CONSTRAINT `doc_is_json_milling_arrivals` CHECK (JSON_VALID(`doc`)),
+  UNIQUE KEY `uq_arrival_number` (`arrival_number`),
+  KEY `ix_mill_id` (`mill_id`),
+  KEY `ix_arrival_date` (`arrival_date`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS `sync_queue` (
   `pk` VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_nopad_bin NOT NULL COMMENT 'record key = opId',
   `doc` LONGTEXT NOT NULL,

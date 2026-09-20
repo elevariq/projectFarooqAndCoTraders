@@ -388,7 +388,8 @@ var DocModel = {
         ['Job No', job.jobNumber, true],
         ['Date', fmtDate(job.jobDate)],
         ['Warehouse', job.warehouseSnapshot],
-        ['Settlement', job.settle === 'FEE_ONLY' ? 'Grinding fee only' : 'Net off against account']
+        ['Settlement', job.settle === 'FEE_ONLY' ? 'Grinding fee only' : 'Net off against account'],
+        ['Finished goods', ERP.Milling.receiveMode(job) === 'AT_MILL' ? 'Lying at the mill until they arrive' : 'Added to our warehouse']
       ],
       strip: [['Weight issued', job.inWeightKg + ' kg'], ['Weight received', job.outWeightKg + ' kg'],
               ['Process loss', job.lossKg + ' kg (' + job.lossPct + '%)'], ['Net', M.fmt(job.netAmount)]],
@@ -403,7 +404,7 @@ var DocModel = {
       ],
       rows: items.map(function (it, i) {
         return {
-          sr: i + 1, side: it.side === 'ISSUE' ? 'Issued' : 'Received',
+          sr: i + 1, side: it.side === 'ISSUE' ? 'Issued' : (ERP.Milling.receiveMode(job) === 'AT_MILL' ? 'Made' : 'Received'),
           description: it.productSnapshot, descriptionUr: it.productUrSnapshot,
           qty: qtyFmt(it.quantity), pack: qtyFmt(it.weightKg),
           rate: M.fmtPlain(it.unitRate) + '/' + (it.rateBasis === 'KG' ? 'kg' : 'bag'),
@@ -414,6 +415,49 @@ var DocModel = {
       totals: totals,
       words: words(Math.abs(job.netAmount)), notes: job.notes || '', ledger: [],
       signatures: ['Handed over by', 'Received by (mill)'],
+      footer: { thanks: '', terms: '', bank: '' },
+      actions: {}
+    };
+  },
+
+  /* Goods arrived from a mill — one load of finished goods reaching one of our warehouses. Added by
+     32-milling.js; null if that module never loaded. Bags and weight only: no money moves on an arrival. */
+  millingArrival: function (arrivalId) {
+    if (!ERP.Milling) return null;
+    var a = ERP.Milling.arrivalById(arrivalId);
+    if (!a) return null;
+    var mill = (global.supOf && global.supOf(a.millId)) || {};
+    var left = ERP.Milling.atMillTotals(a.millId);
+    return {
+      kind: 'MILLING_ARRIVAL', entityId: a.id, title: 'GOODS RECEIVED FROM MILL', number: a.arrivalNumber,
+      status: a.status === 'CANCELLED' ? 'Cancelled' : 'Received', cancelled: a.status === 'CANCELLED',
+      date: fmtDate(a.arrivalDate), rawDate: a.arrivalDate,
+      business: DocModel.business(),
+      party: { label: 'MILL', shop: a.millSnapshot, owner: mill.cp || '', contact: mill.ph || '', id: a.millId },
+      metaLabel: 'ARRIVAL DETAILS',
+      meta: [
+        ['Arrival No', a.arrivalNumber, true],
+        ['Date', fmtDate(a.arrivalDate)],
+        ['Into warehouse', a.warehouseSnapshot],
+        ['Vehicle / bilti', a.vehicle || '—']
+      ],
+      strip: [['Bags received', qtyFmt(a.totalQty)], ['Weight', qtyFmt(a.totalKg) + ' kg'],
+              ['Still at the mill (now)', qtyFmt(left.qty) + ' bags']],
+      columns: [
+        { key: 'sr', label: 'SR', align: 'center', width: 0.06 },
+        { key: 'description', label: 'Description / تفصیل', width: 0.5 },
+        { key: 'qty', label: 'تعداد', align: 'right', width: 0.22 },
+        { key: 'pack', label: 'وزن (kg)', align: 'right', width: 0.22 }
+      ],
+      rows: (a.lines || []).map(function (l, i) {
+        return { sr: i + 1, description: l.productSnapshot, descriptionUr: l.productUrSnapshot,
+          qty: qtyFmt(l.quantity), pack: qtyFmt(l.weightKg) };
+      }),
+      itemsFooter: null,
+      totals: [{ label: 'Total bags', value: qtyFmt(a.totalQty), big: true, rule: true },
+               { label: 'Still lying at the mill (now)', value: qtyFmt(left.qty) + ' bags', bold: true }],
+      words: '', notes: a.notes || '', ledger: [],
+      signatures: ['Sent by (mill)', 'Received by (warehouse)'],
       footer: { thanks: '', terms: '', bank: '' },
       actions: {}
     };
