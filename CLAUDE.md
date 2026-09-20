@@ -1111,7 +1111,18 @@ server first.
   (Area-wise, Statement of Account, Payroll, Milling). Module 37 uses `global.I`. Another session had these files open when this was
   written — check `git log` before assuming it is still open.
 - Not built: a value line on each warehouse card of Inventory; valuation as at a past date; per-batch (FIFO) valuation; a "value if sold"
-  margin. **Not seen by anyone on the live site or a physical phone.**
+  margin.
+- **Deployed live 2026-09-20 ~22:25** (commit `3f3eb1d`, in the same deploy as the two Areas commits `f5623ce`/`3f3eb1d`). It was made from a
+  **clean local clone of `HEAD`** so another session's uncommitted "Pay a shop from the Payments screen" work (`06-wiring.js`,
+  `test-pay-a-shop.mjs`) was NOT included — the user asked for exactly that, once. `scripts/deploy-erp.sh` refuses a dirty tree and keeps
+  its lock in `.git/`, so from a busy checkout: `git clone --no-hardlinks <repo> <tmp>` (plain `--local` fails on hard links here), copy
+  `erp-upgrade/node_modules` in, run the script from the clone. Full suite green inside the script (34 harnesses). **The script's own final
+  `curl` failed with exit 35 (SSL handshake in this shell) and aborted it AFTER the uploads** — nothing wrong on the server: `_app/` and
+  `app/` md5s (`index.html` `0f21c248…`, `farooq-co-erp.html` `32b6cb52…`, `farooq-erp-data.js` `bf0bf077…`) equal the clone's `dist/`, no
+  `.uploading` leftovers, the gate answers `401`, the homepage `200`, the data file `401`. **The Hostinger cache was NOT cleared** (the
+  hostinger-hosting MCP server timed out on connect) — clear it in hPanel, or with `hosting_clearWebsiteCacheV1` once it connects. No API or
+  schema change, so no `deploy-api.sh`. Rollback: `/home/u943531942/backups/erp-deploy-20260920222516/` (copy the three files back into
+  `ERP/_app/`, clear cache). **Not yet seen on the live site by anyone in a signed-in browser, or on a physical phone.**
 
 ## Where to look for more detail
 
