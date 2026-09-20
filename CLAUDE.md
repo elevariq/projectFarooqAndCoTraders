@@ -618,6 +618,20 @@ session id changed and the dialog closed — before proceeding, so a slow resolv
 into the next step regardless of machine speed. Verified with 8 consecutive standalone runs, all
 clean, plus a full-suite rerun (26/26 harnesses green).
 
+## Sidebar collapse/expand button (2026-09-20)
+
+Reported: "the bar opening/closing button — the one left of the page title — isn't working". Cause (a
+long-standing base-app limitation, not a regression): at a window width **≤ 1200px** the base CSS
+forces the sidebar down to the narrow icon rail on its own, and the button (`#mini`) only toggled
+`body.mini`, which sets the *same* 68px — so on most laptop windows it visibly did nothing and the
+labels could never come back. Fix, in `10-mobile.js`: between 901 and 1200px the button now
+**expands/collapses** the rail (`body.fc-wide`, remembered in `localStorage` `farooqco_rail_wide`; a
+capture-phase handler that stops the click so the base handler doesn't also fire); **above 1200px
+the base behaviour is untouched**; **at ≤ 900px the button is hidden** (the hamburger owns the drawer
+there, and the collapse button can't do anything). The button's label/tooltip follows the state.
+`test-sidebar.mjs` (20 checks, mutation-verified) proves the handler/state/CSS text in jsdom — jsdom has
+no layout, so confirm the pixels in a real browser at ~1100px and ~1400px after deploying.
+
 ## Milling jobs — toll milling (2026-09-16)
 
 A new client requirement, analysed from `clientNewReq/` (a gitignored working folder — see commit

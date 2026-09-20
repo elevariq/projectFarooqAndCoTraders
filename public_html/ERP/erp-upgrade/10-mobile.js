@@ -233,6 +233,23 @@ body.fc-mobile:not(.fc-hidechrome) .fc-tabbar{display:grid}
 }
 
 @media print{ .fc-tabbar,.fc-sheet-scrim{display:none !important} }
+
+/* ── the sidebar toggle, at every width ─────────────────────────────────
+   The base app forces the sidebar down to the narrow icon rail at <=1200px, and its own
+   collapse button only sets the SAME 68px there — so on most laptop windows the button
+   visibly did nothing and the labels could never be brought back. Between 901 and 1200px
+   the button now EXPANDS the rail (body.fc-wide) and collapses it again; above 1200px the
+   base behaviour (body.mini) is untouched; at <=900px the hamburger owns the drawer, so
+   the collapse button (which cannot do anything there) is hidden. */
+@media (max-width:1200px) and (min-width:901px){
+  body.fc-wide{--rail:238px}
+  body.fc-wide .brand-t,body.fc-wide .nav span.lbl,body.fc-wide .nav-count,
+  body.fc-wide .who-t,body.fc-wide .nav-sec{display:block}
+  body.fc-wide .nav a{justify-content:flex-start;padding:0 12px}
+  body.fc-wide .who{justify-content:flex-start}
+  body.fc-wide .rail-head{justify-content:flex-start;padding:18px 16px 16px}
+}
+@media (max-width:900px){#mini{display:none}}
 `;
 (function () {
   var st = D.createElement('style');
@@ -404,6 +421,35 @@ D.addEventListener('focusin', function (e) {
     if (el.scrollIntoView) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, 250);
 });
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE SIDEBAR TOGGLE AT EVERY WIDTH
+   See the CSS note above. Between 901 and 1200px the base app has already forced the
+   narrow rail, so its collapse handler (which sets body.mini = the same 68px) does
+   nothing visible. There, this handler runs FIRST (capture phase) and toggles
+   body.fc-wide instead — and stops the click so the base handler never also fires.
+   Everywhere else the base handler runs exactly as before. The choice is remembered.
+   ══════════════════════════════════════════════════════════════════════════ */
+var WIDE_KEY = 'farooqco_rail_wide';
+function narrowDesktop() { var w = global.innerWidth || 1400; return w <= 1200 && w > 900; }
+function syncRailLabel() {
+  var b = D.getElementById('mini'); if (!b) return;
+  var collapsed = narrowDesktop() ? !D.body.classList.contains('fc-wide') : D.body.classList.contains('mini');
+  var t = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  b.setAttribute('aria-label', t); b.title = t;
+}
+D.addEventListener('click', function (e) {
+  var hit = e.target && e.target.closest && e.target.closest('#mini');
+  if (!hit) return;
+  if (!narrowDesktop()) { setTimeout(syncRailLabel, 0); return; }     /* base handler toggles body.mini; refresh the label after it */
+  e.stopPropagation();
+  var on = D.body.classList.toggle('fc-wide');
+  try { global.localStorage.setItem(WIDE_KEY, on ? '1' : '0'); } catch (x) {}
+  syncRailLabel();
+}, true);
+try { if (global.localStorage.getItem(WIDE_KEY) === '1') D.body.classList.add('fc-wide'); } catch (x) {}
+global.addEventListener('resize', syncRailLabel);
+syncRailLabel();
 
 /* on a phone the search box is the fastest way in — focus it when the
    product sheet opens, but never steal focus on a desktop */
