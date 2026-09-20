@@ -20,10 +20,10 @@
 # 403 even on the original site (see CLAUDE.md). A real-browser check is still the final word.
 set -euo pipefail
 
-# Git Bash on Windows rewrites arguments shaped like key=/path into key=C:/Program Files/Git/path, which mangled
-# this script's form-post probe on 2026-09-20 (the server rightly rejected the bogus "next" and the check failed).
-# No-op everywhere else.
-export MSYS_NO_PATHCONV=1
+# NOTE for Windows/Git Bash: it rewrites arguments shaped like key=/path into key=C:/Program Files/Git/path, which
+# mangled this script's form-post probe on 2026-09-20 — so the probe percent-encodes the slash (next=%2F...).
+# Do NOT 'fix' that with a global MSYS_NO_PATHCONV=1: it also stops /dev/null being translated for the Windows curl
+# (exit 23), and under set -e that aborted a deploy after the upload.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ERP_DIR="$REPO_ROOT/public_html/ERP"
@@ -57,10 +57,14 @@ cd "$REPO_ROOT"
 for f in "${FILES[@]}"; do [ -f "$ERP_DIR/api/$f" ] || die "missing local file api/$f"; done
 
 TS="$(date +%Y%m%d%H%M%S)"; BK="$BACKUPS/api-$TS"
+UPLOADED=0; OK=0
+# Whatever goes wrong from here on — a failed check OR an unexpected error/abort — the previous files come back.
+trap 'rc=$?; if [ "$OK" != 1 ] && [ "$UPLOADED" = 1 ]; then echo "==> Stopped unexpectedly (exit $rc) — restoring the previous api/ files" >&2; restore_from "$BK" || true; fi' EXIT
 echo "==> Backing up the server's api/ to $BK"
 rssh "mkdir -p '$BK' && cp -pr '$REMOTE_ERP/api' '$BK/api'"
 
 echo "==> Uploading ${#FILES[@]} files"
+UPLOADED=1
 for f in "${FILES[@]}"; do rscp "$ERP_DIR/api/$f" "$SSH_HOST:$REMOTE_ERP/api/$f"; done
 
 echo "==> Linting every PHP file with the server's own PHP"
@@ -70,25 +74,26 @@ fi
 
 echo "==> Exercising the live endpoints (no password needed; nothing here records a failed attempt)"
 bad=0
-page="$(curl -s -m 60 "$SITE/?probe=$RANDOM")"; pst="$(curl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/?probe=$RANDOM")"
+page="$(curl -s -m 60 "$SITE/?probe=$RANDOM" || true)"; pst="$(curl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/?probe=$RANDOM" || echo 000)"
 if echo "$page" | grep -q 'action="api/auth/login.php"' && echo "$page" | grep -q 'method="post"'; then
   echo "  OK    the sign-in page is a real form posting to login.php (HTTP $pst)"
 elif [ "$pst" = "200" ]; then
   echo "  OK    the gate is dormant, so the app is served directly (HTTP 200) — sign-in page not applicable"
 else echo "  FAIL  / is HTTP $pst and is not the expected sign-in form"; bad=1; fi
 
-loc="$(curl -s -m 60 -o /dev/null -w '%{http_code} %{redirect_url}' -d 'username=&password=&next=%2F%3Fapp%3Derp' "$SITE/api/auth/login.php")"
+loc="$(curl -s -m 60 -o /dev/null -w '%{http_code} %{redirect_url}' -d 'username=&password=&next=%2F%3Fapp%3Derp' "$SITE/api/auth/login.php" || echo 'curl failed')"
 if [ "$loc" = "303 $SITE/?app=erp&signin=empty" ]; then echo "  OK    a form post is answered with a 303 back to the page with ?signin=empty"
 else echo "  FAIL  form post answered '$loc' (expected '303 $SITE/?app=erp&signin=empty')"; bad=1; fi
 
-j="$(curl -s -m 60 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{}' "$SITE/api/auth/login.php")"
+j="$(curl -s -m 60 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{}' "$SITE/api/auth/login.php" || echo 000)"
 if [ "$j" = "400" ]; then echo "  OK    the app's JSON sign-in path still answers 400 JSON for empty fields"
 else echo "  FAIL  JSON sign-in path answered HTTP $j (expected 400)"; bad=1; fi
 
-m="$(curl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/api/auth/me.php")"
+m="$(curl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/api/auth/me.php" || echo 000)"
 if [ "$m" = "401" ] || [ "$m" = "200" ]; then echo "  OK    me.php answers (HTTP $m)"; else echo "  FAIL  me.php answered HTTP $m"; bad=1; fi
 
 if [ "$bad" != 0 ]; then restore_from "$BK"; die "a live check failed — previous files restored. Backup kept at $BK."; fi
+OK=1
 echo
 echo "DONE — api/ deployed. Backup: $BK   (undo with: scripts/deploy-api.sh rollback)"
 echo "Clear the Hostinger cache, then check in a REAL private window: sign in, and the browser should now offer to save the password."
