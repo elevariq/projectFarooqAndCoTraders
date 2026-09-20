@@ -1040,6 +1040,43 @@ Client request: "editing / adding / deleting region name isn't available right".
 - Limit worth knowing: two windows open at once — one deletes, the other still shows the old list — is the general stale-window case
   (the server's revision check refuses the stale save and says "reload"); nothing area-specific was added for it.
 
+## Stock value — what the goods in the warehouses are worth (2026-09-20)
+
+Client request: "right now the goods we have in the warehouse, how much money's worth of it is lying there for us…".
+Answered as **bags on hand × the average cost per bag the ERP already keeps** (`inventory.avgCostP`, maintained by modules 17/26)
+— what the stock *cost*, not what it might sell for. **Nothing new is stored: no table, no API and no schema change**, so this is an
+app deploy only (`deploy-erp.sh`); nothing to apply on the server first.
+
+- New module **`37-stock-value.js`** (`ERP.StockValue`: `build({warehouseId, category, q})`, `docModel`, `sheets`). Shown in three places: a
+  **Stock value (at cost)** card on the Dashboard (right after "All bags available"), a value strip on Inventory (total + each
+  warehouse), and its own screen **Inventory & supply → Stock value** (KPI cards, split by warehouse and by category, every product
+  biggest-value-first, warehouse/category/search filters, Print/PDF, Excel). On-screen product table capped at 300 lines; print/Excel
+  are complete. Needs **`FINANCIAL_REPORT_VIEW`** (Owner, Manager, Accountant) because it reveals purchase cost — Sales and Warehouse
+  roles get a locked notice, and the card/strip are simply absent for them. Browser-side gate like every role (no server table change).
+- **The rules that keep the number honest** (all covered by tests):
+  - **A warehouse transfer moves bags but not cost** — `Inventory.apply` only sets `avgCostP` on `PURCHASE_IN`/`MILL_RECEIPT_IN`, so
+    transferred stock has cost 0 in its new warehouse. It is valued at the same product's cost elsewhere (the very rule `Inventory.costOf`
+    uses when costing a sale) and labelled *from other warehouse*; it is **not** called an estimate. Only a product with no purchase
+    anywhere falls back to its own `buy` price, and *that* is flagged **estimated** and totalled separately.
+  - **No cost anywhere ⇒ left out of the total, never counted as zero-and-hidden**: a warning says how many products/bags are missing.
+  - **Damaged bags** are not in the main figure; shown as their own card at cost. **Negative stock** (only if the owner allows it) is
+    left out and flagged. Selling-price value is secondary: the price set on the product, else the last non-cancelled invoiced rate, else
+    "not priced" (the column pair is hidden while nothing is priced).
+  - It is the position **right now**; there is no "as at last month" (the app keeps balances, not a daily stock history).
+- **Real data at the time (2026-09-20)**: the server held 3 inventory rows, one with stock (20 bags × Rs 3,000) and **0 of 138 products
+  with any buy/sell price set** — so today's headline is small and the selling-price figure will read "No selling prices set yet"
+  until purchases/prices are entered. That is the data, not a fault.
+- Tests: `test-stock-value.mjs` (75 checks — real purchases/sales/transfers, every cost source, damaged/negative, filters, document and
+  Excel, the screen, dashboard card, Inventory strip, five roles on a restarted window; **mutation-checked with six deliberate
+  breakages**). Looked at in **real headless Chrome** (desktop 1320px + 390px phone, light + dark), which caught two layout bugs jsdom
+  cannot see: the base `.tbl` forces `min-width:1050px` (tables ran off their cards — `table.sv-tbl{min-width:0}` overrides it) and the
+  base styles a `<b>` inside a `.banner` as a block (a sentence split in two — headline in `<b>`, detail in `<p>`).
+- **Found, not fixed (unrelated, pre-existing)**: the base app exposes its icon function as `window.I`, **not** `window.icon`, yet
+  modules 28/29/30/32 define `function I(n){ return global.icon ? global.icon(n) : ''; }` — so their icons silently never render
+  (Area-wise, Statement of Account, Payroll, Milling). Module 37 uses `global.I`. One-line fix in each if wanted.
+- Not built: a value line on each warehouse card of Inventory; valuation as at a past date; per-batch (FIFO) valuation; a "value if sold"
+  margin. Not seen by anyone on the live site or a physical phone.
+
 ## Where to look for more detail
 
 - **`docs/SERVER_DATA.md` — the current guide to the server-side data system (how it works, what users see, everyday operations, backups, how to change it, known limits). Start here for anything about where the data lives.**
