@@ -87,7 +87,20 @@ explicitly told Claude to run them — the permission layer may block them.
 * **On the server, read-only, any time:** copy `scripts/empty-business-db.php` + `public_html/ERP/database/stores.json` to a folder on the server and run
   `php empty-business-db.php --export-only --out-dir=/home/u943531942/backups` — writes a **verified** export (mode 0400) and deletes nothing.
 * **Hostinger's own backups** (hPanel → Backups) were never verified from here — check they cover the database.
-* **Not built yet (recommended):** an automatic nightly export (a Hostinger cron running the command above). Until then backups are manual.
+* **Automatic nightly backup (live since 2026-09-20).** `scripts/backup-business-db.php`, installed at `/home/u943531942/tools/backup-business-db.php`,
+  run by a Hostinger cron job (uid `65drF1UNgJ`, `0 21 * * *` = 21:00 server/UTC = **02:00 Pakistan time**). Each run writes
+  `/home/u943531942/backups/nightly/business-<date>-<time>-v<counter>-<id>.json` (mode 0400, folder 0700) in the standard backup format.
+  It is a **consistent snapshot** (all 46 tables from one instant, even if someone is saving), **verified** by reading it back before it is
+  kept, **refuses to back up an empty database** (so a wiped database can never replace real backups), and prunes only after a good run:
+  files older than 30 days, never fewer than the newest 7. It logs one line per run to `backups/nightly/backup.log` and appends output to
+  `cron.out`. **Check it:** `ssh -p 65002 u943531942@31.97.219.57 'tail -3 ~/backups/nightly/backup.log'` — a `FAILED` line means look at `cron.out`.
+  **Turn it off / change it:** delete or recreate the cron job by uid (Hostinger MCP `hosting_*AccountCronJobV1`, or hPanel → Cron Jobs).
+  **Restore from one:** `bash scripts/data-backend.sh off`, `php empty-business-db.php --yes-empty-everything` (it writes its own safety export first),
+  `php import-backup.php <the backup file>` (dry run, then `--commit`), `bash scripts/data-backend.sh on`. Tested: a run in the exact cron
+  environment (`env -i`), record-for-record match against the database (786 records, 0 mismatches), retention rules, and the empty-database refusal.
+* **These backups live on the same Hostinger account.** They protect against mistakes, bad saves and a wiped database — **not** against losing
+  the account itself. Periodically download one (SFTP/`scp` from `~/backups/nightly/`) or use *Settings → Backup Database* and keep it elsewhere
+  (your own drive). An automatic off-site copy needs a destination and credentials you choose — not set up.
 
 ### Restoring / re-importing
 `scripts/import-backup.php <file>` (dry run by default; `--commit` only after every check passes; refuses a non-empty database; the backup file is
@@ -129,8 +142,12 @@ before deleting — `--rehearse` proves the delete works and rolls it back), the
 * **Whole-data download on every page load** (~1 MB now). Fine for years at this volume; revisit (delta loads) if it grows ~50×.
 * **The `legacy` scratch lists** (activity feed, log, devices, WhatsApp, old sequence counters) are last-writer-wins: a person's recent
   activity-feed entries can be replaced by another's. They are display state, not accounts.
-* **The Warehouse app** inside the launcher was not changed (still browser-local and without the session watch).
-* **Automatic server-side backups are not set up** (section 4).
+* **"Everything is on the database" is true for the ERP** (every screen's business data goes through `FDB` → the API; the only module that
+  talks to the data API is the driver). **The Warehouse app** inside the launcher is the exception: it keeps its own data in that browser's
+  `localStorage` (`DB_KEY` in `farooq-co-warehouse-pwa.html`) and was deliberately not changed — it is not on the database, not shared
+  between devices, and has no session watch. The per-browser values listed in section 1 and a few UI keys (sidebar width, sign-in ticket) are
+  also browser-only by design.
+* **Backups are automatic and on-account only** (section 4): no off-site copy is made for you.
 * **Not verified live yet:** a real invoice/receipt/purchase entered by a person through the server path, and two people using it at once
   on the real site. The save mechanism itself was exercised live (create → update → delete of a throwaway record, counters read).
 * Auth limits from the login-gate work (account-lockout denial of service, etc.) are unchanged — see `CLAUDE.md`.
