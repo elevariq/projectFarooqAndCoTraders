@@ -76,10 +76,27 @@ body.fc-mobile:not(.fc-hidechrome) .fc-tabbar{display:grid}
   body:not(.fc-mobile) .fc-tabbar{display:none}
   body.fc-hidechrome .fc-tabbar{display:none}
 
-  /* the desktop rail is a drawer here; keep the top bar tight */
-  body.fc-mobile .top{padding:0 12px}
-  body.fc-mobile .top h1{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* the top bar itself is styled in module 35 */
   body.fc-mobile .page-head{margin-bottom:10px}
+
+  /* dashboard figures: two tiles across instead of one long column */
+  body.fc-mobile .ledger,body.fc-mobile .ledger.l4{grid-template-columns:1fr 1fr}
+  body.fc-mobile .kpi{padding:12px 12px;border-right:none !important;border-bottom:1px solid var(--line-2) !important}
+  body.fc-mobile .kpi:nth-child(odd){border-right:1px solid var(--line-2) !important}
+  body.fc-mobile .kpi:last-child,
+  body.fc-mobile .kpi:nth-last-child(2):nth-child(odd){border-bottom:none !important}
+  body.fc-mobile .kpi .k{font-size:12px;gap:6px}
+  body.fc-mobile .kpi .v{font-size:19px;overflow-wrap:anywhere}
+  body.fc-mobile .kpi .d{font-size:11.5px}
+  /* a notice with a button: the button drops under the text instead of
+     squeezing the words into a narrow column beside it */
+  body.fc-mobile .banner{flex-wrap:wrap}
+  body.fc-mobile .banner>div:not(.r){flex:1 1 0;min-width:0}
+  body.fc-mobile .banner>.r{flex:0 0 100%;margin:4px 0 0}
+  body.fc-mobile .banner>.r .btn{width:100%;justify-content:center;min-height:44px}
+  /* card headings keep their title on one line; the badge wraps below it */
+  body.fc-mobile .card-h{flex-wrap:wrap;gap:6px 10px}
+  body.fc-mobile .card-h h2,body.fc-mobile .card-h h3{white-space:nowrap}
   body.fc-mobile .page-head p{display:none}
   body.fc-mobile .card-b{padding:14px}
   body.fc-mobile .card-h{padding:12px 14px}

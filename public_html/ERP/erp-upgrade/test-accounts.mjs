@@ -88,20 +88,29 @@ async function main() {
       !isLocked(w.PAGES.payroll()) && !isLocked(w.PAGES.milling()) && !isLocked(w.PAGES.soa()));
     check('A2 …and Company accounts tells the owner to sign in first instead of failing',
       /Sign in with your company account first/.test(w.PAGES.accounts()));
-    check('A2b the guards are applied exactly once (no stacked wrappers)', ['payroll', 'milling', 'soa', 'accounts'].every(k => w.PAGES[k].__fcGuarded === true));
+    check('A2b the guards are applied exactly once (no stacked wrappers)', ['payroll', 'milling', 'soa'].every(k => w.PAGES[k].__fcGuarded === true));
+    check('A2c Company accounts is NOT a wholesale-guarded screen: everyone signed in may open it for "My account"', !w.PAGES.accounts.__fcGuarded);
     w.close();
   }
   const expect = {
-    OWNER:      { payroll: true,  milling: true,  soa: true,  accounts: true  },
-    MANAGER:    { payroll: false, milling: true,  soa: true,  accounts: false },
-    ACCOUNTANT: { payroll: false, milling: false, soa: true,  accounts: false },
-    SALES:      { payroll: false, milling: false, soa: true,  accounts: false },
-    INVENTORY:  { payroll: false, milling: false, soa: false, accounts: false },
+    OWNER:      { payroll: true,  milling: true,  soa: true  },
+    MANAGER:    { payroll: false, milling: true,  soa: true  },
+    ACCOUNTANT: { payroll: false, milling: false, soa: true  },
+    SALES:      { payroll: false, milling: false, soa: true  },
+    INVENTORY:  { payroll: false, milling: false, soa: false },
   };
   for (const role of Object.keys(expect)) {
-    const { w } = await signedInAs(role, { 'users.php': () => ({ status: 200, data: { users: [] } }) });
+    let usersCalls = 0;
+    const { w } = await signedInAs(role, { 'users.php': () => { usersCalls++; return { status: 200, data: { users: [] } }; } });
     const got = {}; for (const k of Object.keys(expect[role])) got[k] = !isLocked(w.PAGES[k]());
     check('A3 ' + role + ': screens open = ' + JSON.stringify(expect[role]), JSON.stringify(got) === JSON.stringify(expect[role]), JSON.stringify(got));
+    /* Company accounts: My account for everyone, the staff list for the owner only */
+    const acc = w.PAGES.accounts(); await sleep(150);
+    check('A3b ' + role + ': Company accounts opens with "My account" and a Change password button',
+      !isLocked(acc) && /My account/.test(acc) && /data-fc-chpw/.test(acc) && /Farooq Ahmed/.test(acc));
+    check('A3c ' + role + ': the staff list ' + (role === 'OWNER' ? 'is shown' : 'is NOT shown, and the accounts are never even requested'),
+      role === 'OWNER' ? (/data-acct-add|Loading accounts/.test(acc) && usersCalls === 1)
+                       : (!/data-acct-add|Loading accounts|Add account/.test(acc) && usersCalls === 0), 'calls=' + usersCalls);
     if (role === 'SALES') {
       check('A4 a locked screen says so plainly and points at the owner', /Payroll is not open to you/.test(w.PAGES.payroll()) && /Ask the owner/.test(w.PAGES.payroll()));
     }

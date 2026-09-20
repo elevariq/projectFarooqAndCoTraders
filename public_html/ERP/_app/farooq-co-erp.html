@@ -613,6 +613,7 @@ table.dt tr.tot-row td,table.dt tr.open-row td{background:#F7F7F7;font-weight:70
 
 
 
+
 <!-- FAROOQ & CO ERP — PRE-BOOT GUARD --><script>
 /* ══════════════════════════════════════════════════════════════════════════
    FAROOQ & CO TRADERS — ERP UPGRADE · MODULE 00a
@@ -10742,10 +10743,27 @@ body.fc-mobile:not(.fc-hidechrome) .fc-tabbar{display:grid}
   body:not(.fc-mobile) .fc-tabbar{display:none}
   body.fc-hidechrome .fc-tabbar{display:none}
 
-  /* the desktop rail is a drawer here; keep the top bar tight */
-  body.fc-mobile .top{padding:0 12px}
-  body.fc-mobile .top h1{font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  /* the top bar itself is styled in module 35 */
   body.fc-mobile .page-head{margin-bottom:10px}
+
+  /* dashboard figures: two tiles across instead of one long column */
+  body.fc-mobile .ledger,body.fc-mobile .ledger.l4{grid-template-columns:1fr 1fr}
+  body.fc-mobile .kpi{padding:12px 12px;border-right:none !important;border-bottom:1px solid var(--line-2) !important}
+  body.fc-mobile .kpi:nth-child(odd){border-right:1px solid var(--line-2) !important}
+  body.fc-mobile .kpi:last-child,
+  body.fc-mobile .kpi:nth-last-child(2):nth-child(odd){border-bottom:none !important}
+  body.fc-mobile .kpi .k{font-size:12px;gap:6px}
+  body.fc-mobile .kpi .v{font-size:19px;overflow-wrap:anywhere}
+  body.fc-mobile .kpi .d{font-size:11.5px}
+  /* a notice with a button: the button drops under the text instead of
+     squeezing the words into a narrow column beside it */
+  body.fc-mobile .banner{flex-wrap:wrap}
+  body.fc-mobile .banner>div:not(.r){flex:1 1 0;min-width:0}
+  body.fc-mobile .banner>.r{flex:0 0 100%;margin:4px 0 0}
+  body.fc-mobile .banner>.r .btn{width:100%;justify-content:center;min-height:44px}
+  /* card headings keep their title on one line; the badge wraps below it */
+  body.fc-mobile .card-h{flex-wrap:wrap;gap:6px 10px}
+  body.fc-mobile .card-h h2,body.fc-mobile .card-h h3{white-space:nowrap}
   body.fc-mobile .page-head p{display:none}
   body.fc-mobile .card-b{padding:14px}
   body.fc-mobile .card-h{padding:12px 14px}
@@ -10899,6 +10917,23 @@ body.fc-mobile:not(.fc-hidechrome) .fc-tabbar{display:grid}
 }
 
 @media print{ .fc-tabbar,.fc-sheet-scrim{display:none !important} }
+
+/* ── the sidebar toggle, at every width ─────────────────────────────────
+   The base app forces the sidebar down to the narrow icon rail at <=1200px, and its own
+   collapse button only sets the SAME 68px there — so on most laptop windows the button
+   visibly did nothing and the labels could never be brought back. Between 901 and 1200px
+   the button now EXPANDS the rail (body.fc-wide) and collapses it again; above 1200px the
+   base behaviour (body.mini) is untouched; at <=900px the hamburger owns the drawer, so
+   the collapse button (which cannot do anything there) is hidden. */
+@media (max-width:1200px) and (min-width:901px){
+  body.fc-wide{--rail:238px}
+  body.fc-wide .brand-t,body.fc-wide .nav span.lbl,body.fc-wide .nav-count,
+  body.fc-wide .who-t,body.fc-wide .nav-sec{display:block}
+  body.fc-wide .nav a{justify-content:flex-start;padding:0 12px}
+  body.fc-wide .who{justify-content:flex-start}
+  body.fc-wide .rail-head{justify-content:flex-start;padding:18px 16px 16px}
+}
+@media (max-width:900px){#mini{display:none}}
 `;
 (function () {
   var st = D.createElement('style');
@@ -11070,6 +11105,35 @@ D.addEventListener('focusin', function (e) {
     if (el.scrollIntoView) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }, 250);
 });
+
+/* ══════════════════════════════════════════════════════════════════════════
+   THE SIDEBAR TOGGLE AT EVERY WIDTH
+   See the CSS note above. Between 901 and 1200px the base app has already forced the
+   narrow rail, so its collapse handler (which sets body.mini = the same 68px) does
+   nothing visible. There, this handler runs FIRST (capture phase) and toggles
+   body.fc-wide instead — and stops the click so the base handler never also fires.
+   Everywhere else the base handler runs exactly as before. The choice is remembered.
+   ══════════════════════════════════════════════════════════════════════════ */
+var WIDE_KEY = 'farooqco_rail_wide';
+function narrowDesktop() { var w = global.innerWidth || 1400; return w <= 1200 && w > 900; }
+function syncRailLabel() {
+  var b = D.getElementById('mini'); if (!b) return;
+  var collapsed = narrowDesktop() ? !D.body.classList.contains('fc-wide') : D.body.classList.contains('mini');
+  var t = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  b.setAttribute('aria-label', t); b.title = t;
+}
+D.addEventListener('click', function (e) {
+  var hit = e.target && e.target.closest && e.target.closest('#mini');
+  if (!hit) return;
+  if (!narrowDesktop()) { setTimeout(syncRailLabel, 0); return; }     /* base handler toggles body.mini; refresh the label after it */
+  e.stopPropagation();
+  var on = D.body.classList.toggle('fc-wide');
+  try { global.localStorage.setItem(WIDE_KEY, on ? '1' : '0'); } catch (x) {}
+  syncRailLabel();
+}, true);
+try { if (global.localStorage.getItem(WIDE_KEY) === '1') D.body.classList.add('fc-wide'); } catch (x) {}
+global.addEventListener('resize', syncRailLabel);
+syncRailLabel();
 
 /* on a phone the search box is the fastest way in — focus it when the
    product sheet opens, but never steal focus on a desktop */
@@ -23624,8 +23688,9 @@ D.addEventListener('click', function (e) {
 
 /* ══════════════════════════════════════════════════════════════════════════
    CHANGE PASSWORD
-   Reachable voluntarily via the link next to the account chip once signed
-   in, and shown automatically — with no way to dismiss it — when the
+   Reachable voluntarily from "My account" on the Company accounts screen
+   (module 34: any button carrying data-fc-chpw opens it) once signed in, and
+   shown automatically — with no way to dismiss it — when the
    server says this account must change its password (set on the account
    the owner bootstrap script creates, and whenever an owner resets someone
    else's password from api/auth/users.php).
@@ -23638,7 +23703,6 @@ var PW_CSS = `
 #fcChangePw input{width:100%;padding:10px;border:1.5px solid var(--line);border-radius:var(--r-sm);margin-top:10px}
 #fcChangePw .err{color:#C0392B;font-size:12.5px;margin-top:8px;min-height:16px}
 #fcChangePw .ok{color:#1E7A34;font-size:12.5px;margin-top:8px;min-height:16px}
-#fcChangePwLink{font-size:12px;color:var(--muted);background:none;border:none;cursor:pointer;text-decoration:underline;padding:4px}
 `;
 (function () { var s = D.createElement('style'); s.id = 'fc-changepw-css'; s.textContent = PW_CSS; D.head.appendChild(s); })();
 
@@ -23667,7 +23731,7 @@ function closeChangePw() {
 
 D.addEventListener('click', function (e) {
   if (!e.target.closest) return;
-  if (e.target.id === 'fcChangePwLink') { e.preventDefault(); openChangePw(false); return; }
+  if (e.target.closest('[data-fc-chpw]')) { e.preventDefault(); openChangePw(false); return; }
   if (e.target.id === 'fcPwCancel') { closeChangePw(); return; }
   if (e.target.id === 'fcPwGo') {
     var cur = D.getElementById('fcPwCur'), nw = D.getElementById('fcPwNew'), conf = D.getElementById('fcPwConf');
@@ -23685,14 +23749,14 @@ D.addEventListener('click', function (e) {
   }
 }, true);
 
-/* offer the link next to the existing sign-in chip, once it exists —
-   "Company sign-in" while nobody has a server identity, "Change password"
-   once someone does, never both. */
+/* Offer "Company sign-in" while nobody has a server identity and "Sign out"
+   once sign-in is enforced. They are placed next to the sign-in chip, which
+   module 35 keeps inside the account menu (top right). "Change password" is
+   no longer a link here — it is on the Company accounts screen. */
 function ensureCompanyLink() {
   var chip = D.getElementById('fcUserChip');
   if (!chip) return;
   var signInBtn = D.getElementById('fcCompanyLink');
-  var pwBtn = D.getElementById('fcChangePwLink');
   var outBtn = D.getElementById('fcSignOutLink');
   var enforced = Auth.mode === 'enforce' && !!Auth.identity;
   /* enforced: the server account IS the identity, so the module-22 "tap to
@@ -23708,22 +23772,15 @@ function ensureCompanyLink() {
       chip.parentNode.insertBefore(outBtn, chip);
     }
   } else if (outBtn) { outBtn.remove(); }
+  var legacyPw = D.getElementById('fcChangePwLink');
+  if (legacyPw) legacyPw.remove();
   if (Auth.identity) {
     if (signInBtn) signInBtn.remove();
-    if (!pwBtn) {
-      pwBtn = D.createElement('button');
-      pwBtn.id = 'fcChangePwLink';
-      pwBtn.textContent = 'Change password';
-      chip.parentNode.insertBefore(pwBtn, chip);
-    }
-  } else {
-    if (pwBtn) pwBtn.remove();
-    if (!signInBtn) {
-      signInBtn = D.createElement('button');
-      signInBtn.id = 'fcCompanyLink';
-      signInBtn.textContent = 'Company sign-in';
-      chip.parentNode.insertBefore(signInBtn, chip);
-    }
+  } else if (!signInBtn) {
+    signInBtn = D.createElement('button');
+    signInBtn.id = 'fcCompanyLink';
+    signInBtn.textContent = 'Company sign-in';
+    chip.parentNode.insertBefore(signInBtn, chip);
   }
 }
 
@@ -24903,7 +24960,9 @@ ERP.InvoiceSearch = {
       accounts had NO permission check at all, so the moment a non-owner has
       an account they would see salaries. Each is now tied to a permission:
           Payroll ............ PAYROLL_MANAGE   (given to no role — owner only)
-          Company accounts ... ACCOUNTS_MANAGE  (given to no role — owner only)
+          Company accounts ... ACCOUNTS_MANAGE  (given to no role — owner only) —
+                               for the STAFF LIST only; every signed-in person can
+                               open the screen for "My account" (change password)
           Milling ............ PURCHASE_CREATE  (owner, manager)
           Statement of acct .. COLLECTION_VIEW  (owner, manager, accountant, sales)
       The two new names are deliberately NOT added to any role, exactly like
@@ -24933,7 +24992,6 @@ function pill(cls, t) { return '<span class="pill ' + cls + '">' + t + '</span>'
    ══════════════════════════════════════════════════════════════════════════ */
 var ACCESS = ERP.PageAccess = {
   payroll:  ['PAYROLL_MANAGE',  'Payroll'],
-  accounts: ['ACCOUNTS_MANAGE', 'Company accounts'],
   milling:  ['PURCHASE_CREATE', 'Milling'],
   soa:      ['COLLECTION_VIEW', 'Statement of Account']
 };
@@ -25002,23 +25060,45 @@ function genPassword() {
 /* ══════════════════════════════════════════════════════════════════════════
    COMPANY ACCOUNTS — the screen
    ══════════════════════════════════════════════════════════════════════════ */
+/* "My account" — shown to everyone signed in with a company account. This is
+   where a person changes their own password (it used to be a text link in the
+   top bar). */
+function myAccountCard() {
+  var A = ERP.Auth, id = A.identity || {};
+  var name = id.displayName || 'You';
+  var role = roleLabel(A.role || (ERP.Session && ERP.Session.role && ERP.Session.role()) || '');
+  var ini = String(name).trim().split(/\s+/).slice(0, 2).map(function (w) { return w[0]; }).join('').toUpperCase() || '?';
+  return '<div class="card" style="margin-bottom:14px"><div class="card-h"><h3>My account</h3></div>' +
+    '<div class="card-b"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
+      '<span class="av" style="width:44px;height:44px;border-radius:99px;background:var(--violet);color:#fff;' +
+        'display:grid;place-items:center;font-weight:700;flex:0 0 44px">' + esc(ini) + '</span>' +
+      '<div style="min-width:0;flex:1 1 160px"><b style="display:block;font-size:15px">' + esc(name) + '</b>' +
+        '<span class="hint" style="margin:0">' + esc(id.username ? id.username + ' · ' : '') + esc(role) + '</span></div>' +
+      '<button class="btn" data-fc-chpw>' + I('lock') + 'Change password</button></div>' +
+    '<p class="hint" style="margin-top:12px">Choose a password you do not use anywhere else. ' +
+    'You will stay signed in on this device after changing it.</p></div></div>';
+}
+
 global.PAGES.accounts = function () {
   var A = ERP.Auth;
   if (!A || !A.identity) {
     return '<div class="card"><div class="card-b"><div class="empty"><div class="ei">' + I('lock') + '</div>' +
       '<b>Sign in with your company account first</b>' +
-      '<p>Company accounts are checked by the server. Use “Company sign-in” at the top of the screen, ' +
-      'then come back here to add your team.</p></div></div></div>';
+      '<p>Company accounts are checked by the server. Use “Company sign-in” in the account menu ' +
+      '(your initials, top right), then come back here.</p></div></div></div>';
   }
+  var mine = myAccountCard();
+  /* the staff list is the owner's; everyone else sees only their own account */
+  if (!can('ACCOUNTS_MANAGE')) return mine;
   if (ACC.list === null && !ACC.loading && !ACC.error) load();
 
   if (ACC.error) {
-    return '<div class="card"><div class="card-b"><div class="banner err">' + I('alert') +
+    return mine + '<div class="card"><div class="card-b"><div class="banner err">' + I('alert') +
       '<div><b>' + esc(ACC.error) + '</b></div></div>' +
       '<button class="btn" data-acct-reload style="margin-top:10px">Try again</button></div></div>';
   }
   if (ACC.list === null) {
-    return '<div class="card"><div class="card-b"><p class="hint">Loading accounts…</p></div></div>';
+    return mine + '<div class="card"><div class="card-b"><p class="hint">Loading accounts…</p></div></div>';
   }
 
   var me = A.identity && A.identity.id;
@@ -25040,7 +25120,7 @@ global.PAGES.accounts = function () {
       '<td data-label="" class="c fcb-rowacts">' + acts + '</td></tr>';
   }).join('');
 
-  return '<div class="card"><div class="card-h"><h3>Company accounts</h3>' +
+  return mine + '<div class="card"><div class="card-h"><h3>Company accounts</h3>' +
       '<span class="pill neu">' + ACC.list.length + '</span><div class="grow"></div>' +
       '<button class="btn pri" data-acct-add>' + I('plus') + 'Add account</button></div>' +
     '<div class="card-b" style="padding:0"><div class="tw"><table class="tbl"><thead><tr>' +
@@ -25197,7 +25277,7 @@ try {
   });
   if (global.PAGEMETA) {
     global.PAGEMETA.accounts = ['Company accounts',
-      'The people who sign in to this ERP — add someone, change their role, reset a password, or switch them off.'];
+      'Your own sign-in — change your password. The owner also adds people, changes roles, resets passwords and switches accounts off.'];
   }
 } catch (e) {}
 
@@ -25208,6 +25288,273 @@ ERP.Accounts = {
   load: load, genPassword: genPassword, roleOrder: ROLE_ORDER.slice(),
   _state: ACC, _reset: function () { ACC.list = null; ACC.loading = false; ACC.error = ''; closeForm(); }
 };
+
+})(typeof window !== 'undefined' ? window : globalThis);
+
+</script>
+<script>/* ── 35-topbar.js · TOP BAR — one clean row on every screen, account menu, no dead controls ── */
+/* ══════════════════════════════════════════════════════════════════════════
+   FAROOQ & CO TRADERS — ERP UPGRADE · MODULE 35
+   THE TOP BAR
+
+   The bar along the top of every screen had grown by accretion: the original
+   app put a warehouse picker, a search box, a theme switch, a bell, a
+   "Connected · last synced 2 minutes ago" pill and an avatar in it, and then
+   modules 06 / 11 / 22 / 31 each pushed their own chip or link in next to
+   the bell (a database status chip, a search icon, the signed-in user, and
+   "Company sign-in" / "Change password" / "Sign out" text links). All of
+   those landed inside the bell's block-level wrapper, so on a phone the bar
+   wrapped to ~180px tall and squeezed the page title down to a sliver.
+
+   What this module decides:
+     · The warehouse picker is REMOVED. Nothing ever read it — the app's only
+       warehouse filters are the dropdowns on Inventory and the other lists.
+       A control that says "All warehouses" and does nothing is worse than none.
+     · The "Connected · last synced 2 minutes ago" pill is REMOVED. The text
+       was hard-coded (it never changed) and the button did nothing. The real
+       signal — is my data being saved? — is the "Saved" chip from module 06,
+       which now lives in the account menu, with a warning dot on the avatar
+       whenever it is not healthy so a problem can never be hidden by it.
+     · ONE row on every screen: page title, search, (theme), bell, avatar.
+     · The avatar is the account menu. It holds who is signed in, the saved
+       status, Company accounts (where the password is changed), the dark-mode
+       switch, Company sign-in when nobody is, and Sign out when it is enforced.
+       The elements other modules create are MOVED into it, not re-created, so
+       their own behaviour and ids are untouched.
+     · Search is the box on a desktop and an icon everywhere else (it used to
+       vanish entirely between 761 and 900px wide).
+     · The bell's red dot now means something: it only shows while at least one
+       product is low or out of stock.
+   ══════════════════════════════════════════════════════════════════════════ */
+(function (global) {
+'use strict';
+var ERP = global.ERP; if (!ERP) return;
+var D = global.document; if (!D) return;
+var I = function (n) { try { return global.I ? global.I(n) : ''; } catch (e) { return ''; } };
+
+var CSS = `
+/* ── one row, never wraps ── */
+body .top{flex-wrap:nowrap;gap:8px;
+  min-height:calc(58px + env(safe-area-inset-top,0px));padding-top:env(safe-area-inset-top,0px)}
+body .top h1{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.top-r{flex:0 0 auto;margin-left:auto;gap:6px;flex-wrap:nowrap}
+.top-r .rel{display:flex;align-items:center}
+#whBtn,#syncBtn{display:none !important}
+
+/* search: the box on a desktop, an icon on anything narrower */
+#fcSearchBtn{display:none}
+@media (max-width:900px){
+  #fcSearchBtn{display:grid}
+  #mini{display:none}
+  body .top{padding-left:10px;padding-right:12px;gap:4px}
+  body .top .icon-btn{width:40px;height:40px}
+  body .top h1{font-size:17px}
+}
+/* the theme switch moves into the account menu on a phone */
+@media (max-width:600px){ #themeBtn{display:none} }
+
+/* the bell's dot only when something needs attention */
+.top #bellBtn .dot.fcm-none{display:none}
+
+/* ── avatar = the account button ── */
+.top-av{position:relative;border:none;cursor:pointer;flex:0 0 auto}
+.top-av.fcm-warn::after{content:'';position:absolute;top:-3px;right:-3px;width:11px;height:11px;
+  border-radius:50%;background:var(--ochre,#C08023);border:2px solid var(--surface)}
+.top-av.fcm-bad::after{background:var(--clay,#B4482F)}
+.top-av:focus-visible,.fcm button:focus-visible{outline:2px solid var(--violet);outline-offset:2px}
+
+/* ── the account menu ── */
+.fcm{position:absolute;top:calc(100% + 8px);right:0;width:300px;max-width:calc(100vw - 20px);
+  display:none;flex-direction:column;gap:2px;padding:6px;z-index:120;
+  background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:var(--sh-lg)}
+.fcm.on{display:flex}
+.fcm .fcm-row,.fcm #fcUserChip,.fcm #fcCompanyLink,.fcm #fcSignOutLink{
+  display:flex;align-items:center;gap:11px;width:100%;min-height:46px;padding:8px 12px;
+  border:none;border-radius:10px;background:none;font:inherit;font-size:14px;font-weight:500;
+  color:var(--ink);text-align:left;text-decoration:none;cursor:pointer}
+.fcm .fcm-row:hover,.fcm #fcUserChip:hover,.fcm #fcCompanyLink:hover,.fcm #fcSignOutLink:hover{background:var(--surface-2)}
+.fcm .fcm-row svg{width:18px;height:18px;flex:0 0 18px;color:var(--muted)}
+.fcm .fcm-row small{display:block;font-size:11.5px;font-weight:400;color:var(--muted);margin-top:1px}
+.fcm-sep{height:1px;background:var(--line-2,var(--line));margin:4px 6px}
+
+/* the signed-in user is the menu's header */
+.fcm #fcUserChip{padding:10px 12px}
+.fcm #fcUserChip:disabled{cursor:default;opacity:1}
+.fcm #fcUserChip:disabled:hover{background:none}
+.fcm #fcUserChip .av{width:36px;height:36px;flex:0 0 36px;font-size:13px}
+.fcm #fcUserChip>span:last-child{display:flex;flex-direction:column;min-width:0;font-size:14px;color:var(--ink)}
+.fcm #fcUserChip>span:last-child b{font-size:14.5px;font-weight:700;color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fcm #fcUserChip>span:last-child>span{font-size:12px;color:var(--muted)}
+
+/* the saved-status chip becomes a status line (its warn/bad colours are kept).
+   Its inner dot also carries the app's absolutely-positioned .dot class, which
+   used to fling it to the corner of whatever contained it. */
+.fcm #fcDbChip{width:100%;border-radius:10px;padding:9px 12px;font-size:13px;justify-content:flex-start;cursor:pointer}
+.fcm #fcDbChip .dot{position:static;flex:0 0 7px;border:none;top:auto;right:auto}
+
+/* icons for the two text buttons other modules create. Drawn with CSS masks
+   rather than by wrapping their text: module 31 recognises a click by
+   e.target.id, so anything nested inside those buttons would break them. */
+.fcm #fcCompanyLink::before,.fcm #fcSignOutLink::before{content:'';width:18px;height:18px;flex:0 0 18px;
+  background:currentColor;opacity:.75;-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;
+  -webkit-mask-position:center;mask-position:center;-webkit-mask-size:contain;mask-size:contain}
+.fcm #fcCompanyLink::before{-webkit-mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='11' width='18' height='11' rx='2'/%3E%3Cpath d='M7 11V7a5 5 0 0 1 10 0v4'/%3E%3C/svg%3E");
+  mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='11' width='18' height='11' rx='2'/%3E%3Cpath d='M7 11V7a5 5 0 0 1 10 0v4'/%3E%3C/svg%3E")}
+.fcm #fcSignOutLink::before{-webkit-mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4'/%3E%3Cpath d='M16 17l5-5-5-5'/%3E%3Cpath d='M21 12H9'/%3E%3C/svg%3E");
+  mask-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4'/%3E%3Cpath d='M16 17l5-5-5-5'/%3E%3Cpath d='M21 12H9'/%3E%3C/svg%3E")}
+
+.fcm #fcSignOutLink{color:var(--clay,#B4482F);font-weight:600}
+/* order: who I am · saved · ── · accounts · theme · sign in · sign out */
+.fcm #fcUserChip{order:10}
+.fcm #fcDbChip{order:20}
+.fcm .fcm-sep{order:25}
+.fcm #fcmAccounts{order:30}
+.fcm #fcmTheme{order:40}
+.fcm #fcCompanyLink{order:50}
+.fcm #fcSignOutLink{order:60}
+@media print{ .fcm{display:none !important} }
+`;
+(function () {
+  var st = D.createElement('style'); st.id = 'fc-topbar-css'; st.textContent = CSS; D.head.appendChild(st);
+})();
+
+function $id(id) { return D.getElementById(id); }
+function initials(name) {
+  return String(name || '?').trim().split(/\s+/).slice(0, 2)
+    .map(function (w) { return w[0]; }).join('').toUpperCase() || '?';
+}
+function isDark() { return D.documentElement.getAttribute('data-theme') === 'dark'; }
+function signedInToServer() { return !!(ERP.Auth && ERP.Auth.identity); }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   BUILD / RE-ASSEMBLE  (safe to run after every paint)
+   ══════════════════════════════════════════════════════════════════════════ */
+function menuEl() { return $id('fcAcctMenu'); }
+
+function ensure() {
+  /* the two dead controls */
+  ['whBtn', 'syncBtn'].forEach(function (id) { var n = $id(id); if (n && n.parentNode) n.parentNode.removeChild(n); });
+
+  var av = $id('avBtn');
+  if (!av || !av.parentNode) return;
+
+  var menu = menuEl();
+  if (!menu) {
+    menu = D.createElement('div');
+    menu.id = 'fcAcctMenu';
+    menu.className = 'fcm';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', 'Account');
+    menu.innerHTML =
+      '<div class="fcm-sep"></div>' +
+      '<button class="fcm-row" id="fcmAccounts" data-go="accounts" role="menuitem">' + I('users') +
+        '<span>Company accounts<small id="fcmAccountsSub"></small></span></button>' +
+      '<button class="fcm-row" id="fcmTheme" role="menuitem"><span id="fcmThemeIco"></span>' +
+        '<span id="fcmThemeLbl">Dark mode</span></button>';
+    av.parentNode.appendChild(menu);
+    av.setAttribute('aria-haspopup', 'menu');
+    av.setAttribute('aria-expanded', 'false');
+  }
+
+  /* whatever other modules created for the bar lives in the menu instead */
+  ['fcUserChip', 'fcDbChip', 'fcCompanyLink', 'fcSignOutLink'].forEach(function (id) {
+    var n = $id(id);
+    if (n && n.parentNode !== menu) menu.appendChild(n);
+  });
+  /* an old link from before the password moved to Company accounts */
+  var oldPw = $id('fcChangePwLink'); if (oldPw && oldPw.parentNode) oldPw.parentNode.removeChild(oldPw);
+
+  /* the search icon sits right beside the search box, not inside the bell's wrapper */
+  var sb = $id('fcSearchBtn'), gq = $id('gq');
+  var sRel = gq && gq.closest ? gq.closest('.rel') : null;
+  if (sb && sRel && sRel.parentNode && sRel.nextSibling !== sb) sRel.parentNode.insertBefore(sb, sRel.nextSibling);
+
+  refresh();
+}
+
+/* the parts that follow state: initials, warning dot, accounts row, theme row, bell dot */
+function refresh() {
+  var av = $id('avBtn'); if (!av) return;
+  var name = '';
+  try { name = ERP.Session ? ERP.Session.name() : ''; } catch (e) {}
+  av.textContent = initials(name || 'FA');
+  av.setAttribute('aria-label', 'Account menu' + (name ? ' — ' + name : ''));
+
+  var db = $id('fcDbChip');
+  var warn = !!(db && /\bwarn\b/.test(db.className)), bad = !!(db && /\bbad\b/.test(db.className));
+  av.classList.toggle('fcm-warn', warn || bad);
+  av.classList.toggle('fcm-bad', bad);
+
+  var acc = $id('fcmAccounts');
+  if (acc) {
+    acc.style.display = signedInToServer() ? '' : 'none';
+    var sub = $id('fcmAccountsSub');
+    if (sub) sub.textContent = (ERP.Can && ERP.Can('ACCOUNTS_MANAGE')) ? 'Change password · manage staff' : 'Change your password';
+  }
+  var th = $id('fcmThemeLbl'), ic = $id('fcmThemeIco');
+  if (th) th.textContent = isDark() ? 'Light mode' : 'Dark mode';
+  if (ic) ic.innerHTML = I(isDark() ? 'sun' : 'moon');
+
+  /* bell */
+  var bell = $id('bellBtn'), dot = bell && bell.querySelector('.dot');
+  var low = 0;
+  try { low = (global.PRODUCTS || []).filter(function (p) { return global.levelOf(p) !== 'ok'; }).length; } catch (e) {}
+  if (dot) dot.classList.toggle('fcm-none', low === 0);
+  if (bell) bell.setAttribute('aria-label', low ? 'Notifications — ' + low + ' products need stock attention' : 'Notifications');
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   OPEN / CLOSE
+   ══════════════════════════════════════════════════════════════════════════ */
+function setOpen(on) {
+  var m = menuEl(), av = $id('avBtn'); if (!m || !av) return;
+  if (on) refresh();
+  m.classList.toggle('on', !!on);
+  av.setAttribute('aria-expanded', on ? 'true' : 'false');
+}
+function isOpen() { var m = menuEl(); return !!(m && m.classList.contains('on')); }
+
+D.addEventListener('click', function (e) {
+  var t = e.target; if (!t || !t.closest) return;
+  var av = t.closest('#avBtn');
+  if (av) { e.preventDefault(); setOpen(!isOpen()); return; }
+  var m = menuEl();
+  if (!m || !isOpen()) return;
+  if (t.closest('#fcAcctMenu')) {
+    if (t.closest('#fcmTheme')) {
+      e.preventDefault();
+      var tb = $id('themeBtn'); if (tb) tb.click();
+      setTimeout(refresh, 0);
+    }
+    /* any choice in the menu closes it */
+    if (t.closest('button')) setOpen(false);
+    return;
+  }
+  setOpen(false);                                   /* a click anywhere else */
+}, true);
+
+D.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && isOpen()) {
+    setOpen(false);
+    var av = $id('avBtn'); if (av && av.focus) av.focus();
+  }
+}, true);
+
+/* ══════════════════════════════════════════════════════════════════════════
+   HOOKS
+   ══════════════════════════════════════════════════════════════════════════ */
+var origPaint = global.paint;
+if (typeof origPaint === 'function') {
+  global.paint = function () {
+    origPaint.apply(global, arguments);
+    try { ensure(); } catch (e) {}
+  };
+}
+try { ensure(); } catch (e) {}
+
+ERP.TopBar = { ensure: ensure, refresh: refresh, open: function () { setOpen(true); }, close: function () { setOpen(false); },
+               isOpen: isOpen };
 
 })(typeof window !== 'undefined' ? window : globalThis);
 

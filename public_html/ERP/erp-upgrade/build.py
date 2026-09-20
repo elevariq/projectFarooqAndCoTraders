@@ -48,6 +48,7 @@ MODULES = [
     ("32-milling.js",        "MILLING JOBS — toll milling: wheat out, flour + chokar back, net settled into the mill's khata"),
     ("33-invoice-search.js", "INVOICE SEARCH — find an old invoice by number, customer, product, date or amount"),
     ("34-accounts.js",       "COMPANY ACCOUNTS — the owner's screen for server accounts; who may open Payroll, Milling, Statements"),
+    ("35-topbar.js",        "TOP BAR — one clean row on every screen, account menu, no dead controls"),
 ]
 
 MARKER = "<!-- FAROOQ & CO ERP — INVOICE, RECEIPT & DATABASE UPGRADE -->"

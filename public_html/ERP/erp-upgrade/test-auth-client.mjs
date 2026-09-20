@@ -280,11 +280,14 @@ async function main() {
     await sleep(750);
     check('G7 the overlay closes itself shortly after success', !w.document.getElementById('fcChangePw').classList.contains('on'));
 
-    // voluntary access once not forced: the "Change password" link, with Cancel offered
+    // voluntary access once not forced: "Change password" on the Company accounts screen, with Cancel offered
     w.go('dashboard'); await sleep(150);
-    check('G8 a "Change password" link replaces "Company sign-in" once signed in',
-      !!w.document.getElementById('fcChangePwLink') && !w.document.getElementById('fcCompanyLink'));
-    w.document.getElementById('fcChangePwLink').click();
+    check('G8 "Company sign-in" is gone once signed in, and there is no Change-password link in the top bar any more',
+      !w.document.getElementById('fcChangePwLink') && !w.document.getElementById('fcCompanyLink'));
+    w.go('accounts'); await sleep(200);
+    check('G8b Change password lives in "My account" on the Company accounts screen',
+      !!w.document.querySelector('#view [data-fc-chpw]') && /My account/.test(w.document.getElementById('view').innerHTML));
+    w.document.querySelector('#view [data-fc-chpw]').click();
     check('G9 opening it voluntarily DOES offer Cancel', !!w.document.getElementById('fcPwCancel'));
     w.document.getElementById('fcPwCancel').click();
     check('G10 Cancel closes it without changing anything', !w.document.getElementById('fcChangePw').classList.contains('on'));

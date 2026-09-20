@@ -514,13 +514,16 @@ are done and live:
     has also expired. "Sign out" reloads to the gate; the module-22 "switch user" chip is display-only.
     `me.php` also issues a fresh offline ticket (a gate sign-in never sees `login.php`'s response, so
     without it a device that lost signal would lock at once).
-  - **Staff accounts and screen access (module 34).** Admin → **Company accounts** (owner only; at
-    the very bottom of the left menu, or under *More* on a phone): add someone with a temporary
+  - **Staff accounts and screen access (module 34).** Admin → **Company accounts** (at the very
+    bottom of the left menu, or under *More* on a phone, or via the avatar menu). Everyone signed in
+    sees **My account** there — that is where a person **changes their own password** (moved
+    2026-09-20 from a text link in the top bar); the staff list below it is **owner only**
+    (`ACCOUNTS_MANAGE`, and a non-owner's browser never even requests it). Owner: add someone with a temporary
     password (the server forces a change at first sign-in), change a role, reset a password, switch an
     account off/on (a switched-off person is signed out within a minute). All rules stay server-side
     (`api/auth/users.php`: owner only, CSRF, the last owner can't be demoted or switched off, audit-
-    logged). Screens are tied to permissions: Payroll `PAYROLL_MANAGE` and Company accounts
-    `ACCOUNTS_MANAGE` (given to no role ⇒ owner only, like `LANDED_COST_*`; no server table change),
+    logged). Screens are tied to permissions: Payroll `PAYROLL_MANAGE` and the Company accounts
+    staff list `ACCOUNTS_MANAGE` (given to no role ⇒ owner only, like `LANDED_COST_*`; no server table change),
     Milling `PURCHASE_CREATE`, Statement of Account `COLLECTION_VIEW`. This is a browser-side
     convenience, not a data boundary. Invoice search is not separately gated (part of Sales).
   - **Live state, verified 2026-09-20 in a real Chrome session (the tester's own browser, already
@@ -612,7 +615,8 @@ Phase 2 shipped — a `must_change_password` flag existed with no UI to act on i
 `31-auth.js` now shows a mandatory, non-dismissable "Change your password" overlay right after
 signing in when the server says the account must change it (set on every bootstrapped/owner-reset
 account), and a voluntary "Change password" link next to the account chip otherwise (replacing
-"Company sign-in" once actually signed in). Changing the password also clears the cached offline
+"Company sign-in" once actually signed in — *since 2026-09-20 that link is gone; the button is under
+Company accounts → My account*). Changing the password also clears the cached offline
 PBKDF2 verifier, since it was derived from the old password. Covered by 10 new checks in
 `test-auth-client.mjs` (35 total in that file now).
 
@@ -815,6 +819,39 @@ verified byte-identical on the server and over HTTPS. No IndexedDB schema change
 migration was involved. **Rollback**: the previous live files are on the server in
 `/home/u943531942/backups/erp-deploy-20260919233433/` — copy `index.html`, `farooq-co-erp.html`,
 `farooq-erp-data.js` from there back into `public_html/ERP/`, then clear the cache again.
+
+## The top bar and the phone dashboard (2026-09-20)
+
+Client-facing complaint: on a phone the header was ~180px tall with the page title squeezed to a
+sliver (even on desktop it wrapped to two lines). Root cause: modules 06/11/22/31 each injected a chip
+or link "before the bell" — *inside the bell's block-level wrapper* — so they stacked vertically.
+
+- New module **`35-topbar.js`** (`ERP.TopBar`) owns the bar; `10-mobile.js` no longer styles it.
+  One 58px row at every width (verified in real Chrome, 320px→1440px, no horizontal overflow; light and
+  dark): hamburger · title · search · (theme) · bell · avatar. Safe-area inset respected.
+- **Removed, deliberately:** the *warehouse picker* (no code anywhere read it — the real warehouse
+  filters are the dropdowns on Inventory etc.; a control saying "All warehouses" that does nothing is
+  worse than none) and the *"Connected · Last synced 2 minutes ago"* pill (hard-coded text, inert
+  button — it never reported anything). Removed at run time by 35 (the base markup and its 3 boot lines
+  are left alone so the base script cannot throw).
+- **The avatar is now a real account menu** (initials of the signed-in person, not a hard-coded "FA").
+  It holds the elements other modules create — **moved, not copied**, so ids and behaviour are unchanged:
+  `#fcUserChip` (header, "switch user"), `#fcDbChip` (the Saved status), `#fcCompanyLink`,
+  `#fcSignOutLink` — plus Company accounts and a Dark/Light-mode row (the bar's own theme switch is
+  hidden ≤600px). If the database chip is ever `warn`/`bad` the **avatar gets a coloured dot**, so a
+  storage problem cannot hide inside a closed menu. **Never wrap the text of `#fcCompanyLink` /
+  `#fcSignOutLink` in child elements** — module 31 recognises their click by `e.target.id`; their icons
+  are CSS masks for that reason.
+- Search is the box on a desktop and an icon button everywhere ≤900px (it used to vanish entirely between
+  761 and 900px). The sidebar-collapse button is hidden ≤900px (the drawer replaces it). The bell's red
+  dot only shows while some product is low or out of stock.
+- Phone dashboard (`10-mobile.js`): KPI figures two-across instead of one long column; a notice with a
+  button (`.banner > .r`) puts the button under the text; card titles stay on one line.
+- Tests: `test-topbar.mjs` (34 checks, mutation-checked with four deliberate breakages),
+  `test-accounts.mjs` (51) and `test-auth-client.mjs` (64) updated for the moved password change.
+  jsdom has no layout — the visual result was checked with headless Chrome screenshots, not by the tests.
+- Not done: the Profit & margin block on a phone is still four stacked period cards (tall, but readable);
+  the warehouse PWA and the invoice editor were not touched.
 
 ## Where to look for more detail
 

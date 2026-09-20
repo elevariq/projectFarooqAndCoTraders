@@ -17,7 +17,9 @@
       accounts had NO permission check at all, so the moment a non-owner has
       an account they would see salaries. Each is now tied to a permission:
           Payroll ............ PAYROLL_MANAGE   (given to no role — owner only)
-          Company accounts ... ACCOUNTS_MANAGE  (given to no role — owner only)
+          Company accounts ... ACCOUNTS_MANAGE  (given to no role — owner only) —
+                               for the STAFF LIST only; every signed-in person can
+                               open the screen for "My account" (change password)
           Milling ............ PURCHASE_CREATE  (owner, manager)
           Statement of acct .. COLLECTION_VIEW  (owner, manager, accountant, sales)
       The two new names are deliberately NOT added to any role, exactly like
@@ -47,7 +49,6 @@ function pill(cls, t) { return '<span class="pill ' + cls + '">' + t + '</span>'
    ══════════════════════════════════════════════════════════════════════════ */
 var ACCESS = ERP.PageAccess = {
   payroll:  ['PAYROLL_MANAGE',  'Payroll'],
-  accounts: ['ACCOUNTS_MANAGE', 'Company accounts'],
   milling:  ['PURCHASE_CREATE', 'Milling'],
   soa:      ['COLLECTION_VIEW', 'Statement of Account']
 };
@@ -116,23 +117,45 @@ function genPassword() {
 /* ══════════════════════════════════════════════════════════════════════════
    COMPANY ACCOUNTS — the screen
    ══════════════════════════════════════════════════════════════════════════ */
+/* "My account" — shown to everyone signed in with a company account. This is
+   where a person changes their own password (it used to be a text link in the
+   top bar). */
+function myAccountCard() {
+  var A = ERP.Auth, id = A.identity || {};
+  var name = id.displayName || 'You';
+  var role = roleLabel(A.role || (ERP.Session && ERP.Session.role && ERP.Session.role()) || '');
+  var ini = String(name).trim().split(/\s+/).slice(0, 2).map(function (w) { return w[0]; }).join('').toUpperCase() || '?';
+  return '<div class="card" style="margin-bottom:14px"><div class="card-h"><h3>My account</h3></div>' +
+    '<div class="card-b"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
+      '<span class="av" style="width:44px;height:44px;border-radius:99px;background:var(--violet);color:#fff;' +
+        'display:grid;place-items:center;font-weight:700;flex:0 0 44px">' + esc(ini) + '</span>' +
+      '<div style="min-width:0;flex:1 1 160px"><b style="display:block;font-size:15px">' + esc(name) + '</b>' +
+        '<span class="hint" style="margin:0">' + esc(id.username ? id.username + ' · ' : '') + esc(role) + '</span></div>' +
+      '<button class="btn" data-fc-chpw>' + I('lock') + 'Change password</button></div>' +
+    '<p class="hint" style="margin-top:12px">Choose a password you do not use anywhere else. ' +
+    'You will stay signed in on this device after changing it.</p></div></div>';
+}
+
 global.PAGES.accounts = function () {
   var A = ERP.Auth;
   if (!A || !A.identity) {
     return '<div class="card"><div class="card-b"><div class="empty"><div class="ei">' + I('lock') + '</div>' +
       '<b>Sign in with your company account first</b>' +
-      '<p>Company accounts are checked by the server. Use “Company sign-in” at the top of the screen, ' +
-      'then come back here to add your team.</p></div></div></div>';
+      '<p>Company accounts are checked by the server. Use “Company sign-in” in the account menu ' +
+      '(your initials, top right), then come back here.</p></div></div></div>';
   }
+  var mine = myAccountCard();
+  /* the staff list is the owner's; everyone else sees only their own account */
+  if (!can('ACCOUNTS_MANAGE')) return mine;
   if (ACC.list === null && !ACC.loading && !ACC.error) load();
 
   if (ACC.error) {
-    return '<div class="card"><div class="card-b"><div class="banner err">' + I('alert') +
+    return mine + '<div class="card"><div class="card-b"><div class="banner err">' + I('alert') +
       '<div><b>' + esc(ACC.error) + '</b></div></div>' +
       '<button class="btn" data-acct-reload style="margin-top:10px">Try again</button></div></div>';
   }
   if (ACC.list === null) {
-    return '<div class="card"><div class="card-b"><p class="hint">Loading accounts…</p></div></div>';
+    return mine + '<div class="card"><div class="card-b"><p class="hint">Loading accounts…</p></div></div>';
   }
 
   var me = A.identity && A.identity.id;
@@ -154,7 +177,7 @@ global.PAGES.accounts = function () {
       '<td data-label="" class="c fcb-rowacts">' + acts + '</td></tr>';
   }).join('');
 
-  return '<div class="card"><div class="card-h"><h3>Company accounts</h3>' +
+  return mine + '<div class="card"><div class="card-h"><h3>Company accounts</h3>' +
       '<span class="pill neu">' + ACC.list.length + '</span><div class="grow"></div>' +
       '<button class="btn pri" data-acct-add>' + I('plus') + 'Add account</button></div>' +
     '<div class="card-b" style="padding:0"><div class="tw"><table class="tbl"><thead><tr>' +
@@ -311,7 +334,7 @@ try {
   });
   if (global.PAGEMETA) {
     global.PAGEMETA.accounts = ['Company accounts',
-      'The people who sign in to this ERP — add someone, change their role, reset a password, or switch them off.'];
+      'Your own sign-in — change your password. The owner also adds people, changes roles, resets passwords and switches accounts off.'];
   }
 } catch (e) {}
 

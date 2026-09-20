@@ -585,8 +585,9 @@ D.addEventListener('click', function (e) {
 
 /* ══════════════════════════════════════════════════════════════════════════
    CHANGE PASSWORD
-   Reachable voluntarily via the link next to the account chip once signed
-   in, and shown automatically — with no way to dismiss it — when the
+   Reachable voluntarily from "My account" on the Company accounts screen
+   (module 34: any button carrying data-fc-chpw opens it) once signed in, and
+   shown automatically — with no way to dismiss it — when the
    server says this account must change its password (set on the account
    the owner bootstrap script creates, and whenever an owner resets someone
    else's password from api/auth/users.php).
@@ -599,7 +600,6 @@ var PW_CSS = `
 #fcChangePw input{width:100%;padding:10px;border:1.5px solid var(--line);border-radius:var(--r-sm);margin-top:10px}
 #fcChangePw .err{color:#C0392B;font-size:12.5px;margin-top:8px;min-height:16px}
 #fcChangePw .ok{color:#1E7A34;font-size:12.5px;margin-top:8px;min-height:16px}
-#fcChangePwLink{font-size:12px;color:var(--muted);background:none;border:none;cursor:pointer;text-decoration:underline;padding:4px}
 `;
 (function () { var s = D.createElement('style'); s.id = 'fc-changepw-css'; s.textContent = PW_CSS; D.head.appendChild(s); })();
 
@@ -628,7 +628,7 @@ function closeChangePw() {
 
 D.addEventListener('click', function (e) {
   if (!e.target.closest) return;
-  if (e.target.id === 'fcChangePwLink') { e.preventDefault(); openChangePw(false); return; }
+  if (e.target.closest('[data-fc-chpw]')) { e.preventDefault(); openChangePw(false); return; }
   if (e.target.id === 'fcPwCancel') { closeChangePw(); return; }
   if (e.target.id === 'fcPwGo') {
     var cur = D.getElementById('fcPwCur'), nw = D.getElementById('fcPwNew'), conf = D.getElementById('fcPwConf');
@@ -646,14 +646,14 @@ D.addEventListener('click', function (e) {
   }
 }, true);
 
-/* offer the link next to the existing sign-in chip, once it exists —
-   "Company sign-in" while nobody has a server identity, "Change password"
-   once someone does, never both. */
+/* Offer "Company sign-in" while nobody has a server identity and "Sign out"
+   once sign-in is enforced. They are placed next to the sign-in chip, which
+   module 35 keeps inside the account menu (top right). "Change password" is
+   no longer a link here — it is on the Company accounts screen. */
 function ensureCompanyLink() {
   var chip = D.getElementById('fcUserChip');
   if (!chip) return;
   var signInBtn = D.getElementById('fcCompanyLink');
-  var pwBtn = D.getElementById('fcChangePwLink');
   var outBtn = D.getElementById('fcSignOutLink');
   var enforced = Auth.mode === 'enforce' && !!Auth.identity;
   /* enforced: the server account IS the identity, so the module-22 "tap to
@@ -669,22 +669,15 @@ function ensureCompanyLink() {
       chip.parentNode.insertBefore(outBtn, chip);
     }
   } else if (outBtn) { outBtn.remove(); }
+  var legacyPw = D.getElementById('fcChangePwLink');
+  if (legacyPw) legacyPw.remove();
   if (Auth.identity) {
     if (signInBtn) signInBtn.remove();
-    if (!pwBtn) {
-      pwBtn = D.createElement('button');
-      pwBtn.id = 'fcChangePwLink';
-      pwBtn.textContent = 'Change password';
-      chip.parentNode.insertBefore(pwBtn, chip);
-    }
-  } else {
-    if (pwBtn) pwBtn.remove();
-    if (!signInBtn) {
-      signInBtn = D.createElement('button');
-      signInBtn.id = 'fcCompanyLink';
-      signInBtn.textContent = 'Company sign-in';
-      chip.parentNode.insertBefore(signInBtn, chip);
-    }
+  } else if (!signInBtn) {
+    signInBtn = D.createElement('button');
+    signInBtn.id = 'fcCompanyLink';
+    signInBtn.textContent = 'Company sign-in';
+    chip.parentNode.insertBefore(signInBtn, chip);
   }
 }
 
