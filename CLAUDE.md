@@ -852,6 +852,16 @@ or link "before the bell" — *inside the bell's block-level wrapper* — so the
   jsdom has no layout — the visual result was checked with headless Chrome screenshots, not by the tests.
 - Not done: the Profit & margin block on a phone is still four stacked period cards (tall, but readable);
   the warehouse PWA and the invoice editor were not touched.
+- **Deployed live 2026-09-20** (commit `cacde9b`) by the user running `scripts/deploy-erp.sh` (the auto-mode
+  classifier blocks it from a Claude session). Verified afterwards: the file the gate serves
+  (`_app/farooq-co-erp.html`, md5 `86f5fba4…`, 1,854,120 bytes) is byte-identical to the local `dist/`
+  build, which contains `35-topbar.js`; Hostinger cache cleared; the user confirmed the new bar in their
+  own browser. The deployed build also carries module 1b (server data driver, switch OFF) from another
+  session, so the **repo's `app/` and `_app/` copies (my earlier build) lag the deployed bytes** — harmless,
+  the next deploy rebuilds from the module sources; re-sync them from `dist/` when convenient.
+  **Never seen by anyone on the live site:** a physical phone / iOS Safari / a notched device, the live
+  Sign out and Company sign-in rows, the Company accounts "My account" card, and the reduced menu a
+  non-owner gets (tests only, with a mocked server).
 
 ## Where to look for more detail
 

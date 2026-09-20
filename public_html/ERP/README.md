@@ -46,7 +46,7 @@ them.
 | `07-transactions.js` | Orders, quotations, transfers, receiving, adjustments, dispatch |
 | `08-classic-invoice.js` | The invoice laid out from `SInvoice.pdf` |
 | `09-paperwork.js` | Order, transfer, receipt, adjustment and dispatch notes; SMS settings |
-| `10-mobile.js` | Bottom navigation, stacked cards, the sheet picker, the fitted preview |
+| `10-mobile.js` | Bottom navigation, stacked cards, the sheet picker, the fitted preview, two-across dashboard tiles, sidebar collapse button |
 | `11-search.js` | The fuzzy Urdu/English index and the command palette |
 | `12-invoice-editor.js` | Editing an invoice by hand before it is exported, with autosave and revisions |
 | `13-reports.js` | The reporting engine, expenses, and the Excel writer |
@@ -67,9 +67,11 @@ them.
 | `28-areawise.js` | Area-wise collection: sales, collection and balance per shop, grouped by area |
 | `29-statement-of-account.js` | One Finance screen for either party's full ledger |
 | `30-payroll.js` | Employee list, monthly salary rate, and salary payments (MVP) |
-| `31-auth.js` | Server-checked accounts, sessions and permissions (Phase 2: observe mode) |
+| `31-auth.js` | Server-checked accounts, sessions and permissions; the change-password box (opened from Company accounts → My account) |
 | `32-milling.js` | Milling jobs — toll milling: wheat out, flour + chokar back, net settled into the mill's khata |
 | `33-invoice-search.js` | Invoice search — find an old invoice by number, customer, product, date or amount; paged list |
+| `34-accounts.js` | Company accounts screen — "My account" (change password) for everyone signed in, the staff list for the owner; who may open Payroll, Milling, Statements |
+| `35-topbar.js` | The top bar — one 58px row on every screen, the avatar account menu, no dead controls (warehouse picker and fake sync pill removed) |
 
 To rebuild `app/farooq-co-erp.html` and `app/index.html` after changing a module:
 
