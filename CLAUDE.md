@@ -948,6 +948,51 @@ or link "before the bell" — *inside the bell's block-level wrapper* — so the
   Sign out and Company sign-in rows, the Company accounts "My account" card, and the reduced menu a
   non-owner gets (tests only, with a mocked server).
 
+## The UI kit — no more browser chrome (2026-09-20)
+
+Request: "all scroll bars, drop downs, popups, alerts and other chrome default UIs — replace with our theme."
+New module **`36-ui-kit.js`** (`ERP.UI`, also `window.FcUI`). Everything the browser used to draw now wears the
+app's colours (derived from `--violet`, `--surface`, `--line`… with fallbacks, so dark mode follows for free):
+scrollbars (WebKit pseudo-elements; `scrollbar-color` in Firefox), dropdown lists, the date / month calendar,
+`confirm` / `prompt` / `alert` dialogs, `[title]` tooltips, checkboxes / radios, the file button, number
+spinners, search-clear, autofill wash, selection colour, `color-scheme`, and the phone address-bar colour
+(`theme-color`, also set on the launcher around the ERP when same-origin).
+
+- **The rule that keeps it safe: the real control stays in the page.** A `<select>` is still the real select
+  (value, `change`, `.focus()`, re-rendering, every test unchanged) — only the popup is ours; a date input keeps its
+  typeable segments — only clicking its calendar icon opens ours. Nothing is wrapped or moved, so existing CSS selectors
+  (`label.f select`, `.fld select`…) keep matching. Escape hatch: `data-fc-plain` on a field leaves it to the browser.
+  `<select multiple>` / `size>1` are left native.
+- **Dropdowns**: search box when there are more than 8 options (shop and product pickers hold hundreds), keyboard
+  (arrows, Home/End, type-ahead, Enter, Esc, Tab), option groups; on a phone (`≤640px` or coarse pointer) it is a bottom sheet.
+- **Dialogs are Promises**, not synchronous: `ERP.UI.confirm(q, {detail, okText, cancelText, tone})`,
+  `ERP.UI.prompt(q, {label, placeholder, required…})` (→ `string`, `''` = left blank, `null` = cancelled), `ERP.UI.alert`.
+  `tone: 'danger'` = red button and the SAFE button starts focused. All 13 `confirm()`/`prompt()` calls in the modules were
+  converted (`test-ui-kit.mjs` G2 fails if a native call comes back). The base app's own "Clear all data" `confirm()` is
+  intercepted in `36` (ask ours, then re-run the original click with its `confirm` answered).
+  **Test seam:** if a host has REPLACED `window.confirm/prompt/alert` with a non-native function (every existing
+  `test-*.mjs` does: `w.confirm = () => true`) that replacement is used and no dialog is drawn. A browser's own function is
+  the only thing the kit supersedes.
+- **Price editor (`21-settings.js`) is the one behaviour change**: a panel's `save()` must answer synchronously (an error string
+  keeps the panel open), so a modal can't sit inside it. "Selling below purchase price" now shows in the panel ("Nothing has been
+  saved yet. Press Save again to keep these prices anyway") and saving the *same figures* again confirms; changing them asks again.
+- The emergency overlays in `01b-server-db.js` ("Your last change was NOT saved") use the app's tokens with literal fallbacks
+  (they must still work if the app CSS never loaded).
+- **Warehouse app**: `build.py` injects the same file into `farooq-co-warehouse-pwa.html` and re-embeds it in the launcher
+  (`pwa:` blob; before, only the `erp:` blob was rebuilt). The kit reads whichever token names the host has; `.sel>select` keeps
+  the PWA's own chevron.
+- **Cannot be themed by any page, left native on purpose:** the OS file chooser, the print dialog, the browser's "Leave site?"
+  prompt (`beforeunload`, module 01/12). Firefox: the browser's own date field is left alone (the calendar hook needs
+  `::-webkit-calendar-picker-indicator`; `CSS.supports` decides — `FcUI.dateHook` overrides for tests).
+- Tests: `test-ui-kit.mjs` (160 checks: bare kit page + the real ERP + the PWA + the launcher blobs; an exit hook fails the run if a
+  promise never settles; mutation-checked with five deliberate breakages). **Verified in a real headless Chrome** (driven over the
+  DevTools protocol with real mouse and touch events, light + dark, desktop + 390px phone): computed scrollbar 11px / 99px radius,
+  real click opens the list, real tap opens the sheet, calendar icon opens ours while a segment click still types, tooltips on hover,
+  dialogs, checkboxes on Master data. **Not seen by anyone:** a physical iPhone / Android (whether `preventDefault` on the
+  emulated mousedown really stops the native picker on iOS Safari is unverified), Firefox, Safari desktop.
+- Pre-existing, not changed: in dark mode the filter pills on list screens have light borders (`--ink-2` in the base CSS — identical
+  with the kit removed).
+
 ## Where to look for more detail
 
 - **`docs/SERVER_DATA.md` — the current guide to the server-side data system (how it works, what users see, everyday operations, backups, how to change it, known limits). Start here for anything about where the data lives.**

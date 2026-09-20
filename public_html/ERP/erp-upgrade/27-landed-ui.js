@@ -541,11 +541,16 @@
     if ((t = e.target.closest('[data-lccancel]'))) {
       e.preventDefault();
       var id = t.dataset.lccancel;
-      var why = global.prompt ? global.prompt('Why is this being cancelled?') : 'Cancelled';
-      if (why === null) return;
-      ERP.Landed.cancel(id, why || 'No reason given')
-        .then(function () { say('Landed cost cancelled and the stock cost put back.'); })
-        .catch(function (err) { say((err && err.validation && err.validation[0]) || 'Could not cancel that.'); });
+      ERP.UI.prompt('Cancel this landed cost?', {
+        detail: 'The stock cost is put back the way it was. The reason is kept in the audit log.',
+        label: 'Reason', placeholder: 'Why is this being cancelled?',
+        okText: 'Cancel it', cancelText: 'Keep it', tone: 'danger'
+      }).then(function (why) {
+        if (why === null) return;
+        return ERP.Landed.cancel(id, why || 'No reason given')
+          .then(function () { say('Landed cost cancelled and the stock cost put back.'); })
+          .catch(function (err) { say((err && err.validation && err.validation[0]) || 'Could not cancel that.'); });
+      });
       return;
     }
     if ((t = e.target.closest('[data-patab]'))) {

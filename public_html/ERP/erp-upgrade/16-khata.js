@@ -672,10 +672,16 @@ D.addEventListener('click', function (e) {
   var rev = e.target.closest('[data-khreverse]');
   if (rev) {
     e.preventDefault();
-    var why = global.prompt('Why is this adjustment being reversed?');
-    if (why === null) return;
-    ERP.Adjustments.reverse(rev.dataset.khreverse, why || 'No reason given')
-      .then(function () { global.paint(); say('Adjustment reversed.'); });
+    var revId = rev.dataset.khreverse;
+    ERP.UI.prompt('Reverse this adjustment?', {
+      detail: 'The shop\u2019s balance goes back to what it was before. The reason is kept in the audit log.',
+      label: 'Reason', placeholder: 'Why is this adjustment being reversed?',
+      okText: 'Reverse it', cancelText: 'Keep it', tone: 'warn'
+    }).then(function (why) {
+      if (why === null) return;
+      return ERP.Adjustments.reverse(revId, why || 'No reason given')
+        .then(function () { global.paint(); say('Adjustment reversed.'); });
+    });
     return;
   }
   var pg = e.target.closest('[data-khpage]');

@@ -50,9 +50,12 @@ MODULES = [
     ("33-invoice-search.js", "INVOICE SEARCH — find an old invoice by number, customer, product, date or amount"),
     ("34-accounts.js",       "COMPANY ACCOUNTS — the owner's screen for server accounts; who may open Payroll, Milling, Statements"),
     ("35-topbar.js",        "TOP BAR — one clean row on every screen, account menu, no dead controls"),
+    ("36-ui-kit.js",        "UI KIT — themed scrollbars, dropdowns, calendar, dialogs, tooltips and controls in place of the browser's own"),
 ]
 
 MARKER = "<!-- FAROOQ & CO ERP — INVOICE, RECEIPT & DATABASE UPGRADE -->"
+KIT_MARKER = "<!-- FAROOQ & CO — UI KIT (shared with the Warehouse app) -->"
+KIT = "36-ui-kit.js"
 HEAD_MARKER = "<!-- FAROOQ & CO ERP — PRE-BOOT GUARD -->"
 PREBOOT = "00a-preboot.js"
 
@@ -88,6 +91,35 @@ def inject(html: str, payload: str) -> str:
     return html[:idx] + payload + "\n\n" + html[idx:]
 
 
+def inject_kit(html: str) -> str:
+    """The Warehouse app is a separate page; it gets the same UI kit so its
+    scrollbars, dropdowns and tooltips match. The kit is host-agnostic (it reads
+    the host's own colour tokens), so it is added unchanged, and any earlier copy
+    is stripped first so the build stays repeatable."""
+    if KIT_MARKER in html:
+        start = html.index(KIT_MARKER)
+        end = html.index("</script>", start) + len("</script>")
+        html = html[:start] + html[end:]
+    kit = (MODDIR / KIT).read_text(encoding="utf-8")
+    if "</script" in kit.lower():
+        sys.exit(f"{KIT} contains a literal </script> and would break the page")
+    idx = html.rindex("</body>")
+    return html[:idx] + KIT_MARKER + "<script>\n" + kit + "\n</script>\n" + html[idx:]
+
+
+def embed(launcher: str, key: str, title: str, page: str) -> str:
+    b64 = base64.b64encode(page.encode("utf-8")).decode("ascii")
+    out, n = re.subn(
+        r"(" + key + r":\{title:'" + title + r"',b64:')[^']*(')",
+        lambda m: m.group(1) + b64 + m.group(2),
+        launcher,
+        count=1,
+    )
+    if n != 1:
+        sys.exit(f"could not find the {title} blob in index.html")
+    return out
+
+
 def main() -> None:
     erp = (BUILD / "farooq-co-erp.html").read_text(encoding="utf-8")
     payload = bundle()
@@ -100,21 +132,15 @@ def main() -> None:
     for name, _ in MODULES:
         (moddir / name).write_text((MODDIR / name).read_text(encoding="utf-8"), encoding="utf-8")
 
-    # rebuild the launcher with the upgraded ERP embedded
+    # rebuild the launcher with the upgraded ERP and the Warehouse app embedded
     launcher = (BUILD / "index.html").read_text(encoding="utf-8")
-    b64 = base64.b64encode(upgraded.encode("utf-8")).decode("ascii")
-    new_launcher, n = re.subn(
-        r"(erp:\{title:'Office',b64:')[^']*(')",
-        lambda m: m.group(1) + b64 + m.group(2),
-        launcher,
-        count=1,
-    )
-    if n != 1:
-        sys.exit("could not find the ERP blob in index.html")
+    pwa = inject_kit((BUILD / "farooq-co-warehouse-pwa.html").read_text(encoding="utf-8"))
+    new_launcher = embed(embed(launcher, "erp", "Office", upgraded), "pwa", "Warehouse", pwa)
     (OUT / "index.html").write_text(new_launcher, encoding="utf-8")
 
-    # the PWA and homepage are carried through unchanged
-    for name in ("farooq-co-warehouse-pwa.html", "farooq-and-co-homepage.html", "farooq-erp-data.js"):
+    # the Warehouse app on its own (with the UI kit); the homepage is carried through unchanged
+    (OUT / "farooq-co-warehouse-pwa.html").write_text(pwa, encoding="utf-8")
+    for name in ("farooq-and-co-homepage.html", "farooq-erp-data.js"):
         (OUT / name).write_text((BUILD / name).read_text(encoding="utf-8"), encoding="utf-8")
 
     print(f"ERP      {len(erp):>9,} -> {len(upgraded):>9,} bytes  (+{len(payload):,} upgrade)")

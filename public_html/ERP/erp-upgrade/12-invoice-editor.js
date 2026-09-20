@@ -570,12 +570,17 @@ var Editor = ERP.Editor = {
     });
   },
   revert: function () {
-    if (!global.confirm('Undo every manual edit and go back to the invoice as recorded?')) return;
-    var id = Editor.invoiceId;
-    Edits.clear(id).then(function () {
-      Edits.ensure(id);
-      Editor.render();
-      say('Manual edits removed. The invoice prints as recorded again.');
+    global.ERP.UI.confirm('Undo every manual edit?', {
+      detail: 'The invoice goes back to exactly as it was recorded.',
+      okText: 'Undo edits', cancelText: 'Keep my edits', tone: 'warn'
+    }).then(function (ok) {
+      if (!ok) return;
+      var id = Editor.invoiceId;
+      return Edits.clear(id).then(function () {
+        Edits.ensure(id);
+        Editor.render();
+        say('Manual edits removed. The invoice prints as recorded again.');
+      });
     });
   }
 };

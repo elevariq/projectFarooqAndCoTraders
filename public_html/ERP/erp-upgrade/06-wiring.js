@@ -753,9 +753,13 @@ D.addEventListener('click', function (e) {
     if (a === 'save') { B.save(false); return; }
     if (a === 'draft') { B.save(true); return; }
     if (a === 'cancel') {
-      if (!B.dirty || global.confirm('Discard this ' + (B.mode === 'sale' ? 'invoice' : 'purchase') + '?')) {
-        B.draft = null; global.go(B.mode === 'sale' ? 'invoices' : 'purchases');
-      }
+      var leave = function () { B.draft = null; global.go(B.mode === 'sale' ? 'invoices' : 'purchases'); };
+      if (!B.dirty) { leave(); return; }
+      var what = B.mode === 'sale' ? 'invoice' : 'purchase';
+      ERP.UI.confirm('Discard this ' + what + '?', {
+        detail: 'Everything you have entered on it will be lost.',
+        okText: 'Discard', cancelText: 'Keep editing', tone: 'danger'
+      }).then(function (ok) { if (ok) leave(); });
       return;
     }
     if (a === 'openpicker') {
@@ -985,8 +989,12 @@ D.addEventListener('change', function (e) {
   }
   if (el.dataset.fcrestore !== undefined && el.files && el.files[0]) {
     var file = el.files[0];
-    if (!global.confirm('Restore from "' + file.name + '"? A backup of the current data will be downloaded first, ' +
-        'then the records in this file will be written over the current ones.')) { el.value = ''; return; }
+    ERP.UI.confirm('Restore from "' + file.name + '"?', {
+      detail: 'A backup of the current data will be downloaded first, then the records in this file ' +
+        'will be written over the current ones.',
+      okText: 'Restore', cancelText: 'Cancel', tone: 'warn'
+    }).then(function (ok) {
+    if (!ok) { el.value = ''; return; }
     doBackup(true).then(function () {
       var r = new global.FileReader();
       r.onload = function () {
@@ -1015,6 +1023,7 @@ D.addEventListener('change', function (e) {
         });
       };
       r.readAsText(file);
+    });
     });
     return;
   }
@@ -1069,13 +1078,17 @@ function editInvoice(id) {
   var inv = ERP.Invoices.byId(id);
   if (!inv) { say('Invoice not found.'); return; }
   if (inv.status === 'CANCELLED') { say('A cancelled invoice cannot be edited. Duplicate it instead.'); return; }
-  if (inv.status !== 'DRAFT') {
-    if (!global.confirm('This invoice is confirmed. Editing it will adjust stock and the customer balance by the ' +
-        'difference, and the change is recorded in the audit log. Continue?')) return;
-  }
-  var d = ERP.Invoices.toDraft(inv);
-  d.id = inv.id; d.clientOpId = inv.clientOpId; d.revision = inv.revision || 0; d.existing = true;
-  B.start('sale', d);
+  var open = function () {
+    var d = ERP.Invoices.toDraft(inv);
+    d.id = inv.id; d.clientOpId = inv.clientOpId; d.revision = inv.revision || 0; d.existing = true;
+    B.start('sale', d);
+  };
+  if (inv.status === 'DRAFT') { open(); return; }
+  ERP.UI.confirm('Edit a confirmed invoice?', {
+    detail: 'Editing it will adjust stock and the customer balance by the difference, and the change ' +
+      'is recorded in the audit log.',
+    okText: 'Continue editing', cancelText: 'Cancel', tone: 'warn'
+  }).then(function (ok) { if (ok) open(); });
 }
 /* Edit a purchase that is already in stock. The edit screen is the same one
    used to receive stock, started from the saved purchase; saving re-states the
@@ -1084,11 +1097,16 @@ function editPurchase(id) {
   var pu = ERP.Purchases.byId(id);
   if (!pu) { say('Purchase not found.'); return; }
   if (!ERP.Purchases.canEdit(pu)) { say('A cancelled purchase cannot be edited.'); return; }
-  if (!global.confirm('This purchase is already in stock. Editing it will adjust stock and the supplier balance by the ' +
-      'difference, and the change is recorded in the audit log. Continue?')) return;
-  var d = ERP.Purchases.toDraft(pu);
-  d.id = pu.id; d.existing = true;
-  B.start('purchase', d);
+  ERP.UI.confirm('Edit a purchase that is already in stock?', {
+    detail: 'Editing it will adjust stock and the supplier balance by the difference, and the change ' +
+      'is recorded in the audit log.',
+    okText: 'Continue editing', cancelText: 'Cancel', tone: 'warn'
+  }).then(function (ok) {
+    if (!ok) return;
+    var d = ERP.Purchases.toDraft(pu);
+    d.id = pu.id; d.existing = true;
+    B.start('purchase', d);
+  });
 }
 function changeInvoiceShop(id) {
   var inv = ERP.Invoices.byId(id);
@@ -1105,12 +1123,17 @@ function duplicateInvoice(id) {
   say('New draft created from ' + d.duplicatedFrom + '. It takes its own number when you save.');
 }
 function cancelInvoice(id) {
-  var reason = global.prompt('Why is this invoice being cancelled? (recorded in the audit log)');
-  if (reason === null) return;
-  ERP.Invoices.cancel(id, reason || 'No reason given').then(function (inv) {
-    ERP.Viewer.close(); global.paint();
-    say(inv.invoiceNumber + ' cancelled. Stock has been returned and the balance reversed.');
-  }).catch(function () { say('The invoice could not be cancelled.'); });
+  ERP.UI.prompt('Cancel this invoice?', {
+    detail: 'Stock is returned and the shop\u2019s balance is reversed. The reason is recorded in the audit log.',
+    label: 'Reason', placeholder: 'Why is this invoice being cancelled?',
+    okText: 'Cancel invoice', cancelText: 'Keep invoice', tone: 'danger'
+  }).then(function (reason) {
+    if (reason === null) return;
+    return ERP.Invoices.cancel(id, reason || 'No reason given').then(function (inv) {
+      ERP.Viewer.close(); global.paint();
+      say(inv.invoiceNumber + ' cancelled. Stock has been returned and the balance reversed.');
+    }).catch(function () { say('The invoice could not be cancelled.'); });
+  });
 }
 ERP.actions = { editInvoice: editInvoice, duplicateInvoice: duplicateInvoice, cancelInvoice: cancelInvoice,
                 changeInvoiceShop: changeInvoiceShop, editPurchase: editPurchase, backup: doBackup };

@@ -72,6 +72,7 @@ them.
 | `33-invoice-search.js` | Invoice search — find an old invoice by number, customer, product, date or amount; paged list |
 | `34-accounts.js` | Company accounts screen — "My account" (change password) for everyone signed in, the staff list for the owner; who may open Payroll, Milling, Statements |
 | `35-topbar.js` | The top bar — one 58px row on every screen, the avatar account menu, no dead controls (warehouse picker and fake sync pill removed) |
+| `36-ui-kit.js` | The UI kit — themed scrollbars, searchable dropdowns, calendar / month picker, `ERP.UI.confirm/prompt/alert` dialogs, tooltips, checkboxes/radios/file button, phone address-bar colour; replaces the browser's own versions. Host-agnostic: the build also injects it into the Warehouse app |
 
 To rebuild `app/farooq-co-erp.html` and `app/index.html` after changing a module:
 

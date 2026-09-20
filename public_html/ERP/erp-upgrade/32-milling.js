@@ -656,11 +656,16 @@
     if ((t = e.target.closest('[data-millcancel]'))) {
       e.preventDefault();
       var id2 = t.dataset.millcancel;
-      var why = global.prompt ? global.prompt('Why is this milling job being cancelled?') : 'Cancelled';
-      if (why === null) return;
-      Milling.cancel(id2, why || 'No reason given').then(function () {
-        global.paint(); say('Milling job cancelled and the stock movements reversed.');
-      }).catch(function (err) { say((err && err.validation && err.validation[0]) || 'Could not cancel that.'); });
+      ERP.UI.prompt('Cancel this milling job?', {
+        detail: 'The stock movements are reversed. The reason is kept in the audit log.',
+        label: 'Reason', placeholder: 'Why is this milling job being cancelled?',
+        okText: 'Cancel job', cancelText: 'Keep job', tone: 'danger'
+      }).then(function (why) {
+        if (why === null) return;
+        return Milling.cancel(id2, why || 'No reason given').then(function () {
+          global.paint(); say('Milling job cancelled and the stock movements reversed.');
+        }).catch(function (err) { say((err && err.validation && err.validation[0]) || 'Could not cancel that.'); });
+      });
       return;
     }
     if (e.target.closest('[data-millexcel]')) {

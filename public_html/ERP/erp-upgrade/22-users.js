@@ -474,10 +474,16 @@ D.addEventListener('click', function (e) {
   }
   if ((t = e.target.closest('[data-userarchive]'))) {
     e.preventDefault();
-    if (!global.confirm('Switch this account off? Their name stays on everything they recorded.')) return;
-    Users.archive(t.dataset.userarchive, 'Switched off from Settings')
-      .then(function () { global.paint(); say('Account switched off.'); })
-      .catch(function (err) { say(err && err.validation ? err.validation[0] : 'Could not do that.'); });
+    var archId = t.dataset.userarchive;
+    ERP.UI.confirm('Switch this account off?', {
+      detail: 'Their name stays on everything they recorded.',
+      okText: 'Switch off', cancelText: 'Keep it on', tone: 'danger'
+    }).then(function (ok) {
+      if (!ok) return;
+      return Users.archive(archId, 'Switched off from Settings')
+        .then(function () { global.paint(); say('Account switched off.'); })
+        .catch(function (err) { say(err && err.validation ? err.validation[0] : 'Could not do that.'); });
+    });
     return;
   }
   if ((t = e.target.closest('[data-userrestore]'))) {

@@ -295,12 +295,18 @@ function submitForm() {
 
 function setActive(id, on) {
   var u = findUser(id); if (!u) return;
-  if (!on && !global.confirm('Switch off ' + u.displayName + '? They will be signed out and cannot sign in again until you switch them back on.')) return;
-  request('users.php', { method: 'POST', body: { action: on ? 'restore' : 'archive', id: id } }).then(function (r) {
-    if (r.status === 200) { say(u.displayName + (on ? ' switched on.' : ' switched off.')); return load(); }
-    var d = r.data || {};
-    say((d.validation && d.validation[0]) || d.error || 'Could not do that.');
-  }).catch(function () { say('Could not reach the server. Nothing was changed.'); });
+  var go = function () {
+    request('users.php', { method: 'POST', body: { action: on ? 'restore' : 'archive', id: id } }).then(function (r) {
+      if (r.status === 200) { say(u.displayName + (on ? ' switched on.' : ' switched off.')); return load(); }
+      var d = r.data || {};
+      say((d.validation && d.validation[0]) || d.error || 'Could not do that.');
+    }).catch(function () { say('Could not reach the server. Nothing was changed.'); });
+  };
+  if (on) { go(); return; }
+  global.ERP.UI.confirm('Switch off ' + u.displayName + '?', {
+    detail: 'They will be signed out and cannot sign in again until you switch them back on.',
+    okText: 'Switch off', cancelText: 'Keep on', tone: 'danger'
+  }).then(function (ok) { if (ok) go(); });
 }
 
 D.addEventListener('click', function (e) {

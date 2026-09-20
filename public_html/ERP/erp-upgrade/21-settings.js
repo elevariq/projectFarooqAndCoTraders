@@ -347,6 +347,7 @@ ERP.reorderLevelOf = function (productId) {
    3 · THE PRODUCT PRICE PANEL
    ══════════════════════════════════════════════════════════════════════════ */
 var PRICE_FOR = null;
+var PRICE_WARNED = '';      /* the figures a warning was already shown for; saving them again confirms */
 ERP.openPriceEditor = function (productId) { PRICE_FOR = productId; global.openPanel('prices'); };
 
 global.PANELS.prices = {
@@ -406,9 +407,14 @@ global.PANELS.prices = {
       .forEach(function (k) { if (v[k] !== undefined && v[k] !== '') values[k] = v[k]; });
     var pre = Prices.validate(pid, values);
     if (pre.errors.length) return pre.errors[0];
-    if (pre.warnings.length && !global.confirm(pre.warnings[0] + '\n\nSave anyway?')) {
-      return 'Nothing was changed.';
+    if (pre.warnings.length) {
+      var ack = pid + '|' + JSON.stringify(values);
+      if (PRICE_WARNED !== ack) {
+        PRICE_WARNED = ack;
+        return pre.warnings[0] + ' Nothing has been saved yet. Press Save again to keep these prices anyway.';
+      }
     }
+    PRICE_WARNED = '';
     Prices.set(pid, values, { reason: v.reason }).then(function (r) {
       global.paint();
       if (r.unchanged) { say('Those are the prices already — nothing changed.'); return; }
@@ -805,9 +811,15 @@ D.addEventListener('click', function (e) {
   }
   if ((t = e.target.closest('[data-streject]'))) {
     e.preventDefault();
-    var why = global.prompt('Why is this price change being rejected?');
-    if (why === null) return;
-    Prices.reject(t.dataset.streject, why).then(function () { global.paint(); say('Rejected.'); });
+    var rejId = t.dataset.streject;
+    ERP.UI.prompt('Reject this price change?', {
+      detail: 'The old prices stay in force, and the reason you give is recorded.',
+      label: 'Reason', placeholder: 'Why is this price change being rejected?',
+      okText: 'Reject', cancelText: 'Keep waiting', tone: 'danger'
+    }).then(function (why) {
+      if (why === null) return;
+      return Prices.reject(rejId, why).then(function () { global.paint(); say('Rejected.'); });
+    });
     return;
   }
   if ((t = e.target.closest('[data-editprices]'))) {

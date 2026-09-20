@@ -129,17 +129,23 @@ function overlay(id, title, body, buttons, blocking) {
   var old = D.getElementById(id); if (old) old.parentNode.removeChild(old);
   var el = D.createElement('div'); el.id = id;
   el.setAttribute('role', 'alertdialog');
+  /* These notices must work even if the app's stylesheet never loaded, so every
+     colour is the app's own token WITH a literal fallback — on-brand (and dark-mode
+     aware) when the theme is there, still readable when it is not. */
+  var FONT = 'font-family:var(--font,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif)';
+  var ACCENT = 'linear-gradient(150deg,#8B5CF6,var(--violet-600,#6D28D9))';
   el.style.cssText = blocking
-    ? 'position:fixed;inset:0;z-index:2147483000;background:rgba(15,23,42,.72);display:flex;align-items:center;justify-content:center;padding:16px;font-family:system-ui,Segoe UI,Arial,sans-serif'
-    : 'position:fixed;left:0;right:0;bottom:0;z-index:2147482000;background:#0f766e;color:#fff;padding:10px 16px;display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap;font:14px system-ui,Segoe UI,Arial,sans-serif';
+    ? 'position:fixed;inset:0;z-index:2147483000;background:rgba(14,11,24,.6);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:16px;' + FONT
+    : 'position:fixed;left:0;right:0;bottom:0;z-index:2147482000;background:' + ACCENT + ';color:#fff;padding:11px 16px calc(11px + env(safe-area-inset-bottom,0px));display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap;font-size:14px;' + FONT;
   var btns = (buttons || []).map(function (b, i) {
     return '<button type="button" data-fcsd="' + i + '" style="' + (blocking
-      ? 'padding:10px 18px;border:0;border-radius:8px;background:#0f766e;color:#fff;font-size:15px;cursor:pointer;margin-top:14px;margin-right:8px'
-      : 'padding:6px 14px;border:0;border-radius:6px;background:#fff;color:#0f766e;font-size:14px;cursor:pointer') + '">' + esc(b.label) + '</button>';
+      ? 'padding:0 20px;min-height:44px;border:0;border-radius:11px;background:' + ACCENT + ';color:#fff;font:inherit;font-size:15px;font-weight:700;cursor:pointer;margin-top:18px;margin-right:8px;box-shadow:0 6px 18px rgba(124,58,237,.26)'
+      : 'padding:0 16px;min-height:34px;border:0;border-radius:9px;background:#fff;color:var(--violet-600,#6D28D9);font:inherit;font-size:14px;font-weight:700;cursor:pointer') + '">' + esc(b.label) + '</button>';
   }).join('');
   el.innerHTML = blocking
-    ? '<div style="background:#fff;color:#0f172a;max-width:460px;width:100%;border-radius:14px;padding:22px 24px;box-shadow:0 20px 50px rgba(0,0,0,.35)">' +
-        '<h2 style="margin:0 0 8px;font-size:19px">' + esc(title) + '</h2><p style="margin:0;line-height:1.5;font-size:15px">' + esc(body) + '</p>' + btns + '</div>'
+    ? '<div style="background:var(--surface,#fff);color:var(--ink,#12111A);max-width:460px;width:100%;border:1px solid var(--line,#E8E8EE);border-radius:18px;padding:24px 24px 20px;box-shadow:var(--sh-lg,0 24px 60px rgba(14,11,24,.35))">' +
+        '<h2 style="margin:0 0 8px;font-size:18px;font-weight:800;letter-spacing:-.02em;line-height:1.3">' + esc(title) + '</h2>' +
+        '<p style="margin:0;line-height:1.55;font-size:14.5px;color:var(--muted,#5B5F72)">' + esc(body) + '</p>' + btns + '</div>'
     : '<span><b>' + esc(title) + '</b> ' + esc(body) + '</span>' + btns;
   D.body.appendChild(el);
   Array.prototype.forEach.call(el.querySelectorAll('[data-fcsd]'), function (btn) {
