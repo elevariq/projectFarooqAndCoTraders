@@ -429,7 +429,7 @@ received* up above… but we also give some customers cash, they take it to the 
 "Pay a shop" sits beside "Receive payment" in the Customer payments header, and a new **Paid to shops** list (date, shop, region,
 method, amount, reference, Voucher button; `Payments.refunds()` — payments to shops were previously on no list except the raw
 "Receipts & vouchers" log) sits above Supplier payments. Both header buttons go through `data-fcpayopen`, which clears `PAY_FOR` /
-`REFUND_FOR` first so a shop chosen earlier on some other page can't be pre-selected on a money screen. `test-pay-a-shop.mjs` is 68
+`REFUND_FOR` first so a shop chosen earlier on some other page can't be pre-selected on a money screen. `test-pay-a-shop.mjs` is 64
 checks (S1–S17 the screen, B1–B9 below). Second pass: the Pay-a-shop panel now shows "→ after this payment: X" as you type (and "the shop will
 owe you X" when a payment flips the account); `Payments._write` stored `balanceAfter` **subtracted for a payment to a shop** (it should add —
 paying a shop raises what it owes; nothing reads the field, older refunds keep the wrong stored value, fixed for new ones). Looked at in real
