@@ -91,31 +91,65 @@ var Staff = ERP.Staff = {
 /* ══════════════════════════════════════════════════════════════════════════
    AREAS — editable, with a salesman and no hard-coded list
    ══════════════════════════════════════════════════════════════════════════ */
+/* A deleted area is not removed from the list — it stays behind, hidden, as
+   { deleted: true, active: false }. The base app re-seeds its built-in areas
+   and every browser keeps a saved copy, and the merge from the database only
+   ever adds, so a plain removal would come back the next time any other
+   device opened the app (and be written straight back to the server). The
+   marker travels through the same channels the area did, so it wins
+   everywhere. `all()` / `active()` / `byId()` never show it. */
+function areaNorm(x) { return String(x === null || x === undefined ? '' : x).toLowerCase().replace(/\s+/g, ' ').trim(); }
+function areaTrim(x) { return String(x === null || x === undefined ? '' : x).replace(/\s+/g, ' ').trim(); }
+/* keep the base app's own saved copy (localStorage) in step with what was just saved */
+function baseSaved() { try { if (ERP.markMasterDirty) ERP.markMasterDirty(); if (global.dbSave) global.dbSave(); } catch (e) {} }
+
 var Areas = ERP.Areas = {
-  all: function () { return global.REGIONS || []; },
+  raw: function () { return global.REGIONS || (global.REGIONS = []); },
+  all: function () { return Areas.raw().filter(function (r) { return !r.deleted; }); },
   active: function () { return Areas.all().filter(function (r) { return r.active !== false; }); },
   byId: function (id) { return Areas.all().filter(function (r) { return r.id === id; })[0] || null; },
   customers: function (id) { return (global.CUSTOMERS || []).filter(function (c) { return c.region === id; }); },
+  salesmenOf: function (id) { return Staff.all().filter(function (s) { return (s.regionIds || []).indexOf(id) > -1; }); },
+  newId: function (en) {
+    var slug = areaNorm(en).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    var id = slug ? 'rg-' + slug : '';
+    /* an Urdu-only name has no slug, and a name can match an id already taken
+       (including by a deleted area) — either way take a fresh unique id */
+    if (!id || Areas.raw().some(function (r) { return r.id === id; })) id = FDB.uid('rg');
+    return id;
+  },
 
+  /* Add (no id) or rename (id). A field left out of `o` is kept as it was; a
+     field left blank falls back to the other language, as the base app's
+     own "Add region" does. */
   save: function (o) {
-    var errs = [];
-    if (!o.en && !o.ur) errs.push('Give the area a name.');
-    var norm = function (x) { return String(x || '').toLowerCase().replace(/\s+/g, ' ').trim(); };
-    var clash = Areas.all().filter(function (r) {
-      return r.id !== o.id && (norm(r.en) === norm(o.en) && norm(o.en)) ;
-    });
-    if (clash.length) errs.push('An area called “' + o.en + '” already exists.');
-    if (errs.length) return Promise.reject({ validation: errs });
     var existing = o.id ? Areas.byId(o.id) : null;
-    var rec = Object.assign({ id: o.id || ('rg-' + norm(o.en).replace(/[^a-z0-9]+/g, '-')) },
+    var en = o.en === undefined ? (existing ? existing.en : '') : areaTrim(o.en);
+    var ur = o.ur === undefined ? (existing ? existing.ur : '') : areaTrim(o.ur);
+    var errs = [];
+    if (!en && !ur) errs.push('Give the area a name.');
+    if (!en) en = ur;
+    if (!ur) ur = en;
+    if (!errs.length) {
+      /* only a name that is being changed can clash — an older duplicate that
+         was already there must not stop someone editing the other field */
+      var enNew = !existing || areaNorm(en) !== areaNorm(existing.en);
+      var urNew = !existing || areaNorm(ur) !== areaNorm(existing.ur);
+      var others = Areas.all().filter(function (r) { return !existing || r.id !== existing.id; });
+      var dupEn = enNew && others.some(function (r) { return areaNorm(r.en) === areaNorm(en); });
+      var dupUr = urNew && others.some(function (r) { return areaNorm(r.ur) === areaNorm(ur); });
+      if (dupEn || dupUr) errs.push('An area called “' + (dupEn ? en : ur) + '” already exists.');
+    }
+    if (errs.length) return Promise.reject({ validation: errs });
+    var rec = Object.assign({ id: o.id || Areas.newId(en) },
       existing || {}, {
-        en: o.en || (existing && existing.en) || '', ur: o.ur || (existing && existing.ur) || '',
+        en: en, ur: ur,
         active: o.active === undefined ? (existing ? existing.active !== false : true) : !!o.active,
         updatedAt: nowISO()
       });
     return FDB.tx(['regions', 'auditLog'], function (api) {
       api.put('regions', rec);
-      var list = Areas.all();
+      var list = Areas.raw();
       var ix = list.map(function (r) { return r.id; }).indexOf(rec.id);
       if (ix > -1) list[ix] = rec; else list.push(rec);
       ERP.Audit.write(api, {
@@ -124,6 +158,66 @@ var Areas = ERP.Areas = {
         newValues: { en: rec.en, ur: rec.ur, active: rec.active }
       });
       return rec;
+    }).then(function (r) { baseSaved(); return r; });
+  },
+
+  /* Delete an area. Shops cannot be left without one, so if any are in it the
+     caller must say where they go (`moveTo`); they move in the same save as the
+     delete, so it either all happens or none of it does. Invoices and other
+     past documents keep the area name they were made with. */
+  remove: function (id, opts) {
+    opts = opts || {};
+    if (ERP.Can && !ERP.Can('MASTER_DATA_ARCHIVE')) {
+      return Promise.reject({ validation: ['Only the owner or a manager can delete an area.'] });
+    }
+    var r = Areas.byId(id);
+    if (!r) return Promise.reject({ validation: ['That area no longer exists.'] });
+    var shops = Areas.customers(id);
+    var men = Areas.salesmenOf(id);
+    var target = null;
+    if (shops.length) {
+      if (!opts.moveTo) {
+        return Promise.reject({ validation: [shops.length + ' shop' + (shops.length === 1 ? ' is' : 's are') +
+          ' in this area. Choose the area to move ' + (shops.length === 1 ? 'it' : 'them') + ' to.'] });
+      }
+      target = Areas.byId(opts.moveTo);
+      if (!target || target.id === id || target.active === false) {
+        return Promise.reject({ validation: ['Choose a different, active area to move the shops to.'] });
+      }
+    }
+    var stamp = nowISO();
+    var was = {
+      area: { active: r.active, deleted: r.deleted, deletedAt: r.deletedAt, updatedAt: r.updatedAt },
+      shops: shops.map(function (c) { return { c: c, region: c.region, assumed: c.regionAssumed, at: c.updatedAt }; }),
+      men: men.map(function (s) { return { s: s, ids: (s.regionIds || []).slice(), at: s.updatedAt }; })
+    };
+    return FDB.tx(['regions', 'customers', 'salesmen', 'auditLog'], function (api) {
+      shops.forEach(function (c) {
+        c.region = target.id; c.regionAssumed = false; c.updatedAt = stamp;
+        api.put('customers', c);
+      });
+      men.forEach(function (s) {
+        s.regionIds = (s.regionIds || []).filter(function (x) { return x !== id; }); s.updatedAt = stamp;
+        api.put('salesmen', s);
+      });
+      r.deleted = true; r.active = false; r.deletedAt = stamp; r.updatedAt = stamp;
+      api.put('regions', r);
+      ERP.Audit.write(api, {
+        action: 'Area deleted', entity: 'Region', entityId: id, ref: r.en,
+        oldValues: { en: r.en, ur: r.ur, shops: shops.length, salesmen: men.map(function (s) { return s.name; }) },
+        newValues: { movedTo: target ? target.id : null, shopIds: shops.map(function (c) { return c.id; }) }
+      });
+      return { area: r, moved: shops.length, movedTo: target, unassigned: men.length };
+    }).then(function (res) {
+      if (ERP.Mirror && ERP.Mirror.refresh) ERP.Mirror.refresh();
+      baseSaved();
+      return res;
+    }, function (err) {
+      /* the save did not go through — put the screen's copy back as it was */
+      Object.assign(r, was.area);
+      was.shops.forEach(function (x) { x.c.region = x.region; x.c.regionAssumed = x.assumed; x.c.updatedAt = x.at; });
+      was.men.forEach(function (x) { x.s.regionIds = x.ids; x.s.updatedAt = x.at; });
+      throw err;
     });
   },
   archive: function (id, on) {
@@ -515,6 +609,8 @@ if (global.PAGEMETA) {
     'Every shop belongs to an area, and every area has someone who collects from it.'];
 }
 
+function canDeleteArea() { return !ERP.Can || ERP.Can('MASTER_DATA_ARCHIVE'); }
+
 global.PAGES.areas = function () {
   var areas = Areas.all();
   var staff = Staff.all();
@@ -542,6 +638,7 @@ global.PAGES.areas = function () {
             '<button class="btn sm" data-collect="' + r.id + '">Collection sheet</button>' +
             '<button class="btn sm" data-areaarchive="' + r.id + '">' +
               (r.active === false ? 'Restore' : 'Archive') + '</button>' +
+            (canDeleteArea() ? '<button class="btn sm" data-areadelete="' + r.id + '">Delete</button>' : '') +
           '</td></tr>';
       }).join('') + '</tbody></table></div></div></div>' +
 
@@ -577,7 +674,7 @@ global.PAGES.areas = function () {
 /* ══════════════════════════════════════════════════════════════════════════
    PANELS
    ══════════════════════════════════════════════════════════════════════════ */
-var EDIT = { area: null, salesman: null, supplier: null, product: null, customer: null, assignArea: null };
+var EDIT = { area: null, delArea: null, salesman: null, supplier: null, product: null, customer: null, assignArea: null };
 
 global.PANELS.area = {
   t: 'Area', s: 'Add or rename an area', cta: 'Save area',
@@ -585,15 +682,63 @@ global.PANELS.area = {
     var r = EDIT.area ? Areas.byId(EDIT.area) : null;
     return '<div class="f2">' +
       '<label class="f"><span>Name (English)</span><input data-f="en" value="' + esc(r ? r.en : '') + '"></label>' +
-      '<label class="f"><span>Name (Urdu)</span><input data-f="ur" value="' + esc(r ? r.ur : '') + '"></label></div>' +
+      '<label class="f"><span>Name (Urdu)</span><input data-f="ur" dir="rtl" lang="ur" value="' + esc(r ? r.ur : '') + '"></label></div>' +
       (r ? '<div class="banner info">' + I('alert') + '<div><p>' + Areas.customers(r.id).length +
-        ' shops are in this area. Renaming it does not move them.</p></div></div>' : '');
+        ' shops are in this area. Renaming it does not move them, and invoices already made keep the name they were made with.</p></div></div>'
+        : '<p class="hint">Give the name in English, Urdu, or both.</p>');
   },
   save: function (v) {
-    Areas.save({ id: EDIT.area, en: v.en, ur: v.ur }).then(function () {
-      EDIT.area = null; global.paint(); say('Area saved.');
+    var was = EDIT.area;
+    Areas.save({ id: was, en: v.en, ur: v.ur }).then(function () {
+      EDIT.area = null; global.paint(); say(was ? 'Area renamed.' : 'Area added.');
     }).catch(function (e) { say(e && e.validation ? e.validation[0] : 'Could not save the area.'); });
     return { msg: 'Saving…' };
+  }
+};
+
+/* the base app's own "Add region" buttons (Shops page, Settings) open this
+   panel; it now adds through the same code as the Areas screen */
+global.PANELS.region = {
+  t: 'Add region', s: 'A new supply area', cta: 'Save region',
+  f: function () { EDIT.area = null; return global.PANELS.area.f(); },
+  save: function (v) { EDIT.area = null; return global.PANELS.area.save(v); }
+};
+
+global.PANELS.deletearea = {
+  t: 'Delete area', s: 'Remove an area that is no longer used', cta: 'Delete area',
+  f: function () {
+    var r = EDIT.delArea ? Areas.byId(EDIT.delArea) : null;
+    if (!r) return '<p class="hint">That area no longer exists.</p>';
+    var shops = Areas.customers(r.id).length, men = Areas.salesmenOf(r.id);
+    var others = Areas.active().filter(function (x) { return x.id !== r.id; });
+    var out = '<div class="banner warn">' + I('alert') + '<div><b>' + esc(r.en) + ' — ' + esc(r.ur) + '</b>' +
+      '<p>This area will be removed from every list. Invoices and other documents already made keep the area name they were made with.</p></div></div>';
+    if (shops && !others.length) {
+      return out + '<div class="banner warn">' + I('alert') + '<div><b>Nowhere to move its shops</b>' +
+        '<p>' + shops + ' shop' + (shops === 1 ? ' is' : 's are') + ' in this area and there is no other active area. Add another area first.</p></div></div>';
+    }
+    out += shops
+      ? '<label class="f"><span>Move its ' + shops + ' shop' + (shops === 1 ? '' : 's') + ' to</span>' +
+        '<select data-f="moveTo"><option value="">Choose an area…</option>' +
+        others.map(function (x) { return '<option value="' + esc(x.id) + '">' + esc(x.en) + ' — ' + esc(x.ur) + '</option>'; }).join('') +
+        '</select><span class="hint">They move in the same step as the delete, so none is left without an area.</span></label>'
+      : '<div class="banner info">' + I('alert') + '<div><p>No shops are in this area.</p></div></div>';
+    if (men.length) {
+      out += '<p class="hint">' + esc(men.map(function (s) { return s.name; }).join(', ')) +
+        (men.length === 1 ? ' collects' : ' collect') + ' from this area and will be taken off it.</p>';
+    }
+    return out;
+  },
+  save: function (v) {
+    var r = EDIT.delArea ? Areas.byId(EDIT.delArea) : null;
+    if (!r) return 'That area no longer exists.';
+    var shops = Areas.customers(r.id).length;
+    if (shops && !v.moveTo) return 'Choose the area to move its ' + shops + ' shop' + (shops === 1 ? '' : 's') + ' to.';
+    Areas.remove(r.id, { moveTo: v.moveTo }).then(function (res) {
+      EDIT.delArea = null; global.paint();
+      say('Area deleted' + (res.moved ? ' — ' + res.moved + ' shop' + (res.moved === 1 ? '' : 's') + ' moved to ' + res.movedTo.en : '') + '.');
+    }).catch(function (e) { say(e && e.validation ? e.validation[0] : 'Could not delete the area.'); });
+    return { msg: 'Deleting…' };
   }
 };
 
@@ -820,6 +965,7 @@ D.addEventListener('click', function (e) {
       .catch(function (err) { say(err && err.validation ? err.validation[0] : 'Could not archive.'); });
     return;
   }
+  if ((t = hit('[data-areadelete]'))) { e.preventDefault(); EDIT.delArea = t.dataset.areadelete; global.openPanel('deletearea'); return; }
   if ((t = hit('[data-smedit]'))) { e.preventDefault(); EDIT.salesman = t.dataset.smedit; global.openPanel('salesman'); return; }
   if ((t = hit('[data-smarchive]'))) {
     e.preventDefault();
@@ -868,6 +1014,49 @@ D.addEventListener('input', function (e) {
       '</div>' + orig(id);
   };
 });
+
+/* Regions, where people already look for them.
+   The base app listed regions on two screens and only let you ADD one there:
+   Settings (Regions card) and the Shops page. Since Settings was rebuilt in
+   sections (module 21) the old Regions card is not shown at all — it sits in a
+   wrapper the section filing skips — so the Shops page's "Add region" chip was
+   the only control left. Settings now gets a Regions card of its own (a
+   top-level card, which module 21 files under General & business): every area
+   with Rename and Delete, Add region, and a link to the full Areas screen. The
+   Shops page gets a link to the same screen. */
+function regionsCard() {
+  var list = Areas.all();
+  var del = canDeleteArea();
+  return '<div class="card"><div class="card-h"><h3>Regions</h3><span class="pill neu">' + list.length + '</span></div>' +
+    '<div class="card-b" style="padding-top:4px" data-regionlist="1">' +
+    (list.length ? list.map(function (r) {
+      var n = Areas.customers(r.id).length;
+      return '<div class="tog-row" style="padding:8px 0"><span style="flex:1">' + u(r.ur || '') + ' <span class="rn">' + esc(r.en || '') + '</span>' +
+        '<span class="t-sub" style="display:block">' + n + ' shop' + (n === 1 ? '' : 's') + (r.active === false ? ' · archived' : '') + '</span></span>' +
+        '<button class="btn sm" data-areaedit="' + esc(r.id) + '">Rename</button>' +
+        (del ? '<button class="btn sm" data-areadelete="' + esc(r.id) + '">Delete</button>' : '') + '</div>';
+    }).join('') : '<p class="hint">No regions yet.</p>') +
+    '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">' +
+      '<button class="btn sm" data-panel="region">' + I('plus') + 'Add region</button>' +
+      '<button class="btn sm" data-go="areas">' + I('pin') + 'Areas &amp; salesmen</button></div></div></div>';
+}
+var origSettingsRegions = global.PAGES.settings;
+if (origSettingsRegions) {
+  global.PAGES.settings = function () {
+    var html = origSettingsRegions.apply(this, arguments);
+    return typeof html === 'string' ? html + regionsCard() : html;
+  };
+}
+var origShopsPage = global.PAGES.customers;
+if (origShopsPage) {
+  global.PAGES.customers = function () {
+    var html = origShopsPage.apply(this, arguments);
+    return typeof html === 'string'
+      ? html.replace(/(<button class="rchip" data-panel="region">[\s\S]*?<\/button>)/,
+          function (m) { return m + '<button class="rchip" data-go="areas">' + I('pin') + 'Manage areas</button>'; })
+      : html;
+  };
+}
 
 /* the new screens join the navigation */
 if (global.NAV && !global.NAV.some(function (n) { return n.id === 'areas'; })) {

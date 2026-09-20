@@ -29,7 +29,7 @@ function MASTER() { return global.FAROOQ_ERP_MASTER || {}; }
 function PRODS()  { return global.PRODUCTS  || MASTER().products  || []; }
 function CUSTS()  { return global.CUSTOMERS || MASTER().customers || []; }
 function SUPS()   { return global.SUPPLIERS || MASTER().suppliers || []; }
-function REGS()   { return global.REGIONS   || MASTER().regions   || []; }
+function REGS()   { return (global.REGIONS   || MASTER().regions   || []).filter(function (r) { return !r.deleted; }); }
 function WHS() {
   if (global.activeWh) { try { return global.activeWh() || []; } catch (e) {} }
   return (global.WAREHOUSES || MASTER().warehouses || []).filter(function (w) { return w.active !== false; });
@@ -845,7 +845,7 @@ global.PAGES.invoices = function () {
         '<option value="all">All regions</option>' +
         (global.REGIONS || []).map(function (r) {
           return '<option value="' + esc(r.id) + '"' + (LIST.region === r.id ? ' selected' : '') + '>' +
-            esc(r.en) + '</option>';
+            esc(r.en) + (r.deleted ? ' (deleted)' : '') + '</option>';
         }).join('') + '</select></label>' +
       '<label class="fld">' + I('box') + '<select data-fcfil="wh" aria-label="Warehouse">' +
         '<option value="all">All warehouses</option>' +

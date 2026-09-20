@@ -1813,7 +1813,12 @@ var Reports = ERP.Reports = {
     var map = {};
     Reports.invoicesIn(from, to).forEach(function (i) {
       var k = i.regionId || 'none';
-      if (!map[k]) map[k] = { regionId: k, label: i.regionSnapshot || 'No region', count: 0, revenue: 0, qty: 0 };
+      /* the area's current name if it still exists (so a rename shows here),
+         otherwise the name the invoice was made with */
+      var live = i.regionId && global.regionOf ? global.regionOf(i.regionId) : null;
+      if (!map[k]) map[k] = { regionId: k, count: 0, revenue: 0, qty: 0,
+        label: (live && !live.deleted && (live.ur || live.en) ? (live.ur ? live.ur + ' — ' : '') + (live.en || '') : '') ||
+               i.regionSnapshot || 'No region' };
       map[k].count++; map[k].revenue += i.grandTotal; map[k].qty += i.totalQty;
     });
     return Object.keys(map).map(function (k) { return map[k]; })

@@ -1001,6 +1001,45 @@ spinners, search-clear, autofill wash, selection colour, `color-scheme`, and the
   phone, Firefox. Run a `deploy-erp.sh` from the repo root (`cd /d/projectFarooqAndCoTraders && ./scripts/deploy-erp.sh`); it takes
   over 2 minutes, so from this tool it moves to the background — do not start a second run (the lock refuses it, correctly).
 
+## Areas (regions) — add, rename, delete (2026-09-20)
+
+Client request: "editing / adding / deleting region name isn't available right". Three causes, all fixed in
+`18-master-data.js` (+ two one-line edits):
+- **Regions could only be *added* where people looked.** The base app listed them on the Shops page (a chip row) and in
+  Settings, add-only, through its own old "Add region" panel; the full Edit / Archive screen ("Areas & salesmen") was a
+  different, buried page, and nothing anywhere could delete. Worse, since Settings was rebuilt in sections (module 21) the old
+  **Regions and Warehouses cards are not shown in Settings at all** — 21 only files cards that are direct children of the old
+  page and those two sit in a nested column — so the Shops-page chip was the only control left. (The Warehouses card, with its
+  Rename / Remove / Add, is still missing from Settings; not touched, not asked for.)
+- **Delete did not exist.** `Areas.remove(id, {moveTo})`: refuses unless the caller says where the area's shops go (a different,
+  *active* area), then moves the shops, takes the area off its salesmen, marks it deleted and writes the audit entry in ONE
+  `FDB.tx` (all or nothing; on a failed save the in-memory copies are put back). Owner/Manager only (`MASTER_DATA_ARCHIVE`), in the
+  button and in the service. Delete panel = `PANELS.deletearea`; button on every Areas row and on the new Settings card.
+- **A plain delete would not have stuck — this is the non-obvious part.** The base app re-seeds its built-in areas on every
+  boot, each browser keeps a saved copy (`farooqco_erp_v1`), and `mergeMasterFromDb` only ever adds/overwrites, never removes. So a
+  removed area came back the next time any *other* device opened the app and was written straight back to the server. A deleted
+  area is therefore kept as a hidden marker `{deleted: true, active: false, deletedAt}` in the same `regions` record; it travels
+  through every channel the area did, so it wins everywhere. `Areas.all()/active()/byId()` and `REGS()` (05) hide it;
+  `Areas.raw()` and `global.REGIONS` still hold it. Verified by mutation: a hard delete makes `test-areas.mjs` fail because the
+  built-in `rg-drosh` reappears after a restart in a fresh browser. The invoice-list Region filter still offers a deleted area,
+  marked "(deleted)", so old invoices stay findable.
+- **History is untouched.** Invoices, payments etc. store `regionId` + a text `regionSnapshot`, so a deleted area's past documents
+  still read correctly. `Reports.byRegion` (02) now labels a group with the area's *current* name when it exists (so a rename shows
+  up), else the snapshot.
+- Also fixed in `Areas.save`: an **Urdu-only name got the id `rg-`** (a second one collided); names are now trimmed, a blank field
+  falls back to the other language (as the base panel did), the **Urdu** name is duplicate-checked too, only a name that is *being
+  changed* can clash (an older duplicate no longer blocks editing the other field), a new id that is taken — including by a deleted
+  area — gets a fresh unique one, and the base app's saved copy is refreshed (`dbSave`). The base `PANELS.region` ("Add region") now
+  delegates to the same code. New top-level **Regions card in Settings** (General & business) with Rename / Delete / Add / a link to
+  Areas & salesmen; the Shops page gets a "Manage areas" chip.
+- Tests: `test-areas.mjs` (50 checks: service rules, the three screens, salesmen, audit, failed-save rollback, role gate, and a restart
+  in a browser with no saved copy); the whole suite reruns clean. Looked at in real headless Chrome (desktop + 390px phone).
+  **Not seen by anyone on the live site**, and a delete has not been run against the real MySQL API (`php` is not on this machine) —
+  the save is one write per shop moved (at most a few hundred) + the region + the audit row, far under the API's 5,000-operation limit.
+  The full suite (all harnesses; `test-gate` skips without PHP) passed on a build of `HEAD` + only these files.
+- Limit worth knowing: two windows open at once — one deletes, the other still shows the old list — is the general stale-window case
+  (the server's revision check refuses the stale save and says "reload"); nothing area-specific was added for it.
+
 ## Where to look for more detail
 
 - **`docs/SERVER_DATA.md` — the current guide to the server-side data system (how it works, what users see, everyday operations, backups, how to change it, known limits). Start here for anything about where the data lives.**
