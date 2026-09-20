@@ -138,7 +138,7 @@ other domains/sites on this account.
    `erp-upgrade/farooq-co-erp.html`, neither of which existed after the initial pull). Turned out
    this is **by design**, not a defect — `erp-upgrade/.gitignore` explicitly ignores `mod/`,
    `dist/`, and those input files. They're a **local, disposable build-staging area** you
-   reconstruct each time, never commit; the 30 numbered module `.js` files at `erp-upgrade/`
+   reconstruct each time, never commit; the numbered module `.js` files (00a … 35, plus 01b) at `erp-upgrade/`
    root are the real tracked source. See "How to build the ERP locally" below — this is now a
    known, working, repeatable step, not an open problem.
 6. While exercising the build for the first time, fixed three real bugs found along the way
@@ -178,7 +178,7 @@ gitignored on purpose — reconstruct them locally from the current `app/` befor
 ```bash
 cd public_html/ERP/erp-upgrade
 mkdir -p mod
-cp [0-9]*.js mod/                                    # 00a-preboot.js .. 28-areawise.js
+cp [0-9]*.js mod/                                    # 00a-preboot.js .. 35-topbar.js (incl. 01b-server-db.js)
 cp ../app/farooq-co-erp.html ../app/index.html \
    ../app/farooq-co-warehouse-pwa.html ../app/farooq-and-co-homepage.html \
    ../app/farooq-erp-data.js .
@@ -261,6 +261,16 @@ with `git hash-object -w` + `git update-index --cacheinfo`), verify it in an iso
 `git worktree add --detach <dir> HEAD`, and say plainly what you left alone. `deploy-erp.sh` refuses to
 run with *any* uncommitted change (it builds from the working tree), so app deploys wait until the
 other work is committed; `deploy-api.sh` only needs `public_html/ERP/api` clean.
+
+**Scripts on Windows / Git Bash — two traps met on 2026-09-20.** (1) Git Bash rewrites an argument shaped like
+`key=/path` into `key=C:/Program Files/Git/path` before a Windows program (curl, node) sees it; it silently
+corrupted a `next=/?app=erp` probe and a healthy deploy was rolled back. Percent-encode the slash (`%2F`)
+rather than reaching for `MSYS_NO_PATHCONV=1`, because (2) that switch also stops `/dev/null` being
+translated for the Windows `curl`, so `curl -o /dev/null` exits 23 and, under `set -e`, aborts the script
+mid-way — which left new files live with no rollback until an `EXIT` trap was added. Any deploy script that
+uploads first must restore on **any** unexpected exit, not only on a failed check (see `scripts/deploy-api.sh`).
+Also: heredocs with tricky quotes are unreliable in this tool's shell — write a file with the editor tool and
+run it.
 
 **General rules, either site:**
 - Never edit live files directly over SSH/FTP as the primary way of making a change — edit
@@ -566,8 +576,8 @@ are done and live:
   - **Tests.** `test-gate.mjs` (86 checks: the real PHP under `php -S` against SQLite — signed in/out,
     session expiry/idle/deactivation, fail-closed incl. broken config, kill-switch, `If-None-Match`
     bypass, the sign-in page's own script, and the native form sign-in incl. open-redirect / header-
-    injection / cross-site / lockout / DB-down cases), `test-auth-client.mjs` (63, sections H/I = enforce
-    mode), `test-accounts.mjs` (40); all mutation-verified. `test-gate.mjs` skips itself (exit 0) if
+    injection / cross-site / lockout / DB-down cases), `test-auth-client.mjs` (64, sections H/I = enforce
+    mode), `test-accounts.mjs` (51), `test-sidebar.mjs` (20); all mutation-verified. `test-gate.mjs` skips itself (exit 0) if
     there is no `php` on the machine; CI has PHP. **Not covered by any test**: the `.htaccess` rewrites
     under real Apache/LiteSpeed and the CDN — those are verified live by the rollout steps.
   - **Known limits (deliberately not "fixed" — say so before relying on them).**
@@ -648,7 +658,9 @@ capture-phase handler that stops the click so the base handler doesn't also fire
 the base behaviour is untouched**; **at ≤ 900px the button is hidden** (the hamburger owns the drawer
 there, and the collapse button can't do anything). The button's label/tooltip follows the state.
 `test-sidebar.mjs` (20 checks, mutation-verified) proves the handler/state/CSS text in jsdom — jsdom has
-no layout, so confirm the pixels in a real browser at ~1100px and ~1400px after deploying.
+no layout. **Deployed 2026-09-20 ~14:23** (`erp-deploy-20260920142312` — the same build as the top bar and
+the server driver). The pixels have **not been confirmed in a real browser**: check a ~1100px window (the
+button should expand/collapse the labels) and ~1400px (unchanged base behaviour).
 
 ## Milling jobs — toll milling (2026-09-16)
 
