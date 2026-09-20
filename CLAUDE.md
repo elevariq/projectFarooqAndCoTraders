@@ -874,11 +874,22 @@ zero silently.
   for that product/warehouse the old average is kept (edge of an edge; not reset).
 - Double-clicked Save is refused as a duplicate (`clientOpId#revision`, as for sales). The audit entry carries
   the figures before and after.
+- **Second pass (same day) — bugs found by re-reading the neighbouring code, all fixed and tested (L-section):**
+  (1) `Purchases.receiveMore` added stock but never set `stockApplied`, so an edit of a purchase that had a later
+  delivery skipped the reversal and **counted those bags twice** — the reversal and the stock guard now go by what
+  each line actually *received*, not by the flag, and `receiveMore` sets the flag; (2) `Payments.reverse` never
+  refreshed a purchase, so after a voucher was reversed the Purchases list and the document still said "Paid" —
+  new `Purchases.refreshPaymentState`, called from `reverse` (pre-existing bug, and exactly the step the edit
+  screen tells the user to take); (3) the stock reversal is dated as the **original** delivery, the new receipt
+  on the corrected date; (4) a line whose product no longer exists keeps its saved wording instead of going blank;
+  (5) the builder now shows a since-deactivated warehouse as "(inactive)" instead of a different one (**this also
+  fixes the same latent problem on the sales edit**); (6) the card says "Edit purchase" / the button "Save changes".
 - **Not built / not changed:** there is still **no way to cancel or delete a purchase** (Edit is the only
-  correction tool); "Change supplier" as its own action; the builder's warehouse picker lists active
-  warehouses only (a purchase into a since-deactivated warehouse would show the wrong one — same limit as the
-  sales edit); tax has no input on the builder (a line's stored tax is carried through unchanged).
-- `test-purchase-edit.mjs` (82 checks: round trip, changes, money, lines, part deliveries, the stock guard,
+  correction tool); "Change supplier" as its own action; tax has no input on the builder (a line's stored tax is
+  carried through unchanged); **sales profit is not recalculated by a purchase edit** — each sale line's cost is
+  fixed on the day of the sale (by design, module 17), so editing an old purchase's rate changes stock cost going
+  forward, not past sales; a voucher's printed "balance before/after" is a snapshot and is not rewritten by an edit.
+- `test-purchase-edit.mjs` (93 checks: round trip, changes, money, lines, part deliveries, the stock guard,
   supplier returns, landed costs, supplier change, double submit, restart persistence, and the real screens
   incl. the role gate), mutation-checked with five deliberate breakages (pay twice, new line ids, no edit
   rules, createdAt overwritten, supplier never locked — each turns it red). `test-server-db.mjs` section H (6

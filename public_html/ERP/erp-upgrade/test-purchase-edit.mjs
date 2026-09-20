@@ -366,6 +366,61 @@ async function main() {
     stock(pJ) === stockJ1 - 12 && stock(pJ, wh2.id) === stockJ2 + 12);
 
   /* ══════════════════════════════════════════════════════════════════════
+     L. FOUND ON A SECOND PASS
+     ══════════════════════════════════════════════════════════════════════ */
+  /* L1 — a later delivery (receiveMore) added stock but never set stockApplied, so an edit
+     skipped the reversal and counted those bags twice */
+  const pL = P[23];
+  const l0 = await ERP.Purchases.save({ supplierId: sup.id, warehouseId: wh.id, purchaseDate: '2026-09-01',
+    items: [{ productId: pL.id, quantity: 100, unitPrice: 1000, receivedQty: 0 }] });
+  const lBase = stock(pL);
+  check('L0 (setup) ordered, nothing received yet', ERP.Purchases.byId(l0.id).status === 'ORDERED' && ERP.Purchases.byId(l0.id).stockApplied === false);
+  await ERP.Purchases.receiveMore(l0.id, [{ itemId: ERP.Purchases.items(l0.id)[0].id, quantity: 40 }]);
+  check('L1 the later delivery of 40 is in stock and the purchase now says stock was applied',
+    stock(pL) === lBase + 40 && ERP.Purchases.byId(l0.id).stockApplied === true);
+  await edit(l0.id, d => { d.items[0].unitPrice = 1100; });
+  check('L2 editing it afterwards does NOT count those 40 bags twice', stock(pL) === lBase + 40, stock(pL) + ' vs ' + (lBase + 40));
+  /* …and the same when the flag is still false on a record saved before this fix */
+  ERP.Purchases.byId(l0.id).stockApplied = false;
+  await edit(l0.id, d => { d.items[0].unitPrice = 1200; });
+  check('L3 …even on a purchase whose stockApplied flag was never set (data saved before this fix)', stock(pL) === lBase + 40, String(stock(pL)));
+
+  /* L4 — the reversal is dated as the original delivery, the new delivery as the corrected date */
+  const pL2 = P[24];
+  const l4 = await ERP.Purchases.save({ supplierId: sup.id, warehouseId: wh.id, purchaseDate: '2026-09-01',
+    items: [{ productId: pL2.id, quantity: 10, unitPrice: 1000 }] });
+  await edit(l4.id, d => { d.purchaseDate = '2026-09-05'; });
+  const mvL = ERP.S.movements.filter(m => m.ref === l4.purchaseNumber);
+  check('L4 date corrected: the reversal stays on the ORIGINAL day, the new receipt is on the corrected day',
+    mvL.some(m => m.kind === 'PURCHASE_REVERSAL_OUT' && m.date === '2026-09-01') &&
+    mvL.filter(m => m.kind === 'PURCHASE_IN').some(m => m.date === '2026-09-05'), JSON.stringify(mvL.map(m => [m.kind, m.date])));
+
+  /* L5 — reversing the voucher must update the purchase itself, not only the supplier's ledger */
+  const pL3 = P[25];
+  const l5 = await ERP.Purchases.save({ supplierId: sup.id, warehouseId: wh.id, purchaseDate: '2026-09-02', paidAmount: 5000,
+    items: [{ productId: pL3.id, quantity: 5, unitPrice: 1000 }] });
+  check('L5 (setup) paid in full', ERP.Purchases.byId(l5.id).paymentStatus === 'PAID');
+  await ERP.Payments.reverse(ERP.Purchases.paymentsFor(l5.id)[0].id, 'test');
+  const l5b = ERP.Purchases.byId(l5.id);
+  check('L6 after the voucher is reversed the purchase itself shows nothing paid — status, amount and the list pill',
+    l5b.paidAmount === 0 && l5b.paymentStatus === 'UNPAID' && l5b.balanceAmount === l5b.grandTotal &&
+    w.PURCHASES.find(x => x.purId === l5.id).pay === 'Unpaid', JSON.stringify([l5b.paidAmount, l5b.paymentStatus]));
+  check('L7 …and the document shows the full amount still payable',
+    ERP.DocModel.purchase(l5.id).totals.some(t => /Payable/.test(t.label) && t.value === M.fmt(l5b.grandTotal)));
+
+  /* L8 — a line whose product has since vanished keeps the wording it was saved with */
+  const pL4 = P[26];
+  const l8 = await ERP.Purchases.save({ supplierId: sup.id, warehouseId: wh.id, purchaseDate: '2026-09-02',
+    items: [{ productId: pL4.id, quantity: 5, unitPrice: 1000 }] });
+  const wordsBefore = JSON.stringify(ERP.Purchases.items(l8.id).map(i => [i.descriptionSnapshot, i.descriptionEnSnapshot, i.brandSnapshot, i.packageSnapshot]));
+  const ixL = w.PRODUCTS.indexOf(pL4); w.PRODUCTS.splice(ixL, 1);
+  const l8e = await rejected(edit(l8.id, d => { d.items[0].quantity = 6; }));
+  w.PRODUCTS.splice(ixL, 0, pL4);
+  check('L8 editing a purchase whose product no longer exists works and keeps the saved wording (no blank line)',
+    l8e === null && wordsBefore === JSON.stringify(ERP.Purchases.items(l8.id).map(i => [i.descriptionSnapshot, i.descriptionEnSnapshot, i.brandSnapshot, i.packageSnapshot])) &&
+    ERP.Purchases.items(l8.id)[0].quantity === 6, msgs(l8e));
+
+  /* ══════════════════════════════════════════════════════════════════════
      K. PERSISTENCE — everything survives a restart
      ══════════════════════════════════════════════════════════════════════ */
   const expect = {
@@ -460,11 +515,27 @@ async function main() {
     !$3('[data-fcb="supplierId"]').disabled && $3('[data-fcb="supplierId"]').options.length > 2);
   click3($3('[data-fcbact="cancel"]')); await sleep(100);
 
+  /* the screen says "Edit purchase" / "Save changes" while editing, not "Receive stock" */
+  click3(editBtn(pU3.id)); await sleep(300);
+  check('U12b while editing, the card says "Edit purchase" and the button "Save changes"',
+    /Edit purchase/.test($3('#fcbHead').closest('.card').querySelector('h3').textContent) &&
+    /Save changes/.test($3('[data-fcbact="save"]').textContent) && !/Receive Stock/i.test($3('[data-fcbact="save"]').textContent));
+  /* a warehouse that has since been switched off must still show as the purchase's warehouse */
+  const whOff = w3.WAREHOUSES.find(x => x.id === E3.Purchases.byId(pU3.id).warehouseId);
+  whOff.active = false; E3.BuilderRender.header(); E3.BuilderRender.lines(); await sleep(80);
+  const hdrSel = $3('[data-fcb="warehouseId"]'), lineSel = $3('[data-fcline="wh"]');
+  check('U12c a purchase in a warehouse that was switched off still shows it, marked "(inactive)" — not some other warehouse',
+    hdrSel.value === whOff.id && /inactive/.test(hdrSel.selectedOptions[0].textContent) &&
+    lineSel.value === whOff.id && /inactive/.test(lineSel.selectedOptions[0].textContent), hdrSel.value + ' / ' + whOff.id);
+  delete whOff.active; whOff.active = true;
+  click3($3('[data-fcbact="cancel"]')); await sleep(100);
+
   /* a brand-new purchase is unaffected: no lock, no hint, "Next: PUR-…" */
   click3($3('[data-fcbact="newpurchase"]') || $3('[data-panel="purchase"]')); await sleep(300);
   if (!$3('#fcbuilder')) { E3.Builder.start('purchase'); await sleep(300); }
   check('U13 a new purchase looks as before — no "Editing", supplier open, no edit hint',
     /Next:/.test($3('#fcbHead').closest('.card').textContent) && !$3('[data-fcb="supplierId"]').disabled &&
+    /Save &\s*Receive Stock|Receive Stock/i.test($3('[data-fcbact="save"]').textContent) &&
     !/reverse the voucher/i.test($3('.fc-amtpaid').textContent));
   click3($3('[data-fcbact="cancel"]')); await sleep(100);
 

@@ -951,11 +951,12 @@ var Purchases = ERP.Purchases = {
     var bump = function (pid, wid, q) {
       var k = ikey(pid, wid); net[k] = (net[k] || 0) + q; label[k] = { pid: pid, wid: wid };
     };
-    if (existing.stockApplied) {
-      oldItems.forEach(function (o) {
-        bump(o.productId, o.warehouseId, -(o.receivedQty === undefined ? o.quantity : o.receivedQty));
-      });
-    }
+    /* by what each line actually received — the header's stockApplied flag is
+       not trusted: a later delivery (receiveMore) never set it */
+    oldItems.forEach(function (o) {
+      var was = o.receivedQty === undefined ? o.quantity : o.receivedQty;
+      if (was > 0) bump(o.productId, o.warehouseId, -was);
+    });
     totals.items.forEach(function (it) {
       var q = Purchases.receivedOf(it, it.quantity);
       if (q > 0) bump(it.productId, whOf(it), q);
@@ -981,6 +982,18 @@ var Purchases = ERP.Purchases = {
   canEdit: function (pu) {
     return !!pu && pu.status !== 'CANCELLED' &&
            (!ERP.Can || ERP.Can('PURCHASE_CREATE') || ERP.Can('TRANSACTION_CORRECT'));
+  },
+
+  /* The header's paid figure and status are a copy of the vouchers. Called when a
+     voucher is reversed, so the list and the document stop saying "Paid". */
+  refreshPaymentState: function (api, purchaseId) {
+    var pu = Purchases.byId(purchaseId);
+    if (!pu) return;
+    var paid = Purchases.paidFor(purchaseId);
+    pu.paidAmount = paid; pu.balanceAmount = pu.grandTotal - paid;
+    pu.paymentStatus = Calc.paymentStatus(pu.grandTotal, paid);
+    pu.updatedAt = nowISO();
+    api.put('purchases', pu);
   },
 
   /* the form the edit screen starts from — the inverse of save() */
@@ -1065,12 +1078,18 @@ var Purchases = ERP.Purchases = {
         oldItems.forEach(function (o) { if (!keepIds[o.id]) api.del('purchaseItems', o.id); });
         S.purchaseItems = S.purchaseItems.filter(function (i) { return i.purchaseId !== rec.id; });
 
-        if (existing && existing.stockApplied) {
+        if (existing) {
+          /* what actually arrived comes back out — judged per line, because a later
+             delivery (receiveMore) added bags without ever setting stockApplied.
+             Dated as the ORIGINAL delivery, so it nets against it on that day and
+             the new delivery lands on the (possibly corrected) date. */
           oldItems.forEach(function (o) {
+            var was = o.receivedQty === undefined ? o.quantity : o.receivedQty;
+            if (!(was > 0)) return;
             Inventory.apply(api, { productId: o.productId, warehouseId: o.warehouseId,
-              qtyDelta: -(o.receivedQty === undefined ? o.quantity : o.receivedQty),
+              qtyDelta: -was,
               kind: 'PURCHASE_REVERSAL_OUT', ref: existing.purchaseNumber, refType: 'PURCHASE_EDIT',
-              note: 'Reversed on purchase edit', date: rec.purchaseDate });
+              note: 'Reversed on purchase edit', date: existing.purchaseDate || rec.purchaseDate });
           });
         }
         totals.items.forEach(function (it, ix) {
@@ -1080,10 +1099,14 @@ var Purchases = ERP.Purchases = {
             ? it.quantity : M.qty(src.receivedQty);
           var old = keepIds[it.purchaseItemId] ? oldById[it.purchaseItemId] : null;
           if (old) delete keepIds[old.id];                 /* one old record per new line, never two */
+          /* a line whose product has since vanished keeps the wording it was saved with */
+          var gone = old && !global.prodOf(it.productId);
           var r = Object.assign({}, old || {}, {
             id: old ? old.id : FDB.uid('pi'), purchaseId: rec.id, sortOrder: ix, productId: it.productId,
-            descriptionSnapshot: p.ur || p.en || '', descriptionEnSnapshot: p.en || '',
-            brandSnapshot: p.brandEn || p.brand || '', packageSnapshot: p.kg ? p.kg + ' KG' : 'Bag',
+            descriptionSnapshot: gone ? old.descriptionSnapshot : (p.ur || p.en || ''),
+            descriptionEnSnapshot: gone ? old.descriptionEnSnapshot : (p.en || ''),
+            brandSnapshot: gone ? old.brandSnapshot : (p.brandEn || p.brand || ''),
+            packageSnapshot: gone ? old.packageSnapshot : (p.kg ? p.kg + ' KG' : 'Bag'),
             quantity: it.quantity, orderedQty: it.quantity, receivedQty: receivedQty,
             unit: it.unit || 'Bag', unitPrice: it.unitPrice,
             discount: it.discount, tax: it.tax, lineTotal: it.lineTotal,
@@ -1176,7 +1199,7 @@ var Purchases = ERP.Purchases = {
           var items = Purchases.items(purchaseId);
           var ordered = items.reduce(function (a, i) { return a + i.orderedQty; }, 0);
           var received = items.reduce(function (a, i) { return a + i.receivedQty; }, 0);
-          pu.receivedQty = received;
+          pu.receivedQty = received; pu.stockApplied = received > 0;
           pu.status = received >= ordered ? 'RECEIVED' : received > 0 ? 'PARTIALLY_RECEIVED' : 'ORDERED';
           pu.updatedAt = nowISO();
           api.put('purchases', pu);
@@ -1311,13 +1334,17 @@ var Payments = ERP.Payments = {
   reverse: function (id, reason) {
     var p = Payments.byId(id);
     if (!p) return Promise.reject(new Error('Payment not found.'));
-    return FDB.tx(['payments', 'paymentAllocations', 'invoices', 'auditLog'], function (api) {
+    return FDB.tx(['payments', 'paymentAllocations', 'invoices', 'purchases', 'auditLog'], function (api) {
       p.status = 'REVERSED'; p.reversedAt = nowISO(); p.reverseReason = reason || '';
       api.put('payments', p);
       var affected = S.allocations.filter(function (a) { return a.paymentId === id; });
       affected.forEach(function (a) { api.del('paymentAllocations', a.id); });
       S.allocations = S.allocations.filter(function (a) { return a.paymentId !== id; });
       affected.forEach(function (a) { if (a.invoiceId) Invoices.refreshPaymentState(api, a.invoiceId); });
+      var seenPur = {};
+      affected.forEach(function (a) {
+        if (a.purchaseId && !seenPur[a.purchaseId]) { seenPur[a.purchaseId] = true; Purchases.refreshPaymentState(api, a.purchaseId); }
+      });
       Audit.write(api, { action: 'Payment reversed', entity: 'Payment', entityId: id,
         ref: p.receiptNumber, reason: reason || '', oldValues: { status: 'POSTED' }, newValues: { status: 'REVERSED' } });
       return p;

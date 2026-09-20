@@ -34,6 +34,14 @@ function WHS() {
   if (global.activeWh) { try { return global.activeWh() || []; } catch (e) {} }
   return (global.WAREHOUSES || MASTER().warehouses || []).filter(function (w) { return w.active !== false; });
 }
+/* The warehouses to offer, plus the one a saved document is already in even if
+   it has since been switched off — otherwise the box would show some other
+   warehouse while the document still points at the old one. */
+function whWith(list, currentId) {
+  if (!currentId || list.some(function (w) { return w.id === currentId; })) return list;
+  var cur = (global.WAREHOUSES || []).find(function (w) { return w.id === currentId; });
+  return cur ? list.concat([Object.assign({}, cur, { name: cur.name + ' (inactive)' })]) : list;
+}
 ERP.sources = { PRODS: PRODS, CUSTS: CUSTS, SUPS: SUPS, REGS: REGS, WHS: WHS };
 
 /* ══ what each transaction type needs from the editor ══ */
@@ -267,7 +275,7 @@ function headerBody(withCard) {
   var whSel = function (key, label) {
     return '<label class="f"><span>' + label + '</span><select data-fcb="' + key + '">' +
       (key === 'toWarehouseId' ? '<option value="">— choose —</option>' : '') +
-      wh.map(function (w) {
+      whWith(wh, d[key]).map(function (w) {
         return '<option value="' + w.id + '"' + (d[key] === w.id ? ' selected' : '') + '>' + esc(w.name) + '</option>';
       }).join('') + '</select></label>';
   };
@@ -337,7 +345,8 @@ function headerBody(withCard) {
     (cfg.toWarehouse ? '<label class="f"><span>Date</span><input type="date" data-fcb="date" value="' +
       esc(d.date || todayISO()) + '"></label>' : '') +
     extra;
-  var card = '<div class="card fcb-card"><div class="card-h"><h3>' + esc(cfg.title) + '</h3>' +
+  var card = '<div class="card fcb-card"><div class="card-h"><h3>' +
+    esc(B.mode === 'purchase' && B.editingId ? 'Edit purchase' : cfg.title) + '</h3>' +
     '<span class="pill neu mono">' + (B.editingId
       ? 'Editing' + (B.mode === 'purchase' ? ' ' + esc((ERP.Purchases.byId(B.editingId) || {}).purchaseNumber || '') : '')
       : 'Next: ' + nextNo) + '</span>' +
@@ -423,7 +432,7 @@ function lineRows() {
           (p.sourceFolio ? ' · ' + esc(p.sourceFolio) : '') + '</div></td>';
         case 'pack': return '<td class="c" data-label="Package">' + (p.kg ? p.kg + ' KG' : 'Bag') + '</td>';
         case 'wh': return '<td data-label="Warehouse"><select data-fcline="wh" data-ix="' + ix + '" class="fcb-mini">' +
-          WHS().map(function (w) {
+          whWith(WHS(), lw).map(function (w) {
             return '<option value="' + w.id + '"' + (lw === w.id ? ' selected' : '') + '>' + esc(w.name) + '</option>';
           }).join('') + '</select><div class="fcb-avail ' + (over ? 'bad' : '') + '">' +
           Number(have).toLocaleString('en-US') + (it.fromDamaged ? ' damaged' : ' available') + '</div>' +
@@ -544,7 +553,8 @@ global.PAGES.invoiceBuilder = function () {
       '<div class="fcb-btns">' +
         '<button class="btn" data-fcbact="cancel">Discard</button>' +
         (cfg.drafts ? '<button class="btn" data-fcbact="draft">' + I('doc') + 'Save Draft</button>' : '') +
-        '<button class="btn pri lg" data-fcbact="save">' + I('check') + cfg.cta + '</button>' +
+        '<button class="btn pri lg" data-fcbact="save">' + I('check') +
+          (B.mode === 'purchase' && B.editingId ? 'Save changes' : cfg.cta) + '</button>' +
       '</div></div></div></div>';
 };
 
