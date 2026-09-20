@@ -317,6 +317,48 @@ async function main() {
   check('S17 and the heading counts zero', box2.previousElementSibling.textContent.includes('0 payments'));
   w2.close();
 
+  /* ══════════════════════════════════════════════════════════════════════
+     SECOND PASS — the pay-a-shop panel shows where the account lands, and
+     the stored balance points the right way for each kind of payment
+     ══════════════════════════════════════════════════════════════════════ */
+  const typeAmt = (el, v) => { el.value = v; el.dispatchEvent(new w.Event('input', { bubbles: true })); };
+  const c3 = w.CUSTOMERS.filter(c => c.id !== c1.id && c.id !== c2.id)[0];
+
+  click($('[data-fcpayopen="refund"]')); await sleep(150);
+  change($('#fcRefundCust'), c3.id);
+  const b3 = ERP.Ledger.customerBalance(c3.id);
+  check('B1 with no amount typed the panel shows only the balance', !/after this payment/.test($('#fcRefundBal').textContent),
+    $('#fcRefundBal').textContent);
+  typeAmt($('[data-f="amt"]'), '4000');
+  check('B2 typing an amount shows where the shop\'s account lands, as you type',
+    $('#fcRefundBal').textContent.includes('after this payment') &&
+    $('#fcRefundBal').textContent.includes(M.fmt(b3 + M.toP(4000))), $('#fcRefundBal').textContent);
+  check('B3 a shop that would end up owing us is told so',
+    /will owe you/.test($('#fcRefundBal').textContent), $('#fcRefundBal').textContent);
+  typeAmt($('[data-f="amt"]'), '');
+  check('B4 clearing the amount takes the line away again', !/after this payment/.test($('#fcRefundBal').textContent));
+  typeAmt($('[data-f="amt"]'), '2500');
+  change($('#fcRefundCust'), c2.id);
+  check('B5 choosing another shop recomputes with the amount already typed',
+    $('#fcRefundBal').textContent.includes(M.fmt(ERP.Ledger.customerBalance(c2.id) + M.toP(2500))), $('#fcRefundBal').textContent);
+  change($('#fcRefundArea'), '');
+  check('B6 changing the area keeps the amount line', /after this payment/.test($('#fcRefundBal').textContent), $('#fcRefundBal').textContent);
+  await closePanel();
+
+  /* stored balances point the right way for each kind of payment */
+  await ERP.Payments.refund({ customerId: c3.id, amount: 1000, method: 'Cash', reference: 'SETUP' });
+  const rec1b = ERP.Payments.refunds().find(p => p.reference === 'SETUP');
+  check('B7 stored balanceAfter of a payment to a shop is balanceBefore + amount, and matches the ledger',
+    rec1b.balanceAfter === rec1b.balanceBefore + rec1b.amount && ERP.Ledger.customerBalance(c3.id) === rec1b.balanceAfter,
+    `${rec1b.balanceBefore} + ${rec1b.amount} -> ${rec1b.balanceAfter}, ledger ${ERP.Ledger.customerBalance(c3.id)}`);
+  await ERP.Payments.receive({ customerId: c3.id, amount: 300, method: 'Cash', reference: 'R-SETUP' });
+  const recIn2 = ERP.Payments.incoming().find(p => p.reference === 'R-SETUP');
+  check('B8 a receipt still lowers it: balanceAfter = balanceBefore - amount',
+    recIn2 && recIn2.balanceAfter === recIn2.balanceBefore - recIn2.amount, recIn2 && JSON.stringify([recIn2.balanceBefore, recIn2.amount, recIn2.balanceAfter]));
+  const supPay2 = await ERP.Payments.pay({ supplierId: sup.id, amount: 200, method: 'Cash', reference: 'S-SETUP' });
+  check('B9 a supplier payment still lowers it too', supPay2.balanceAfter === supPay2.balanceBefore - supPay2.amount,
+    JSON.stringify([supPay2.balanceBefore, supPay2.amount, supPay2.balanceAfter]));
+
   console.log('\n' + out.join('\n') + `\n\n${pass} passed, ${fail} failed\n`);
   w.close();
   process.exit(fail ? 1 : 0);

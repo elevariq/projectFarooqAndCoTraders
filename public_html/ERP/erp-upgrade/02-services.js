@@ -1249,7 +1249,11 @@ var Payments = ERP.Payments = {
         createdAt: nowISO(), createdBy: currentUser(),
         balanceBefore: partyType === 'CUSTOMER' ? Ledger.customerBalance(o.partyId) : Ledger.supplierBalance(o.partyId)
       };
-      rec.balanceAfter = rec.balanceBefore - (direction === 'IN' ? rec.amount : rec.amount);
+      /* A shop's balance is what it owes us: receiving money lowers it, PAYING a shop raises it.
+         A supplier's is what we owe: paying it lowers it. (This used to subtract in every case,
+         so the stored figure on a payment to a shop pointed the wrong way; nothing reads it back,
+         but it is on the record.) */
+      rec.balanceAfter = rec.balanceBefore + (rec.isRefund ? rec.amount : -rec.amount);
       api.put('payments', rec);
       S.payments.unshift(rec);
 

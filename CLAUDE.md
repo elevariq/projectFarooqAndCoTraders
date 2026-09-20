@@ -428,8 +428,13 @@ received* up above… but we also give some customers cash, they take it to the 
 "Pay a shop" sits beside "Receive payment" in the Customer payments header, and a new **Paid to shops** list (date, shop, region,
 method, amount, reference, Voucher button; `Payments.refunds()` — payments to shops were previously on no list except the raw
 "Receipts & vouchers" log) sits above Supplier payments. Both header buttons go through `data-fcpayopen`, which clears `PAY_FOR` /
-`REFUND_FOR` first so a shop chosen earlier on some other page can't be pre-selected on a money screen. `test-pay-a-shop.mjs` is 55
-checks (S1–S17). Looked at in real headless Chrome (desktop + 390px phone). No API/schema change → app deploy only.
+`REFUND_FOR` first so a shop chosen earlier on some other page can't be pre-selected on a money screen. `test-pay-a-shop.mjs` is 68
+checks (S1–S17 the screen, B1–B9 below). Second pass: the Pay-a-shop panel now shows "→ after this payment: X" as you type (and "the shop will
+owe you X" when a payment flips the account); `Payments._write` stored `balanceAfter` **subtracted for a payment to a shop** (it should add —
+paying a shop raises what it owes; nothing reads the field, older refunds keep the wrong stored value, fixed for new ones). Looked at in real
+headless Chrome (desktop + 390px phone). **Module 38 (another session) replaces `PAGES.payments` wholesale** — keep the S-checks' hooks
+(`data-fcpayopen`, `#fcPaidToShops`, `data-fcreceipt`) there. Open policy question, not decided: `PAYMENT_CREATE` (Sales role has it) does not gate
+either payment panel, so anyone can record cash paid OUT to a shop; gate `Payments.refund` if the owner wants that limited. No API/schema change → app deploy only.
 
 **Payroll** — client's item 4 was one line ("Payroll = Employee salary management system") with
 no fields, salary structure, or screenshot, even after a follow-up. Built as a deliberately

@@ -199,6 +199,23 @@ function payBalanceHtml(custs, preId) {
   var id = (preId && custs.some(function (c) { return c.id === preId; })) ? preId : custs[0].id;
   return I('wallet') + '<div><p>Outstanding balance: <b>' + M.fmt(ERP.Ledger.customerBalance(id)) + '</b></p></div>';
 }
+/* "Pay a shop" version: once an amount is typed, also show where the shop's
+   account lands. Paying a shop moves its balance UP (towards "owes us"), so
+   paying more than we owed it flips the account — say so before Save rather
+   than leave it to be noticed on the statement. */
+function refundBalanceHtml(cid, amtStr) {
+  var before = ERP.Ledger.customerBalance(cid);
+  var amt = M.toP(String(amtStr || '').replace(/[^\d.]/g, ''));
+  var h = I('wallet') + '<div><p>Outstanding balance: <b>' + M.fmt(before) + '</b>';
+  if (amt > 0) h += ' → after this payment: <b>' + M.fmt(before + amt) + '</b>';
+  h += '</p>';
+  if (amt > 0 && before + amt > 0) h += '<p>After this payment the shop will owe you ' + M.fmt(before + amt) + '.</p>';
+  return h + '</div>';
+}
+function refundAmountNow() {
+  var a = D.querySelector('#panel [data-f="amt"]') || D.querySelector('[data-f="amt"]');
+  return a ? a.value : '';
+}
 
 function openInvoicesForCustomer(cid) {
   return ERP.Invoices.all().filter(function (i) {
@@ -857,6 +874,11 @@ D.addEventListener('click', function (e) {
 D.addEventListener('input', function (e) {
   var el = e.target;
   if (el.id === 'fcbPick') { B.pickerQuery = el.value; B.pickerOpen = true; ERP.BuilderRender.results(); return; }
+  if (el.dataset.f === 'amt' && D.getElementById('fcRefundBal') && D.getElementById('fcRefundCust')) {
+    var rsel = D.getElementById('fcRefundCust'), rb = D.getElementById('fcRefundBal');
+    if (rsel.value && !rsel.disabled) rb.innerHTML = refundBalanceHtml(rsel.value, el.value);
+    return;
+  }
   if (el.dataset.fcq !== undefined) { ERP.InvoiceList.q = el.value; ERP.InvoiceList.page = 1; repaintList(); return; }
   if (el.dataset.fcline) {
     var ix = +el.dataset.ix, k = el.dataset.fcline;
@@ -946,8 +968,7 @@ D.addEventListener('change', function (e) {
   }
   if (el.id === 'fcRefundCust') {
     var rbox = D.getElementById('fcRefundBal');
-    if (rbox) rbox.innerHTML = I('wallet') + '<div><p>Outstanding balance: <b>' +
-      M.fmt(ERP.Ledger.customerBalance(el.value)) + '</b></p></div>';
+    if (rbox) rbox.innerHTML = refundBalanceHtml(el.value, refundAmountNow());
     return;
   }
   if (el.id === 'fcRefundArea') {
@@ -960,7 +981,8 @@ D.addEventListener('change', function (e) {
       var rbbox = D.getElementById('fcRefundBal');
       if (rbbox) {
         rbbox.className = 'banner ' + (ropts.length ? 'info' : 'warn');
-        rbbox.innerHTML = payBalanceHtml(ropts);
+        rbbox.innerHTML = ropts.length && refundSel.value ? refundBalanceHtml(refundSel.value, refundAmountNow())
+                                                         : payBalanceHtml(ropts);
       }
     }
     return;
