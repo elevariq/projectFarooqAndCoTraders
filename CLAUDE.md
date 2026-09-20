@@ -302,6 +302,26 @@ run it.
 8. ~~Client message (2026-09-16): "Payroll = Employee salary management system"~~ — **Resolved
    2026-09-16** as a deliberately minimal MVP (no real requirements were ever given). See below.
 
+9. **Stock lying at the mill (Punjab) — built 2026-09-20, NOT YET DEPLOYED, two questions for the client.** The feature itself is in
+   `main` (see "Stock lying at the mill" below). Decision taken with the user on 2026-09-20: **go with it as built**, and keep these two
+   points written down until the client answers:
+   a. *Where does the wheat come from?* Today the wheat sent to a mill is taken out of one of **our warehouses' stock**, so the stock must
+      be there first (a purchase into a warehouse) or the job is refused ("Only N bags … are available"; unless "allow negative stock" is
+      on). The voice notes say the Punjab stock is "bought" and "given by weight" — if the client buys wheat and it goes to the mill
+      **without ever entering one of our warehouses**, that job cannot be entered honestly today. Ask the client. If yes, the change is
+      small: a "wheat did not come from our stock" choice on the job (skips the issue stock movement and its stock check, keeps the
+      weight and the mill's account entry) — do not simply switch negative stock on to get round it, that hides real shortages elsewhere.
+   b. *Should goods lying at the mill count in the totals?* Today they are **not** in the Dashboard "All bags available", Inventory or
+      Stock value (module 37) totals, because they are not in a warehouse; they are shown only on Inventory & supply → **Stock at mills**
+      (bags, kg, and worth at the job's cost per bag). If the client wants "everything we own, including what is in Punjab" on the
+      dashboard, add a line for it there (a separate "At mills" figure, not folded into warehouse stock — the bags cannot be sold from a
+      warehouse shelf until they arrive).
+   c. **Deploy order (the one thing that can break a first save):** the new store `millingArrivals` needs its table on the live database
+      (`milling_arrivals`, generated into `database/schema-mariadb.sql`) and `scripts/deploy-api.sh` run **before** `scripts/deploy-erp.sh`;
+      otherwise the first arrival is refused as an unknown store ("NOT saved"). Production commands are handed to the user (`!` prefix).
+   d. Nobody has seen the new screens on the live site or a physical phone (real headless Chrome only), and the arrival save has not been
+      run against the real MySQL API (no PHP on the dev machine; `test-server-db.mjs` covers the driver against a mock).
+
 (The build-pipeline question from earlier sessions is resolved — see "How to build the ERP
 locally" above — and isn't a decision the user needs to make.)
 
@@ -782,6 +802,7 @@ mill could not be represented at all. That was the gap.
 - **DEPLOY ORDER (new store):** `millingArrivals` is a new table. **Apply `database/schema-mariadb.sql`'s `milling_arrivals` table to the live
   database and run `scripts/deploy-api.sh` BEFORE `scripts/deploy-erp.sh`**, otherwise the first arrival is refused as an unknown store
   ("NOT saved"). A job saved with the new field needs nothing on the server (the `doc` JSON holds it).
+- **Decision 2026-09-20: go with this as built; the two open questions are item 9 under "Open items" above (a: wheat not from our stock, b: goods at the mill in the dashboard/stock totals) — answer them before changing anything.**
 - **Not built / to confirm with the client:** the wheat is taken from one of *our* warehouses' stock; if wheat is bought and sent to the mill
   without ever being in a warehouse, the issue is refused for lack of stock (unless negative stock is allowed) — say so and a "not from our
   stock" option can be added. Goods lying at the mill are **not** in the Dashboard / Stock-value totals (they are not in a warehouse); the
