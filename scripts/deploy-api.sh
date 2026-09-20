@@ -73,34 +73,48 @@ if ! rssh "cd '$REMOTE_ERP/api' && for f in *.php auth/*.php data/*.php; do php 
   restore_from "$BK"; die "PHP lint failed on the server — previous files restored."
 fi
 
+# A dropped connection is not an answer. From the dev machine the Hostinger edge drops about one TLS handshake in
+# three (curl exit 35 — seen on 2026-09-20 on the untouched, previous code too), and one such drop used to count as a
+# FAILED check and roll a good deploy back. pcurl retries only when curl ITSELF fails (no HTTP answer at all); an HTTP
+# status — whatever it is — is returned at once and never retried, so a genuinely wrong answer still fails the deploy.
+pcurl() {
+  local n out rc=0
+  for n in 1 2 3 4 5 6; do
+    out="$(curl "$@")" && rc=0 || rc=$?
+    if [ "$rc" = 0 ]; then printf '%s' "$out"; return 0; fi
+    sleep 2
+  done
+  return "$rc"
+}
+
 echo "==> Exercising the live endpoints (no password needed; nothing here records a failed attempt)"
 bad=0
-page="$(curl -s -m 60 "$SITE/?probe=$RANDOM" || true)"; pst="$(curl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/?probe=$RANDOM" || echo 000)"
+page="$(pcurl -s -m 60 "$SITE/?probe=$RANDOM" || true)"; pst="$(pcurl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/?probe=$RANDOM" || echo 000)"
 if echo "$page" | grep -q 'action="api/auth/login.php"' && echo "$page" | grep -q 'method="post"'; then
   echo "  OK    the sign-in page is a real form posting to login.php (HTTP $pst)"
 elif [ "$pst" = "200" ]; then
   echo "  OK    the gate is dormant, so the app is served directly (HTTP 200) — sign-in page not applicable"
 else echo "  FAIL  / is HTTP $pst and is not the expected sign-in form"; bad=1; fi
 
-loc="$(curl -s -m 60 -o /dev/null -w '%{http_code} %{redirect_url}' -d 'username=&password=&next=%2F%3Fapp%3Derp' "$SITE/api/auth/login.php" || echo 'curl failed')"
+loc="$(pcurl -s -m 60 -o /dev/null -w '%{http_code} %{redirect_url}' -d 'username=&password=&next=%2F%3Fapp%3Derp' "$SITE/api/auth/login.php" || echo 'curl failed')"
 if [ "$loc" = "303 $SITE/?app=erp&signin=empty" ]; then echo "  OK    a form post is answered with a 303 back to the page with ?signin=empty"
 else echo "  FAIL  form post answered '$loc' (expected '303 $SITE/?app=erp&signin=empty')"; bad=1; fi
 
-j="$(curl -s -m 60 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{}' "$SITE/api/auth/login.php" || echo 000)"
+j="$(pcurl -s -m 60 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{}' "$SITE/api/auth/login.php" || echo 000)"
 if [ "$j" = "400" ]; then echo "  OK    the app's JSON sign-in path still answers 400 JSON for empty fields"
 else echo "  FAIL  JSON sign-in path answered HTTP $j (expected 400)"; bad=1; fi
 
-m="$(curl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/api/auth/me.php" || echo 000)"
+m="$(pcurl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/api/auth/me.php" || echo 000)"
 if [ "$m" = "401" ] || [ "$m" = "200" ]; then echo "  OK    me.php answers (HTTP $m)"; else echo "  FAIL  me.php answered HTTP $m"; bad=1; fi
 
 # the business-data endpoints must refuse an anonymous caller (they hand out / accept the company's records)
 for ep in status.php version.php hydrate.php read.php; do
-  c="$(curl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/api/data/$ep?stores=sequences" || echo 000)"
+  c="$(pcurl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/api/data/$ep?stores=sequences" || echo 000)"
   if [ "$c" = "401" ]; then echo "  OK    data/$ep refuses an anonymous request (401)"; else echo "  FAIL  data/$ep answered HTTP $c to an anonymous request (expected 401)"; bad=1; fi
 done
-c="$(curl -s -m 60 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"ops":[],"reads":[]}' "$SITE/api/data/commit.php" || echo 000)"
+c="$(pcurl -s -m 60 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"ops":[],"reads":[]}' "$SITE/api/data/commit.php" || echo 000)"
 if [ "$c" = "401" ]; then echo "  OK    data/commit.php refuses an anonymous save (401)"; else echo "  FAIL  data/commit.php answered HTTP $c to an anonymous save (expected 401)"; bad=1; fi
-c="$(curl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/api/_data.php" || echo 000)"
+c="$(pcurl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/api/_data.php" || echo 000)"
 if [ "$c" = "403" ]; then echo "  OK    the shared include _data.php is not reachable over HTTP (403)"; else echo "  FAIL  api/_data.php answered HTTP $c (expected 403)"; bad=1; fi
 
 if [ "$bad" != 0 ]; then restore_from "$BK"; die "a live check failed — previous files restored. Backup kept at $BK."; fi

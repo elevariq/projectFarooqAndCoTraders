@@ -267,7 +267,7 @@ other work is committed; `deploy-api.sh` only needs `public_html/ERP/api` clean.
 corrupted a `next=/?app=erp` probe and a healthy deploy was rolled back. Percent-encode the slash (`%2F`)
 rather than reaching for `MSYS_NO_PATHCONV=1`, because (2) that switch also stops `/dev/null` being
 translated for the Windows `curl`, so `curl -o /dev/null` exits 23 and, under `set -e`, aborts the script
-mid-way — which left new files live with no rollback until an `EXIT` trap was added. Any deploy script that
+mid-way — which left new files live with no rollback until an `EXIT` trap was added. A third trap (2026-09-20, the milling deploy): **the Hostinger edge drops roughly one TLS handshake in three** from the dev machine (curl exit 35, also on plain `/` and on the untouched old code), and `deploy-api.sh` read one dropped probe as a failed check and rolled a healthy deploy back (it restored correctly — the server was left on the old files). Its probes now go through `pcurl`, which retries only when curl itself fails to connect and never retries an HTTP answer, so a genuinely wrong status still fails and rolls back. If a deploy rolls back with `000` / `curl failed` in the probe lines, that is this, not the code. Any deploy script that
 uploads first must restore on **any** unexpected exit, not only on a failed check (see `scripts/deploy-api.sh`).
 Also: heredocs with tricky quotes are unreliable in this tool's shell — write a file with the editor tool and
 run it.
