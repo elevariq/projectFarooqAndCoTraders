@@ -830,10 +830,194 @@ var Purchases = ERP.Purchases = {
   byId: function (id) { return S.purchases.find(function (p) { return p.id === id; }) || null; },
   items: function (id) { return S.purchaseItems.filter(function (i) { return i.purchaseId === id; })
                                                .sort(function (a, b) { return a.sortOrder - b.sortOrder; }); },
+  /* ── what an edit has to respect ─────────────────────────────────────────
+     A posted purchase is the stock that came in, the supplier's bill, and any
+     money paid with it. Editing it re-states all three, so the rules below
+     stop an edit that would leave them disagreeing with each other. ── */
+  paymentsFor: function (purchaseId) {
+    var seen = {}, out = [];
+    S.allocations.forEach(function (a) {
+      if (a.purchaseId !== purchaseId || seen[a.paymentId]) return;
+      var p = Payments.byId(a.paymentId);
+      if (!p || p.status === 'REVERSED') return;
+      seen[a.paymentId] = true; out.push(p);
+    });
+    return out;
+  },
+  /* money paid against this purchase — the allocations are the truth; the
+     header's paidAmount is only a copy of it */
+  paidFor: function (purchaseId) {
+    return S.allocations.filter(function (a) {
+      if (a.purchaseId !== purchaseId) return false;
+      var p = Payments.byId(a.paymentId);
+      return p && p.status !== 'REVERSED';
+    }).reduce(function (s, a) { return s + a.amount; }, 0);
+  },
+  returnedQty: function (itemId) {
+    return M.qty(S.supReturnItems.filter(function (r) {
+      var ret = S.supReturns.find(function (x) { return x.id === r.returnId; });
+      return r.purchaseItemId === itemId && ret && ret.status !== 'CANCELLED';
+    }).reduce(function (a, r) { return a + r.quantity; }, 0));
+  },
+  /* landed-cost entries still standing that put a share on this line */
+  landedOn: function (itemId) {
+    return (S.inventoryCostAdjust || []).filter(function (a) {
+      if (a.purchaseItemId !== itemId) return false;
+      var lc = (S.landedCosts || []).find(function (l) { return l.id === a.landedCostId; });
+      return !(lc && lc.status === 'CANCELLED');
+    });
+  },
+  /* Why the supplier on this purchase may not be swapped, or '' if it may.
+     The vouchers and returns written against it belong to that supplier. */
+  supplierLockReason: function (purchaseId) {
+    var pays = Purchases.paymentsFor(purchaseId);
+    if (pays.length) {
+      return 'Money has already been paid against this purchase (' +
+        pays.map(function (p) { return p.receiptNumber; }).join(', ') + '), and it belongs to this supplier — ' +
+        'so the supplier cannot be changed here. Reverse that payment voucher first.';
+    }
+    var itemIds = Purchases.items(purchaseId).map(function (i) { return i.id; });
+    var rets = S.supReturns.filter(function (r) {
+      if (r.status === 'CANCELLED') return false;
+      return r.purchaseId === purchaseId || S.supReturnItems.some(function (ri) {
+        return ri.returnId === r.id && itemIds.indexOf(ri.purchaseItemId) > -1;
+      });
+    });
+    if (rets.length) {
+      return 'A return to the supplier has been posted against this purchase (' +
+        rets.map(function (r) { return r.returnNumber; }).join(', ') + '), so the supplier cannot be changed.';
+    }
+    return '';
+  },
+  /* how many bags of a line the warehouse actually took in */
+  receivedOf: function (line, qty) {
+    return line.receivedQty === undefined || line.receivedQty === null || line.receivedQty === ''
+      ? M.qty(qty) : M.qty(line.receivedQty);
+  },
+  /* Every reason an edit of a posted purchase must be refused. Nothing is
+     written if any is returned — same all-or-nothing rule as a new purchase. */
+  editErrors: function (draft, existing, totals) {
+    var errs = [];
+    if (existing.status === 'CANCELLED') errs.push('A cancelled purchase cannot be edited.');
+    var oldItems = Purchases.items(existing.id), byId = {};
+    oldItems.forEach(function (o) { byId[o.id] = o; });
+    var lines = (draft.items || []).filter(function (i) { return i.productId; });
+    var kept = {};
+    lines.forEach(function (l) { if (l.purchaseItemId && byId[l.purchaseItemId]) kept[l.purchaseItemId] = l; });
+    var whOf = function (l) { return l.warehouseId || draft.warehouseId; };
+
+    /* a line that has bags sent back to the supplier, or operational costs
+       spread over it, is tied to that record: it can change in quantity and
+       rate, but it cannot vanish or turn into a different product */
+    oldItems.forEach(function (o) {
+      var name = o.descriptionEnSnapshot || o.descriptionSnapshot || 'a line';
+      var ret = Purchases.returnedQty(o.id), landed = Purchases.landedOn(o.id).length;
+      if (!ret && !landed) return;
+      var why = ret ? ret + ' bag' + (ret === 1 ? ' has' : 's have') + ' been returned to the supplier'
+                    : 'landed costs have been spread over it';
+      var l = kept[o.id];
+      if (!l) { errs.push(name + ': ' + why + ', so this line cannot be removed. ' +
+                          (ret ? 'It can be reduced, but not below the bags already returned.'
+                               : 'Cancel the landed-cost entry first.')); return; }
+      if (l.productId !== o.productId || whOf(l) !== o.warehouseId) {
+        errs.push(name + ': ' + why + ', so its product and warehouse cannot be changed.');
+      }
+      if (ret && Purchases.receivedOf(l, l.quantity) < ret) {
+        errs.push(name + ': ' + ret + ' bags were already returned to the supplier, so fewer than ' + ret +
+                  ' cannot be shown as received.');
+      }
+    });
+
+    if (draft.supplierId && draft.supplierId !== existing.supplierId) {
+      var lock = Purchases.supplierLockReason(existing.id);
+      if (lock) errs.push(lock);
+    }
+
+    var paidNow = Purchases.paidFor(existing.id);
+    if (totals.paidAmount < paidNow) {
+      errs.push(M.fmt(paidNow) + ' has already been paid against this purchase (' +
+        Purchases.paymentsFor(existing.id).map(function (p) { return p.receiptNumber; }).join(', ') +
+        '). The amount paid cannot be lowered here — reverse that payment voucher from Payments instead.');
+    }
+    if (totals.paidAmount > totals.grandTotal) {
+      errs.push('The amount paid is more than the purchase total. Record the extra as a separate payment to the supplier.');
+    }
+
+    /* Stock is judged on what the edit CHANGES per product and warehouse: the
+       old delivery comes out, the new one goes in, and the difference must
+       fit in what is on the shelf now. An untouched line therefore never
+       fails just because its bags have since been sold. */
+    var net = {}, label = {};
+    var bump = function (pid, wid, q) {
+      var k = ikey(pid, wid); net[k] = (net[k] || 0) + q; label[k] = { pid: pid, wid: wid };
+    };
+    if (existing.stockApplied) {
+      oldItems.forEach(function (o) {
+        bump(o.productId, o.warehouseId, -(o.receivedQty === undefined ? o.quantity : o.receivedQty));
+      });
+    }
+    totals.items.forEach(function (it) {
+      var q = Purchases.receivedOf(it, it.quantity);
+      if (q > 0) bump(it.productId, whOf(it), q);
+    });
+    if (!Settings.allowNegativeStock()) {
+      Object.keys(net).forEach(function (k) {
+        var d = M.qty(net[k]);
+        if (d >= 0) return;
+        var have = Inventory.available(label[k].pid, label[k].wid);
+        if (have + d < 0) {
+          var p = global.prodOf && global.prodOf(label[k].pid) || {};
+          errs.push('Only ' + have + ' bags of ' + (p.en || p.ur || 'that product') + ' are in ' +
+            (global.whName ? global.whName(label[k].wid) : label[k].wid) + ' now, but this edit takes ' +
+            (-d) + ' fewer bags into stock than before. The rest of that delivery has already been sold or moved, ' +
+            'so it cannot be reduced by that much.');
+        }
+      });
+    }
+    return errs;
+  },
+
+  /* Whoever may enter a purchase, or correct a posted transaction, may edit one. */
+  canEdit: function (pu) {
+    return !!pu && pu.status !== 'CANCELLED' &&
+           (!ERP.Can || ERP.Can('PURCHASE_CREATE') || ERP.Can('TRANSACTION_CORRECT'));
+  },
+
+  /* the form the edit screen starts from — the inverse of save() */
+  toDraft: function (pu) {
+    var items = Purchases.items(pu.id);
+    var lineDisc = items.reduce(function (a, i) { return a + (i.discount || 0); }, 0);
+    var pays = Purchases.paymentsFor(pu.id);
+    return {
+      revision: pu.revision || 0, clientOpId: pu.clientOpId,
+      supplierId: pu.supplierId, warehouseId: pu.warehouseId, purchaseDate: pu.purchaseDate,
+      supplierInvoiceNo: pu.supplierInvoiceNo, vehicleNo: pu.vehicleNo, driver: pu.driver,
+      deliveryRef: pu.deliveryRef, notes: pu.notes, description: pu.description || '',
+      paymentMethod: pays.length ? pays[pays.length - 1].method : 'Cash',
+      /* the record keeps discounts as one figure; what is not on a line is the overall one */
+      invoiceDiscount: M.toR(Math.max(0, (pu.discountAmount || 0) - lineDisc)),
+      freight: M.toR(pu.freightAmount), loading: M.toR(pu.loadingAmount),
+      otherCharges: M.toR(pu.otherCharges),
+      paidAmount: M.toR(Purchases.paidFor(pu.id)),
+      items: items.map(function (it) {
+        var recv = it.receivedQty === undefined ? it.quantity : it.receivedQty;
+        return {
+          purchaseItemId: it.id, productId: it.productId, quantity: it.quantity,
+          unitPrice: M.toR(it.unitPrice), discount: M.toR(it.discount), tax: M.toR(it.tax),
+          /* blank means "the whole line arrived" — only a part delivery is spelled out */
+          receivedQty: recv >= it.quantity ? '' : recv,
+          warehouseId: it.warehouseId, batchNo: it.batchNo, notes: it.notes, unit: it.unit
+        };
+      })
+    };
+  },
+
   save: function (draft) {
     var errs = Validate.purchase(draft);
-    if (errs.length) return Promise.reject({ validation: errs });
     var totals = Calc.invoice(draft);
+    var prior = draft.id ? Purchases.byId(draft.id) : null;
+    if (prior && !errs.length) errs = Purchases.editErrors(draft, prior, totals);
+    if (errs.length) return Promise.reject({ validation: errs });
     draft.id = draft.id || FDB.uid('pur');
     var existing = Purchases.byId(draft.id);
     var revision = (draft.revision === undefined || draft.revision === null ? 0 : draft.revision);
@@ -863,8 +1047,22 @@ var Purchases = ERP.Purchases = {
           totalQty: totals.totalQty, lineCount: totals.lineCount,
           createdBy: currentUser(), createdAt: nowISO(), updatedAt: nowISO(), stockApplied: false
         };
+        if (existing) {
+          /* an edit is the same purchase, not a new one: who made it and when,
+             its description and its migration marker all stay */
+          rec.createdBy = existing.createdBy; rec.createdAt = existing.createdAt;
+          if (existing.migrated) rec.migrated = true;
+          if (existing.description && (draft.description === undefined ||
+              String(draft.description).trim() === existing.description)) rec.description = existing.description;
+        }
         var oldItems = Purchases.items(rec.id);
-        oldItems.forEach(function (o) { api.del('purchaseItems', o.id); });
+        /* A line the edit keeps stays the SAME record (same id): supplier
+           returns and landed-cost entries point at it. Only lines the edit
+           drops are deleted; the rest are overwritten below. */
+        var oldById = {}, keepIds = {};
+        oldItems.forEach(function (o) { oldById[o.id] = o; });
+        totals.items.forEach(function (it) { if (it.purchaseItemId && oldById[it.purchaseItemId]) keepIds[it.purchaseItemId] = true; });
+        oldItems.forEach(function (o) { if (!keepIds[o.id]) api.del('purchaseItems', o.id); });
         S.purchaseItems = S.purchaseItems.filter(function (i) { return i.purchaseId !== rec.id; });
 
         if (existing && existing.stockApplied) {
@@ -880,16 +1078,18 @@ var Purchases = ERP.Purchases = {
           var src = (draft.items || [])[ix] || {};
           var receivedQty = src.receivedQty === undefined || src.receivedQty === ''
             ? it.quantity : M.qty(src.receivedQty);
-          var r = {
-            id: FDB.uid('pi'), purchaseId: rec.id, sortOrder: ix, productId: it.productId,
+          var old = keepIds[it.purchaseItemId] ? oldById[it.purchaseItemId] : null;
+          if (old) delete keepIds[old.id];                 /* one old record per new line, never two */
+          var r = Object.assign({}, old || {}, {
+            id: old ? old.id : FDB.uid('pi'), purchaseId: rec.id, sortOrder: ix, productId: it.productId,
             descriptionSnapshot: p.ur || p.en || '', descriptionEnSnapshot: p.en || '',
             brandSnapshot: p.brandEn || p.brand || '', packageSnapshot: p.kg ? p.kg + ' KG' : 'Bag',
             quantity: it.quantity, orderedQty: it.quantity, receivedQty: receivedQty,
             unit: it.unit || 'Bag', unitPrice: it.unitPrice,
             discount: it.discount, tax: it.tax, lineTotal: it.lineTotal,
             warehouseId: it.warehouseId || rec.warehouseId, batchNo: it.batchNo || '',
-            returnedQty: 0, notes: it.notes || ''
-          };
+            returnedQty: old ? Purchases.returnedQty(old.id) : 0, notes: it.notes || ''
+          });
           api.put('purchaseItems', r); S.purchaseItems.push(r);
           if (receivedQty > 0) {
             Inventory.apply(api, {
@@ -910,19 +1110,27 @@ var Purchases = ERP.Purchases = {
         var ix2 = S.purchases.findIndex(function (p) { return p.id === rec.id; });
         if (ix2 > -1) S.purchases[ix2] = rec; else S.purchases.unshift(rec);
 
+        /* Money is only ever ADDED here: what was already paid against this
+           purchase stays as it is, and only the extra gets a new voucher —
+           saving an edit twice must not pay the supplier twice. */
         var payPromise = Promise.resolve();
-        if (totals.paidAmount > 0) {
+        var already = existing ? Purchases.paidFor(rec.id) : 0;
+        var extraPaid = totals.paidAmount - already;
+        if (extraPaid > 0) {
           payPromise = Payments._writeOut(api, {
-            partyId: rec.supplierId, amountP: totals.paidAmount, method: draft.paymentMethod || 'Cash',
+            partyId: rec.supplierId, amountP: extraPaid, method: draft.paymentMethod || 'Cash',
             reference: rec.supplierInvoiceNo, date: rec.purchaseDate,
             note: 'Paid with purchase ' + rec.purchaseNumber,
-            allocations: [{ purchaseId: rec.id, amountP: totals.paidAmount }]
+            allocations: [{ purchaseId: rec.id, amountP: extraPaid }]
           });
         }
         return payPromise.then(function () {
           Audit.write(api, { action: existing ? 'Purchase edited' : 'Purchase recorded', entity: 'Purchase',
             entityId: rec.id, ref: rec.purchaseNumber,
-            newValues: { grandTotal: rec.grandTotal, lineCount: rec.lineCount } });
+            oldValues: existing ? { grandTotal: existing.grandTotal, lineCount: existing.lineCount,
+                                    supplier: existing.supplierNameSnapshot, received: existing.receivedQty } : null,
+            newValues: { grandTotal: rec.grandTotal, lineCount: rec.lineCount,
+                         supplier: rec.supplierNameSnapshot, received: rec.receivedQty } });
           return rec;
         });
       });

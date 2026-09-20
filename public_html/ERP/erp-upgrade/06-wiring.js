@@ -725,7 +725,10 @@ D.addEventListener('click', function (e) {
     else if (act === 'word') ERP.Viewer.word();
     else if (act === 'wa') ERP.Viewer.whatsapp();
     else if (act === 'sms') ERP.Viewer.sms();
-    else if (act === 'edit') { var m = ERP.Viewer.current; ERP.Viewer.close(); editInvoice(m.entityId); }
+    else if (act === 'edit') {
+      var m = ERP.Viewer.current; ERP.Viewer.close();
+      if (m.kind === 'PURCHASE') editPurchase(m.entityId); else editInvoice(m.entityId);
+    }
     else if (act === 'changeshop') { var m6 = ERP.Viewer.current; ERP.Viewer.close(); changeInvoiceShop(m6.entityId); }
     else if (act === 'dup') { var m2 = ERP.Viewer.current; ERP.Viewer.close(); duplicateInvoice(m2.entityId); }
     else if (act === 'pay') { var m3 = ERP.Viewer.current; ERP.Viewer.close();
@@ -813,6 +816,14 @@ D.addEventListener('click', function (e) {
     else if (what === 'dup') duplicateInvoice(id);
     else if (what === 'pay') { PAY_FOR = (ERP.Invoices.byId(id) || {}).customerId; global.openPanel('payment'); }
     else if (what === 'return') { RETURN_FOR = id; global.openPanel('creditnote'); }
+    return;
+  }
+
+  /* purchases list row actions */
+  var pa = h('[data-fcpur]');
+  if (pa) {
+    e.preventDefault();
+    if (pa.dataset.fcpur === 'edit') editPurchase(pa.dataset.id);
     return;
   }
 
@@ -1066,6 +1077,19 @@ function editInvoice(id) {
   d.id = inv.id; d.clientOpId = inv.clientOpId; d.revision = inv.revision || 0; d.existing = true;
   B.start('sale', d);
 }
+/* Edit a purchase that is already in stock. The edit screen is the same one
+   used to receive stock, started from the saved purchase; saving re-states the
+   stock, the supplier's bill and any money paid with it as one change. */
+function editPurchase(id) {
+  var pu = ERP.Purchases.byId(id);
+  if (!pu) { say('Purchase not found.'); return; }
+  if (!ERP.Purchases.canEdit(pu)) { say('A cancelled purchase cannot be edited.'); return; }
+  if (!global.confirm('This purchase is already in stock. Editing it will adjust stock and the supplier balance by the ' +
+      'difference, and the change is recorded in the audit log. Continue?')) return;
+  var d = ERP.Purchases.toDraft(pu);
+  d.id = pu.id; d.existing = true;
+  B.start('purchase', d);
+}
 function changeInvoiceShop(id) {
   var inv = ERP.Invoices.byId(id);
   if (!inv) { say('Invoice not found.'); return; }
@@ -1089,7 +1113,7 @@ function cancelInvoice(id) {
   }).catch(function () { say('The invoice could not be cancelled.'); });
 }
 ERP.actions = { editInvoice: editInvoice, duplicateInvoice: duplicateInvoice, cancelInvoice: cancelInvoice,
-                changeInvoiceShop: changeInvoiceShop, backup: doBackup };
+                changeInvoiceShop: changeInvoiceShop, editPurchase: editPurchase, backup: doBackup };
 
 /* ══════════════════════════════════════════════════════════════════════════
    PATCHES — point the existing screens at the new database
@@ -1219,11 +1243,20 @@ global.openDoc = function (no) {
   return origOpenDoc ? origOpenDoc.call(global, no) : null;
 };
 
-/* 7. Purchases screen gains the multi-line entry button. */
+/* 7. Purchases screen gains the multi-line entry button, and an Edit button on
+      every purchase. The rows are drawn by the original screen from the
+      mirrored PURCHASES list; the Edit button is added in front of the row's
+      "Invoice" button, matched by the purchase number that button opens. */
 var origPurchases = global.PAGES.purchases;
 global.PAGES.purchases = function () {
   var html = origPurchases ? origPurchases() : '';
-  return html.replace('data-panel="purchase"', 'data-fcbact="newpurchase"');
+  html = html.replace('data-panel="purchase"', 'data-fcbact="newpurchase"');
+  return html.replace(/<button class="btn sm" data-doc="([^"]+)">/g, function (whole, no) {
+    var pu = ERP.S.purchases.find(function (p) { return p.purchaseNumber === no; });
+    return pu && ERP.Purchases.canEdit(pu)
+      ? '<button class="btn sm" data-fcpur="edit" data-id="' + esc(pu.id) + '">Edit</button>' + whole
+      : whole;
+  }).replace('<th class="r">Documents</th>', '<th class="r">Actions</th>');
 };
 
 /* 8. Payments screen: receipts open the new printable receipt. */

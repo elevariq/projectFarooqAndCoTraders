@@ -117,11 +117,29 @@ var Cost = ERP.Cost = {
    costed against what the bag really cost to have in the godown. ── */
 var origPurchaseSave = ERP.Purchases.save;
 ERP.Purchases.save = function (draft) {
+  /* When an edit takes a product out of a purchase (or moves it to another
+     warehouse), that product's average must stop counting this purchase —
+     the loop below only re-costs the lines that are still on it. Taken
+     before the save, because the save replaces the lines. */
+  var before = draft && draft.id ? ERP.Purchases.byId(draft.id) : null;
+  var wasOn = before ? ERP.Purchases.items(before.id).map(function (i) {
+    return { productId: i.productId, warehouseId: i.warehouseId };
+  }) : [];
   return origPurchaseSave.call(ERP.Purchases, draft).then(function (rec) {
     var items = ERP.Purchases.items(rec.id);
     var charges = Cost.chargesOf(rec);
     var alloc = Cost.allocate(items, charges);
+    var stillOn = {};
+    items.forEach(function (i) { stillOn[i.productId + '|' + i.warehouseId] = true; });
+    var dropped = wasOn.filter(function (k) { return !stillOn[k.productId + '|' + k.warehouseId]; });
     return FDB.tx(['purchaseItems', 'inventory', 'costHistory', 'auditLog'], function (api) {
+      dropped.forEach(function (k) {
+        var avg = Cost.weightedAverage(k.productId, k.warehouseId);
+        if (!avg) return;
+        var row = ERP.Inventory.row(k.productId, k.warehouseId);
+        row.avgCostP = avg;
+        api.put('inventory', row);
+      });
       alloc.forEach(function (a) {
         var it = items.filter(function (x) { return x.id === a.itemId; })[0];
         if (!it) return;

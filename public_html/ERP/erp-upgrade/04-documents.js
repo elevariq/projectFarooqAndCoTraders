@@ -273,7 +273,7 @@ var DocModel = {
       totals: totals, words: words(pu.grandTotal), notes: pu.notes || '', ledger: [],
       signatures: ['Received by', 'Store keeper', 'Authorised signature'],
       footer: { thanks: 'Goods received in good condition unless noted.', terms: '', bank: '' },
-      actions: {}
+      actions: { edit: ERP.Purchases.canEdit(pu) }
     };
   },
 

@@ -833,6 +833,60 @@ migration was involved. **Rollback**: the previous live files are on the server 
 `/home/u943531942/backups/erp-deploy-20260919233433/` — copy `index.html`, `farooq-co-erp.html`,
 `farooq-erp-data.js` from there back into `public_html/ERP/`, then clear the cache again.
 
+## Edit a purchase (2026-09-20)
+
+Client request: "add an Edit option in Purchase Invoices too, like the one done in sales invoice." A
+purchase is three things at once — the bags that came into stock, the supplier's bill, and any money paid
+with it — so an edit re-states all three in one transaction (`ERP.Purchases.save`, same `FDB.tx` as a new
+purchase). **`Purchases.save` already had an edit branch that no screen could reach, and it was wrong in
+four ways** that this work fixed: it paid the supplier *again* on every edit (a second voucher for the full
+"paid" figure); it gave every line a **new id** (supplier returns and landed-cost entries point at line ids,
+so both were orphaned); it overwrote `createdAt`/`createdBy`/`description`; and it could push stock below
+zero silently.
+
+- **Where.** An **Edit** button on every row of the Purchases screen (column renamed *Actions*; injected in
+  front of the row's "Invoice" button in `06-wiring.js`, matched by purchase number) and on the purchase
+  document viewer (`data-fcv="edit"`, routed by `kind === 'PURCHASE'`). Opens the same builder as "Receive
+  stock", pill reads "Editing PUR-…". Gated by `ERP.Purchases.canEdit`: `PURCHASE_CREATE` **or**
+  `TRANSACTION_CORRECT` (Owner/Manager/Accountant; not Sales or Warehouse). Client-side only, like all roles.
+- **Service API** (`02-services.js`): `toDraft(pu)` (inverse of `save`; blank *Received* = whole line arrived,
+  a part delivery is spelled out; the overall discount is recovered as header discount − line discounts),
+  `editErrors(draft, existing, totals)` (all the refusals below), `paidFor`, `paymentsFor`, `returnedQty`,
+  `landedOn`, `supplierLockReason`, `canEdit`.
+- **Stable line ids.** A line the edit keeps stays the *same record* (draft lines carry `purchaseItemId`),
+  overwritten in place — only dropped lines are deleted — so supplier returns, landed-cost adjustments and
+  `returnedQty` stay attached. A line that has bags returned or landed costs spread over it may change in
+  quantity/rate but cannot be removed, change product/warehouse, or show fewer received than were returned.
+- **Money is only ever added.** What is paid comes from the payment *allocations* (the truth), not the header's
+  `paidAmount`. Raising *Amount Paid* writes one voucher for the difference; saving twice writes nothing; lowering
+  it is refused ("reverse that voucher from Payments"); more than the bill is refused. Saving heals a header that
+  a reversed voucher had left stale (`Payments.reverse` never refreshed purchases — pre-existing, left alone).
+  The extra voucher is dated the **purchase date**, same as the sales edit does for an invoice.
+- **Stock guard on the net change.** Old received bags come out, new go in; per product+warehouse the
+  *difference* must fit what is on the shelf now (unless `allowNegativeStock`). So an edit that touches only a
+  note or rate never fails just because the bags were since sold, but cutting a load below what has been sold is
+  refused, naming the figures. Movements written are the existing `PURCHASE_REVERSAL_OUT` + `PURCHASE_IN` pair.
+- **Supplier can change only while nothing is attached** (no voucher paid against the purchase, no supplier
+  return on it): the bill then moves between the two suppliers' accounts. Otherwise the picker is locked with the
+  reason shown. There is **no "Change supplier" action** like sales' "Change shop" — not built.
+- **Cost.** `17-profit.js`'s `Purchases.save` wrapper now also re-averages a product an edit removed from the
+  purchase (otherwise its average kept counting a purchase that no longer contained it). If *no* purchase is left
+  for that product/warehouse the old average is kept (edge of an edge; not reset).
+- Double-clicked Save is refused as a duplicate (`clientOpId#revision`, as for sales). The audit entry carries
+  the figures before and after.
+- **Not built / not changed:** there is still **no way to cancel or delete a purchase** (Edit is the only
+  correction tool); "Change supplier" as its own action; the builder's warehouse picker lists active
+  warehouses only (a purchase into a since-deactivated warehouse would show the wrong one — same limit as the
+  sales edit); tax has no input on the builder (a line's stored tax is carried through unchanged).
+- `test-purchase-edit.mjs` (82 checks: round trip, changes, money, lines, part deliveries, the stock guard,
+  supplier returns, landed costs, supplier change, double submit, restart persistence, and the real screens
+  incl. the role gate), mutation-checked with five deliberate breakages (pay twice, new line ids, no edit
+  rules, createdAt overwritten, supplier never locked — each turns it red). `test-server-db.mjs` section H (6
+  checks) runs the same edit on the **server driver**: kept line overwritten in place, dropped line deleted,
+  one extra voucher, and a second window editing from a stale copy is refused. **Not seen by anyone yet:** the
+  new Edit button and edit screen in a real browser / on a phone (jsdom has no layout), and an edit against the
+  real MySQL API (`php` is not installed on this machine; `test-gate.mjs` also skips for that reason).
+
 ## The top bar and the phone dashboard (2026-09-20)
 
 Client-facing complaint: on a phone the header was ~180px tall with the page title squeezed to a

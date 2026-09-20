@@ -364,6 +364,41 @@ async function main() {
     edit && edit.conflict === true && /NOT saved/.test(overlayText(gb.w, 'fcsd-failed') || '') && S5.rows('customers').find(c => c.id === shopId).ph === '0300-1111111', edit && edit.message);
   for (const b of [G1, G2, ...trio, ga, gb]) b.w.close();
 
+  /* ══ H. editing a purchase on the server (2026-09-20) ═══════════════════════════
+     The edit keeps a line's id and overwrites it in place, deletes only dropped lines, and adds a voucher only for
+     the extra money. On the server that must arrive as ONE atomic commit, and a stale edit form must be refused. */
+  const S6 = new Mock(SEED);
+  const H1 = await boot(S6), wH = H1.w, EH = wH.ERP;
+  const whH = wH.WAREHOUSES[1].id, phs = wH.PRODUCTS.filter(x => x.active !== false), supH = wH.SUPPLIERS[0].id;
+  const puH = await EH.Purchases.save({ supplierId: supH, warehouseId: whH, purchaseDate: '2026-09-01', paidAmount: 1000, paymentMethod: 'Cash',
+    items: [{ productId: phs[0].id, quantity: 50, unitPrice: 100 }, { productId: phs[1].id, quantity: 20, unitPrice: 200 }] });
+  const H2 = await boot(S6);                                    /* a second window, loaded before the edit — its copy will go stale */
+  const keepId = EH.Purchases.items(puH.id)[0].id, dropId = EH.Purchases.items(puH.id)[1].id;
+  const revKeep = S6.rev('purchaseItems', keepId), commits0 = S6.commits, payN0 = S6.count('payments'), revPur0 = S6.rev('purchases', puH.id);
+  const dH = EH.Purchases.toDraft(EH.Purchases.byId(puH.id)); dH.id = puH.id;
+  dH.items[0].quantity = 55; dH.items.splice(1, 1); dH.items.push({ productId: phs[2].id, quantity: 5, unitPrice: 300 }); dH.paidAmount = 1500;
+  await EH.Purchases.save(dH);
+  const rowsH = S6.rows('purchaseItems').filter(i => i.purchaseId === puH.id);
+  check('H1 an edit of a purchase reaches the server: kept line overwritten in place (same id, new quantity, next revision)',
+    rowsH.some(i => i.id === keepId && i.quantity === 55) && S6.rev('purchaseItems', keepId) > revKeep, JSON.stringify(rowsH.map(i => [i.id === keepId, i.quantity])));
+  check('H2 …the dropped line is gone from the server, the new one is there', !S6.rows('purchaseItems').some(i => i.id === dropId) && rowsH.length === 2);
+  const payH = S6.rows('payments').filter(p => (S6.rows('paymentAllocations').filter(a => a.purchaseId === puH.id).map(a => a.paymentId)).includes(p.id));
+  check('H3 …exactly one extra voucher for the 500 difference (1,000 + 500), not a second 1,500',
+    S6.count('payments') === payN0 + 1 && payH.length === 2 && payH.reduce((a, p) => a + p.amount, 0) === 150000, payH.map(p => p.amount).join());
+  /* header, lines, voucher and stock go in the edit's own commit; the cost and supplier-product follow-ups the
+     existing wrappers add for every purchase are separate commits, so the commit COUNT is not the claim */
+  check('H4 …header, lines, voucher and stock all arrived (the purchase was written once: revision 1 → 2, not more)',
+    S6.rev('purchases', puH.id) === revPur0 + 1 && S6.commits > commits0, 'rev ' + revPur0 + ' → ' + S6.rev('purchases', puH.id));
+  check('H5 the purchase header on the server has the new revision, total and creator kept',
+    S6.rows('purchases').find(p => p.id === puH.id).revision === 2 && S6.rows('purchases').find(p => p.id === puH.id).createdAt === puH.createdAt);
+  /* the stale window edits the same purchase from its old copy */
+  const dStale = H2.w.ERP.Purchases.toDraft(H2.w.ERP.Purchases.byId(puH.id)); dStale.id = puH.id; dStale.notes = 'from the stale window';
+  const before6 = JSON.stringify(S6.rows('purchases').find(p => p.id === puH.id));
+  const staleErr = await H2.w.ERP.Purchases.save(dStale).then(() => null, e => e);
+  check('H6 a second window editing from its OLD copy is refused (not saved), and the first edit stands',
+    staleErr && (staleErr.conflict === true || staleErr.duplicate === true) && JSON.stringify(S6.rows('purchases').find(p => p.id === puH.id)) === before6, staleErr && staleErr.message);
+  for (const b of [H1, H2]) b.w.close();
+
   /* ══ F. failures are never hidden ═════════════════════════════════════ */
   const S3 = new Mock(SEED); const F1 = await boot(S3), wF = F1.w;
   const whF = wF.WAREHOUSES[1].id, pf = wF.PRODUCTS.filter(x => x.active !== false);

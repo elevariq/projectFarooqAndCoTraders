@@ -206,12 +206,20 @@ function partyBlock() {
   if (B.cfg.party === 'supplier') {
     var sups = SUPS().filter(function (s) { return s.active !== false; });
     var sup = B.draft.supplierId ? global.supOf(B.draft.supplierId) : null;
-    return '<label class="f"><span>Supplier</span><select data-fcb="supplierId">' +
+    /* a purchase being edited keeps its supplier on screen even if that mill
+       has since been switched off — otherwise the box would look empty */
+    if (sup && sup.active === false) sups = sups.concat([sup]);
+    /* money paid against a posted purchase, or bags returned from it, belong to
+       its supplier — the picker is locked then, and says why */
+    var editing = B.mode === 'purchase' && B.editingId ? ERP.Purchases.byId(B.editingId) : null;
+    var supLock = editing ? ERP.Purchases.supplierLockReason(editing.id) : '';
+    return '<label class="f"><span>Supplier</span><select data-fcb="supplierId"' + (supLock ? ' disabled' : '') + '>' +
       '<option value="">— choose a supplier —</option>' +
       sups.map(function (s) {
         return '<option value="' + s.id + '"' + (B.draft.supplierId === s.id ? ' selected' : '') + '>' +
-          esc(s.co) + (s.legacyCode ? ' · ' + esc(s.legacyCode) : '') + '</option>';
+          esc(s.co) + (s.legacyCode ? ' · ' + esc(s.legacyCode) : '') + (s.active === false ? ' (inactive)' : '') + '</option>';
       }).join('') + '</select></label>' +
+      (supLock ? '<p class="hint">' + esc(supLock) + '</p>' : '') +
       (sup ? '<div class="fcb-party"><div><i>Payable</i><b class="due">' +
         M.fmt(ERP.Ledger.supplierBalance(sup.id)) + '</b></div></div>' : '');
   }
@@ -330,7 +338,9 @@ function headerBody(withCard) {
       esc(d.date || todayISO()) + '"></label>' : '') +
     extra;
   var card = '<div class="card fcb-card"><div class="card-h"><h3>' + esc(cfg.title) + '</h3>' +
-    '<span class="pill neu mono">' + (B.editingId ? 'Editing' : 'Next: ' + nextNo) + '</span>' +
+    '<span class="pill neu mono">' + (B.editingId
+      ? 'Editing' + (B.mode === 'purchase' ? ' ' + esc((ERP.Purchases.byId(B.editingId) || {}).purchaseNumber || '') : '')
+      : 'Next: ' + nextNo) + '</span>' +
     '</div><div class="card-b" id="fcbHead">' + body + '</div></div>';
   return withCard ? card : body;
 }
@@ -481,7 +491,10 @@ function chargesBlock() {
     '<div class="f2">' + f('loading', 'Loading / unloading') + f('otherCharges', 'Other charges') + '</div>' +
     (quoteLike ? '' :
       '<div class="f2 fc-amtpaid">' + f('paidAmount', 'Amount Paid',
-          isSaleSide ? 'Leave at 0 for a credit sale' : '') +
+          isSaleSide ? 'Leave at 0 for a credit sale'
+            : (B.mode === 'purchase' && B.editingId
+                ? 'What has been paid with this purchase so far. Raising it records another payment voucher for ' +
+                  'the difference; to lower it, reverse the voucher from Payments.' : '')) +
         '<label class="f"><span>Payment method</span><select data-fcb="paymentMethod">' +
           ERP.ENUM.methods.map(function (m) {
             return '<option' + (B.draft.paymentMethod === m ? ' selected' : '') + '>' + m + '</option>';
@@ -644,13 +657,14 @@ B.save = function (asDraft) {
   B.errors = [];
   renderErrors();
   setSaving(true, asDraft ? 'Saving draft…' : 'Saving…');
-  var cfg = B.cfg, mode = B.mode, orderId = B.draft.saleOrderId;
+  var cfg = B.cfg, mode = B.mode, orderId = B.draft.saleOrderId, wasEdit = !!B.editingId;
 
   cfg.save(B.draft, asDraft).then(function (rec) {
     setSaving(false); B.dirty = false;
     var no = rec.invoiceNumber || rec.purchaseNumber || rec.orderNumber ||
              rec.docNumber || rec.returnNumber || '';
-    say(cfg.title.replace(/^New /, '') + ' saved' + (no ? ' — ' + no : '') + '.');
+    say(mode === 'purchase' && wasEdit ? 'Purchase ' + no + ' updated — stock and the supplier balance follow the change.'
+        : cfg.title.replace(/^New /, '') + ' saved' + (no ? ' — ' + no : '') + '.');
     if (mode === 'sale' && orderId) ERP.Orders.markInvoiced(orderId, rec);
     ERP.Notify.fire(mode === 'sale' ? 'INVOICE_CREATED' : 'TRANSACTION_SAVED', { id: rec.id, ref: no });
     B.draft = null;
