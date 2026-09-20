@@ -21,6 +21,31 @@ function auth_enforcing(array $CFG): bool {
     return ($CFG['enforce_login'] ?? false) === true;
 }
 
+/**
+ * Where to send a browser after a plain <form> sign-in. Only ever a LOCAL path
+ * (a leading single "/", a tight character set): anything else — "//host",
+ * "https://…", "/\host", "javascript:", anything with a newline — collapses to
+ * "/", so a crafted `next` can neither redirect off-site nor inject a header.
+ * A leftover `signin=<code>` error marker from an earlier failed attempt is
+ * stripped so it never sticks to the address after a good sign-in.
+ */
+function auth_safe_next(string $raw): string {
+    $raw = trim($raw);
+    if ($raw === '' || strlen($raw) > 300 || !preg_match('#^/(?!/)[A-Za-z0-9_\-./?=&%]*$#', $raw)) return '/';
+    $raw = (string)preg_replace('/([?&])signin=[a-z]+(&|$)/', '$1', $raw);
+    $raw = rtrim($raw, '?&');
+    return $raw === '' ? '/' : $raw;
+}
+
+/** 303 back to a local path, optionally tagging it with a short sign-in outcome code. */
+function auth_form_redirect(string $next, ?string $code): never {
+    $to = $next;
+    if ($code !== null) $to .= (strpos($next, '?') === false ? '?' : '&') . 'signin=' . $code;
+    header('Cache-Control: no-store, private');
+    header('Location: ' . $to, true, 303);
+    exit;
+}
+
 function auth_cookie_name(array $CFG): string {
     return $CFG['session']['cookie_name'] ?? '__Host-fcsid';
 }

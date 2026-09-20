@@ -388,6 +388,13 @@ INCONCLUSIVE when the control is refused too. The script is `scripts/gate-rollou
 - Manual, if the script can't run: in `private/erp-config.php` set `'enforce_login' => false`
   (or delete the line). The gate then serves the files to anyone again.
 
+**Deploying PHP changes (the sign-in / gate code)**: `scripts/deploy-api.sh`. It backs up the server's
+`api/` to `backups/api-<timestamp>/`, uploads, lints every PHP file with the server's PHP, then probes
+the live endpoints with requests that need no password and record no failed attempt (sign-in page is a
+real form; an empty form post gets a `303 … ?signin=empty`; the JSON path still answers `400`; `me.php`
+answers), and restores the backup by itself if anything fails. `scripts/deploy-api.sh rollback` restores
+the latest backup. Afterwards clear the Hostinger cache and check in a REAL private window.
+
 **Routine deploys afterwards**: `scripts/deploy-erp.sh` uploads to `_app/` (it refuses to run if
 `_app/` is absent). It does not touch the PHP files or `.htaccess`; changes to those are uploaded
 by hand with `scp` (`migrate` is a one-time step and refuses to run a second time).

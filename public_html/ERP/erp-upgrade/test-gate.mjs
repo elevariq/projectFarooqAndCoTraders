@@ -151,8 +151,8 @@ async function main() {
       d.status === 401 && !has(d, 'Haji') && !has(d, MARK.data));
     check('E5 enforced: sign-in page is served as HTML and marked no-store (CDN must never keep it)',
       /text\/html/.test(a.headers.get('content-type')) && /no-store/.test(cc(a)));
-    check('E6 the sign-in page posts to the login API and probes /me.php with relative URLs',
-      a.body.includes("'api/auth/login.php'") && a.body.includes("'api/auth/me.php'"));
+    check('E6 the sign-in page posts a real form to the login API (relative URL) and probes /me.php',
+      a.body.includes('action="api/auth/login.php"') && a.body.includes("'api/auth/me.php'"));
     check('E7 a garbage session cookie is not a session', (await get('/', { cookie: '__Host-fcsid=' + 'a'.repeat(64) })).status === 401);
     const etag = (await (async () => { cfg({ enforce: false }); const r = await get('/'); cfg({ enforce: true }); return r; })()).headers.get('etag');
     const sneaky = await get('/', { headers: { 'If-None-Match': etag } });
@@ -160,25 +160,30 @@ async function main() {
     check('E9 /api/gate.php with an unknown target is a plain 404', (await get('/api/gate.php?f=nope')).status === 404 && (await get('/api/gate.php?f=../../x')).status === 404);
   }
 
-  /* ── the sign-in page's own script: what a person actually experiences ── */
+  /* ── the sign-in page: a REAL form, and its own script ── */
   {
     const html = (await get('/')).body;
     const script = (html.match(/<script>([\s\S]*?)<\/script>/) || [])[1] || '';
     check('P0 the sign-in page carries its script', script.length > 200);
-    const run = ({ me = 401, login, netFail = false, flag = false }) => {
+    check('P0b it is a real HTML form posting to the login endpoint (what password managers need to offer to save)',
+      /<form id="f" method="post" action="api\/auth\/login\.php"/.test(html) && /name="username" autocomplete="username"/.test(html) &&
+      /name="password" type="password" autocomplete="current-password"/.test(html) && /name="next"/.test(html));
+    check('P0c the hidden "next" is the page that was asked for, so a sign-in returns there',
+      /name="next" id="n" value="\/"/.test(html) && /name="next" id="n" value="\/index\.html"/.test((await get('/index.html')).body) &&
+      /name="next" id="n" value="\/farooq-co-erp\.html"/.test((await get('/farooq-co-erp.html')).body));
+    const run = ({ me = 401, flag = false, search = '?app=erp', path = '/' } = {}) => {
       const dom = new JSDOM(html); const doc = dom.window.document;
-      const calls = { replace: [], fetch: [] }, store = flag ? { fcGateGo: String(Date.now()) } : {};
-      const loc = { pathname: '/', search: '?app=erp', replace: u => calls.replace.push(u) };
+      const calls = { replace: [], fetch: [], state: [] }, store = flag ? { fcGateGo: String(Date.now()) } : {};
+      const loc = { pathname: path, search, replace: u => calls.replace.push(u) };
       const ss = { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); }, removeItem: k => { delete store[k]; } };
-      const fx = (url) => {
-        calls.fetch.push(url);
-        if (netFail) return Promise.reject(new Error('offline'));
-        const isMe = /me\.php/.test(url);
-        return Promise.resolve({ status: isMe ? me : login.status, json: async () => (isMe ? {} : login.data) });
-      };
-      new Function('document', 'location', 'sessionStorage', 'fetch', 'window', script)(doc, loc, ss, fx, { fetch: fx });
-      const submit = (u, p) => { doc.getElementById('u').value = u; doc.getElementById('p').value = p; doc.getElementById('f').dispatchEvent(new dom.window.Event('submit', { cancelable: true })); };
-      return { doc, calls, store, submit };
+      const listeners = {};
+      const fx = (url) => { calls.fetch.push(url); return Promise.resolve({ status: me, json: async () => ({}) }); };
+      const fakeWindow = { fetch: fx, addEventListener: (t, fn) => { listeners[t] = fn; } };
+      const hist = { replaceState: (a, b, url) => calls.state.push(url) };
+      new Function('document', 'location', 'sessionStorage', 'fetch', 'window', 'history', script)(doc, loc, ss, fx, fakeWindow, hist);
+      const submit = (u, p) => { doc.getElementById('u').value = u; doc.getElementById('p').value = p;
+        const ev = new dom.window.Event('submit', { cancelable: true }); doc.getElementById('f').dispatchEvent(ev); return ev; };
+      return { doc, calls, store, submit, listeners, msg: () => doc.getElementById('e').textContent, next: () => doc.getElementById('n').value };
     };
     let r = run({ me: 200 }); await sleep(40);
     check('P1 already signed in but the SameSite cookie was withheld (clicked from WhatsApp/Google): it steps straight in, keeping ?app=',
@@ -186,23 +191,29 @@ async function main() {
     r = run({ me: 200, flag: true }); await sleep(40);
     check('P2 …but never loops: a recent attempt suppresses a second automatic step-in', r.calls.replace.length === 0 && !r.calls.fetch.some(u => /me\.php/.test(u)));
     r = run({ me: 401 }); await sleep(40);
-    check('P3 not signed in: it just waits for the person to type', r.calls.replace.length === 0);
-    r = run({}); r.submit('', ''); await sleep(20);
-    check('P4 an empty form is refused client-side without calling the server',
-      /Enter your username/.test(r.doc.getElementById('e').textContent) && !r.calls.fetch.some(u => /login\.php/.test(u)));
-    r = run({ login: { status: 401, data: { error: 'That username or password is not right.' } } });
-    r.submit('owner', 'nope'); await sleep(40);
-    check('P5 a wrong password shows the server\'s message, clears the password and re-enables the button',
-      /not right/.test(r.doc.getElementById('e').textContent) && r.doc.getElementById('p').value === '' &&
-      r.doc.getElementById('b').disabled === false && r.doc.getElementById('b').textContent === 'Sign in' && r.calls.replace.length === 0);
-    r = run({ login: { status: 423, data: { error: 'Too many attempts. Try again in a few minutes.' } } });
-    r.submit('owner', 'x'); await sleep(40);
-    check('P6 a lockout message is shown as written', /Too many attempts/.test(r.doc.getElementById('e').textContent));
-    r = run({ netFail: true }); r.submit('owner', 'x'); await sleep(40);
-    check('P7 no connection gives a plain "could not reach the server", and the form recovers',
-      /Could not reach the server/.test(r.doc.getElementById('e').textContent) && r.doc.getElementById('b').disabled === false);
-    r = run({ login: { status: 200, data: { user: {} } } }); r.submit('owner', 'right'); await sleep(40);
-    check('P8 a successful sign-in reloads into the app (same URL, query kept)', r.calls.replace.length === 1 && r.calls.replace[0] === '/?app=erp');
+    check('P3 not signed in: it just waits for the person to type', r.calls.replace.length === 0 && r.msg() === '');
+    check('P3b the hidden "next" carries the current path and query (?app=erp) into the sign-in', r.next() === '/?app=erp');
+
+    r = run(); let ev = r.submit('', ''); await sleep(10);
+    check('P4 an empty form is stopped in the browser with a reason (no round trip)', ev.defaultPrevented === true && /Enter your username/.test(r.msg()));
+    r = run(); ev = r.submit('owner', 'secret'); await sleep(20);
+    check('P4b a filled form is NOT prevented — the browser really submits it, which is what makes a password manager offer to save',
+      ev.defaultPrevented === false);
+    check('P4c …and only then is the button dimmed', r.doc.getElementById('b').disabled === true && /Signing in/.test(r.doc.getElementById('b').textContent));
+    r.listeners.pageshow && r.listeners.pageshow();
+    check('P4d coming back via the Back button (bfcache) revives the button', r.doc.getElementById('b').disabled === false && r.doc.getElementById('b').textContent === 'Sign in');
+
+    for (const [code, re] of [['bad', /not right/], ['locked', /temporarily locked/], ['rate', /Too many attempts/], ['down', /could not be reached/], ['empty', /Enter your username/]]) {
+      r = run({ search: '?app=erp&signin=' + code });
+      check('P5 ?signin=' + code + ' shows its message', re.test(r.msg()));
+    }
+    r = run({ search: '?app=erp&signin=bad' });
+    check('P5b the error marker is removed from the address (a reload is clean) and from the next sign-in\'s "next"',
+      r.calls.state.length === 1 && r.calls.state[0] === '/?app=erp' && r.next() === '/?app=erp' && r.calls.fetch.length === 0);
+    r = run({ search: '?signin=bad&app=erp' });
+    check('P5c …wherever in the query it sits', r.next() === '/?app=erp' && r.calls.state[0] === '/?app=erp');
+    r = run({ search: '?signin=<script>' });
+    check('P5d an unknown / hostile code shows nothing', r.msg() === '');
   }
 
   /* ── sign in ── */
@@ -267,6 +278,75 @@ async function main() {
     check('X1 enforced + database unreachable: 503 retry page, NOT the app (fails closed)',
       a.status === 503 && !has(a, MARK.index) && /Try again/.test(a.body) && c.status === 503 && !has(c, MARK.erp));
     check('X2 the outage page is HTML and not cacheable', /text\/html/.test(a.headers.get('content-type')) && /no-store/.test(cc(a)));
+  }
+
+  /* ── native form sign-in (what the page posts): real HTTP against the real login.php ── */
+  {
+    cfg({ enforce: true });   // healthy database again (the fail-closed section above leaves it unreachable)
+    const form = async (fields, headers = {}) => {
+      const r = await fetch(BASE + '/api/auth/login.php', { method: 'POST', redirect: 'manual',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers }, body: new URLSearchParams(fields).toString() });
+      const sc = r.headers.getSetCookie ? r.headers.getSetCookie() : [];
+      const ck = sc.map(s => s.split(';')[0]).find(s => s.startsWith('__Host-fcsid=') && s !== '__Host-fcsid=');
+      return { status: r.status, location: r.headers.get('location'), cookie: ck || null, setCookie: sc, cc: r.headers.get('cache-control') || '', body: await r.text() };
+    };
+    const good = { username: 'owner', password: 'correct horse battery' };
+    let x = await form({ ...good, next: '/?app=erp' });
+    check('FP1 a form sign-in succeeds with a 303 back to the page it came from, and sets the session cookie',
+      x.status === 303 && x.location === '/?app=erp' && !!x.cookie && x.body === '');
+    check('FP1b the cookie is HttpOnly, Secure, SameSite=Strict, and the redirect is not cacheable',
+      /httponly/i.test(x.setCookie[0]) && /secure/i.test(x.setCookie[0]) && /samesite=strict/i.test(x.setCookie[0]) && /no-store/.test(x.cc));
+    const landed = await get('/', { cookie: x.cookie });
+    check('FP1c following that redirect with the new cookie opens the app', landed.status === 200 && has(landed, MARK.index));
+
+    x = await form({ username: 'owner', password: 'wrong', next: '/?app=erp' });
+    check('FP2 a wrong password redirects back with ?signin=bad and sets no cookie', x.status === 303 && x.location === '/?app=erp&signin=bad' && !x.cookie);
+    x = await form({ username: 'nobody', password: 'whatever', next: '/' });
+    check('FP2b an unknown user looks exactly the same as a wrong password (no account enumeration)', x.status === 303 && x.location === '/?signin=bad');
+    x = await form({ username: '', password: '', next: '/' });
+    check('FP3 empty fields redirect with ?signin=empty', x.status === 303 && x.location === '/?signin=empty' && !x.cookie);
+
+    const evil = ['//evil.example/x', 'https://evil.example/', '/\\evil.example', 'javascript:alert(1)', 'evil.example', '/a\r\nSet-Cookie: pwn=1', '///evil.example', '/x\r\nX: y'];
+    let leaked = [], okAll = true;
+    for (const n of evil) {
+      const y = await form({ ...good, next: n }); const loc = y.location || '';
+      if (y.status !== 303 || loc !== '/' || /evil|pwn|[\r\n]/i.test(loc) || y.setCookie.some(c => /pwn/.test(c))) { okAll = false; leaked.push(JSON.stringify(n) + ' -> ' + loc); }
+    }
+    check('FP4 every off-site / malformed "next" (protocol-relative, absolute, backslash, javascript:, header-injection) collapses to "/"', okAll, leaked.join(' | '));
+    x = await form({ ...good, next: '/?signin=bad&app=erp' });
+    check('FP5 a stale ?signin= marker in "next" is stripped after a good sign-in', x.status === 303 && x.location === '/?app=erp');
+    x = await form({ ...good, next: '/ERP/index.html?app=pwa' });
+    check('FP5b ordinary local paths (incl. the /ERP/ prefix on the main domain) pass through', x.location === '/ERP/index.html?app=pwa');
+    x = await form(good);
+    check('FP5c no "next" at all goes to "/"', x.status === 303 && x.location === '/');
+
+    x = await form({ ...good, next: '/' }, { 'Sec-Fetch-Site': 'cross-site' });
+    check('FP6 a form post forged from ANOTHER site is refused even with the right password (login CSRF)', x.status === 303 && x.location === '/?signin=bad' && !x.cookie);
+    for (const site of ['same-origin', 'same-site', 'none']) {
+      x = await form({ ...good, next: '/' }, { 'Sec-Fetch-Site': site });
+      check('FP6b Sec-Fetch-Site: ' + site + ' is allowed', x.status === 303 && x.location === '/' && !!x.cookie);
+    }
+
+    /* the app's own JSON sign-in is untouched */
+    const j = await post('/api/auth/login.php', good);
+    check('FP7 the JSON sign-in the app uses still answers 200 JSON (no redirect)', j.status === 200 && !!j.json.user && !!j.cookie);
+    const jb = await post('/api/auth/login.php', { username: 'owner', password: 'nope' });
+    check('FP7b …and a bad JSON sign-in is still a 401 with the error text', jb.status === 401 && /not right/.test(jb.json.error));
+
+    /* the database is unreachable while someone signs in */
+    cfg({ enforce: true, dsn: 'sqlite:/no/such/dir/never.sqlite' });
+    x = await form({ ...good, next: '/?app=erp' });
+    check('FP8 database down during a form sign-in: back to the page with ?signin=down, never a raw JSON error', x.status === 303 && x.location === '/?app=erp&signin=down' && !x.cookie);
+    cfg({ enforce: true });
+
+    /* lockout last: it blocks this IP until the attempts table is cleared */
+    db("DELETE FROM auth_login_attempts; UPDATE auth_users SET failed_attempts = 0, locked_until = NULL;");
+    for (let i = 0; i < 5; i++) await form({ username: 'owner', password: 'wrong' + i, next: '/' });
+    x = await form({ ...good, next: '/' });
+    check('FP9 after repeated failures a form sign-in is turned away with ?signin=rate (even with the right password)', x.status === 303 && /signin=(rate|locked)$/.test(x.location) && !x.cookie, x.location);
+    db("DELETE FROM auth_login_attempts; UPDATE auth_users SET failed_attempts = 0, locked_until = NULL;");
+    x = await form({ ...good, next: '/' });
+    check('FP9b once cleared the account works again', x.status === 303 && x.location === '/' && !!x.cookie);
   }
 
   /* ── a broken config is not "no config" ── */

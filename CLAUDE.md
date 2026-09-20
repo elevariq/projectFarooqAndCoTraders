@@ -477,6 +477,18 @@ are done and live:
     data file); signed in ⇒ the file, sent `private, no-cache` with an ETag (revalidates as a tiny
     `304`; a matching `If-None-Match` can't bypass the check). **Fails closed**: enforcing + database
     unreachable, or a broken/unreadable config ⇒ `503` retry page — never the app.
+    **The sign-in page is a real HTML `<form method="post" action="api/auth/login.php">`, not a
+    `fetch`** (changed 2026-09-20 after "the browser doesn't offer to save the password"): password
+    managers — Chrome, Safari, Firefox, phone keychains — only reliably offer to save when a form is
+    genuinely submitted and the browser then navigates; a fetch-then-reload gave them no clear
+    "it worked" signal. `login.php` now answers two ways with the same rules: the app's own JSON
+    fetch (unchanged), and a native form post (`application/x-www-form-urlencoded`: `username`,
+    `password`, hidden `next`) → `303` to `next` on success, or to `next?signin=<bad|empty|locked|rate|down>`
+    on failure (the page turns the code into a message and tidies the address). `next` is vetted by
+    `auth_safe_next()` (`_session.php`): only a local path, everything else collapses to `/` (no open
+    redirect, no header injection). A form post the browser marks `Sec-Fetch-Site: cross-site` is
+    refused (login CSRF); the check is deliberately header-only, not Host/Origin, because behind the
+    CDN those could be rewritten and lock everyone out.
   - **The kill-switch.** `'enforce_login' => true` in the server's `private/erp-config.php` (currently
     **true**). Absent/false = dormant: the gate serves the files to anyone and never touches the DB.
     Only a real boolean `true` enforces (`"yes"` doesn't — a typo can't lock people out). Read on every
@@ -518,7 +530,11 @@ are done and live:
     (`.git/deploy-erp.lock`) so two runs can't overlap. Backups on the server:
     `/home/u943531942/backups/gate-20260920005913/` (the successful migrate),
     `.../gate-20260920004319/` (first attempt), `.../erp-deploy-<timestamp>/` (each app deploy), and
-    `private/erp-config.php.bak-<timestamp>` (each kill-switch flip). Checklist:
+    `private/erp-config.php.bak-<timestamp>` (each kill-switch flip), `.../api-<timestamp>/` (each
+    `scripts/deploy-api.sh`). **PHP changes (`public_html/ERP/api/**`) are NOT shipped by
+    `deploy-erp.sh`** — use `scripts/deploy-api.sh` (backs up, lints on the server, probes the live
+    endpoints without needing a password, restores itself on any failure; `rollback` argument undoes
+    it). Checklist:
     `docs/OPERATIONS.md` → "Phase 3 rollout (login gate)".
   - **Lesson from the first rollout attempt (2026-09-20) — read before probing this host.** The first
     `migrate` was rolled back after a *gzip-accepting curl* got a **403 from the Hostinger CDN edge**
@@ -530,9 +546,10 @@ are done and live:
     script therefore uses plain-HEAD probes for blocked/alive questions and a control-relative
     `browser_check` (INCONCLUSIVE if the control is refused too), and the `migrate → real-browser
     check → finalize` split exists for this reason.
-  - **Tests.** `test-gate.mjs` (57 checks: the real PHP under `php -S` against SQLite — signed in/out,
+  - **Tests.** `test-gate.mjs` (86 checks: the real PHP under `php -S` against SQLite — signed in/out,
     session expiry/idle/deactivation, fail-closed incl. broken config, kill-switch, `If-None-Match`
-    bypass, and the sign-in page's own script), `test-auth-client.mjs` (63, sections H/I = enforce
+    bypass, the sign-in page's own script, and the native form sign-in incl. open-redirect / header-
+    injection / cross-site / lockout / DB-down cases), `test-auth-client.mjs` (63, sections H/I = enforce
     mode), `test-accounts.mjs` (40); all mutation-verified. `test-gate.mjs` skips itself (exit 0) if
     there is no `php` on the machine; CI has PHP. **Not covered by any test**: the `.htaccess` rewrites
     under real Apache/LiteSpeed and the CDN — those are verified live by the rollout steps.

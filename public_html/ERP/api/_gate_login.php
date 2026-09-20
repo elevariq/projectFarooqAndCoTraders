@@ -38,9 +38,14 @@ function gate_page_shell(string $title, string $body, string $script = ''): stri
         . $body . '</div>' . ($script !== '' ? '<script>' . $script . '</script>' : '') . '</body></html>';
 }
 
-function gate_login_page(): string {
+function gate_login_page(string $next = '/'): string {
+    // A REAL form post (not fetch): browsers' password managers offer to save a password
+    // when a form is genuinely submitted and the browser then navigates. login.php answers a
+    // form post with a 303 back to `next`, or to `next?signin=<code>` when something is wrong.
+    $nextAttr = htmlspecialchars(auth_safe_next($next), ENT_QUOTES);
     $body = '<h1>Farooq &amp; Co Traders</h1><p class="sub">Sign in to open the ERP</p>'
-        . '<form id="f" autocomplete="on" novalidate>'
+        . '<form id="f" method="post" action="api/auth/login.php" autocomplete="on" novalidate>'
+        . '<input type="hidden" name="next" id="n" value="' . $nextAttr . '">'
         . '<label for="u">Username</label><input id="u" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus>'
         . '<label for="p">Password</label><input id="p" name="password" type="password" autocomplete="current-password">'
         . '<div class="err" id="e" role="alert"></div>'
@@ -53,11 +58,31 @@ function gate_login_page(): string {
     $script = <<<'JS'
 (function () {
   var f = document.getElementById('f'), u = document.getElementById('u'), p = document.getElementById('p'),
-      e = document.getElementById('e'), b = document.getElementById('b');
+      e = document.getElementById('e'), b = document.getElementById('b'), n = document.getElementById('n');
   var FLAG = 'fcGateGo';
+  var MSG = {
+    bad: 'That username or password is not right.',
+    empty: 'Enter your username and password.',
+    locked: 'This account is temporarily locked. Try again later.',
+    rate: 'Too many attempts. Try again in a few minutes.',
+    down: 'The server could not be reached just now. Try again in a moment.'
+  };
+  /* the address without a leftover ?signin=<code> marker */
+  function cleanSearch() {
+    return location.search.replace(/([?&])signin=[a-z]+(&|$)/, '$1').replace(/[?&]$/, '');
+  }
+  /* a failed attempt comes back here as ?signin=<code>: say why, then tidy the address so a reload is clean */
+  var m = /[?&]signin=([a-z]+)/.exec(location.search);
+  if (m) {
+    if (MSG[m[1]]) e.textContent = MSG[m[1]];
+    try { history.replaceState(null, '', location.pathname + cleanSearch()); } catch (x) {}
+  }
+  /* after signing in the browser is sent back to exactly where it was (?app=erp and all) */
+  n.value = location.pathname + cleanSearch();
+
   function proceed() {
     try { sessionStorage.setItem(FLAG, String(Date.now())); } catch (x) {}
-    location.replace(location.pathname + location.search);
+    location.replace(location.pathname + cleanSearch());
   }
   function recently() {
     try { var t = +sessionStorage.getItem(FLAG); return t && Date.now() - t < 15000; } catch (x) { return false; }
@@ -66,30 +91,23 @@ function gate_login_page(): string {
      (WhatsApp, a browser search result) arrives without it even though the
      person is signed in. Ask the API from inside the site — that request does
      carry it — and step straight in. The flag stops this ever looping. */
-  if (!recently() && window.fetch) {
+  if (!m && !recently() && window.fetch) {
     fetch('api/auth/me.php', { credentials: 'same-origin', cache: 'no-store' })
       .then(function (r) { if (r.status === 200) proceed(); })
       .catch(function () {});
   }
   f.addEventListener('submit', function (ev) {
-    ev.preventDefault();
     e.textContent = '';
-    if (!u.value.trim() || !p.value) { e.textContent = 'Enter your username and password.'; return; }
-    b.disabled = true; b.textContent = 'Signing in…';
-    fetch('api/auth/login.php', {
-      method: 'POST', credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: u.value.trim(), password: p.value })
-    }).then(function (r) {
-      return r.json().catch(function () { return {}; }).then(function (d) { return { s: r.status, d: d }; });
-    }).then(function (x) {
-      if (x.s === 200) { try { sessionStorage.removeItem(FLAG); } catch (y) {} proceed(); return; }
-      e.textContent = (x.d && x.d.error) || 'Could not sign in.';
-      p.value = ''; p.focus();
-    }).catch(function () {
-      e.textContent = 'Could not reach the server. Check your connection and try again.';
-    }).then(function () { b.disabled = false; b.textContent = 'Sign in'; });
+    if (!u.value.trim() || !p.value) {
+      ev.preventDefault();
+      e.textContent = MSG.empty;
+      return;
+    }
+    /* let the browser submit the form for real; only dim the button once it is on its way */
+    setTimeout(function () { b.disabled = true; b.textContent = 'Signing in…'; }, 0);
   });
+  /* coming back to this page from the bfcache (Back button) must not leave a dead button */
+  window.addEventListener('pageshow', function () { b.disabled = false; b.textContent = 'Sign in'; });
 })();
 JS;
     return gate_page_shell('Sign in — Farooq &amp; Co Traders', $body, $script);

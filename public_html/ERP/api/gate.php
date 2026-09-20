@@ -123,4 +123,5 @@ if (current_session($pdo, $CFG)) {
 }
 
 if ($key === 'data') gate_reply(401, 'Sign in required.');
-gate_reply(401, gate_login_page(), 'text/html; charset=utf-8');
+// after signing in, come back to the page that was asked for (path only; auth_safe_next() vets it)
+gate_reply(401, gate_login_page((string)parse_url((string)($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH)), 'text/html; charset=utf-8');
