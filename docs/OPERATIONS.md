@@ -383,6 +383,22 @@ numeric-string keys, `Z-a` and `Z-A` as different keys, three drafts with an emp
 **Mutation-tested**: deliberately corrupting data mid-import (one invoice total, `{}`→`[]`, a rounded float, a
 dropped record, invalid JSON) is caught every time and rolled back.
 
+**Import log.**
+- **2026-09-20** — `farooq-co-erp-backup-2026-09-20-mu9coyge.json` (1,111,554 bytes, SHA-256
+  `ef585eff945afb82939f23070ec42da8e9d9045c9f70cd7ca4d0fbe629d7dc46`, exported 05:03 UTC by the client's
+  Chrome on Windows 10, app `2026-09-09-invoicing-v1`). Dry run clean, then `--commit`: 46/46 stores OK, every
+  record identical, 13/13 totals equal, file unchanged. Re-checked through a separate connection: invoices
+  Rs 460,000 (paid) + Rs 310,000 (Rs 40,000 paid, Rs 270,000 due) = the Rs 500,000 receipt applied; each invoice
+  equals its lines; sequences INV 2 / PUR 2 / PV 1 / REC 1 match the documents; 131 of 136 products active
+  (the five blank catalogue rows). A second run is refused (tables non-empty). Pristine copies:
+  `client-backups/` (local, read-only, gitignored) and `/home/u943531942/backups/client-backup-20260920/`
+  (server, mode 400 in a 700 folder). **This was a rehearsal snapshot** — the app still saves in the browser,
+  so to cut over: empty the 46 tables (`TRUNCATE`), take a fresh `Backup Database` at the moment of freeze,
+  dry-run, commit. One observation for the client's data, not a migration issue: purchases show `paidAmount`
+  0 while payment `PV-2026-000001` (Rs 300,000 to supplier SUP-0020) is not allocated to a purchase — the
+  supplier ledger nets payments and purchases, so the balance is right, but a purchase's own "paid" column
+  doesn't reflect supplier payments.
+
 Not covered / known limits: the importer keeps `meta.sessionUserId` and `meta.lastSaveAt` exactly as in the
 file (they are per-browser values — see `docs/MYSQL_MIGRATION_PLAN.md` → "Per-browser keys"); it does not
 merge two backups (one backup → empty database); it cannot repair a backup that was already inconsistent.
