@@ -1,0 +1,186 @@
+{
+ "meta": {
+  "table": "meta",
+  "pk": "k"
+ },
+ "sequences": {
+  "table": "sequences",
+  "pk": "k"
+ },
+ "business": {
+  "table": "business",
+  "pk": "id"
+ },
+ "warehouses": {
+  "table": "warehouses",
+  "pk": "id"
+ },
+ "regions": {
+  "table": "regions",
+  "pk": "id"
+ },
+ "products": {
+  "table": "products",
+  "pk": "id"
+ },
+ "customers": {
+  "table": "customers",
+  "pk": "id"
+ },
+ "suppliers": {
+  "table": "suppliers",
+  "pk": "id"
+ },
+ "inventory": {
+  "table": "inventory",
+  "pk": "id"
+ },
+ "stockMovements": {
+  "table": "stock_movements",
+  "pk": "id"
+ },
+ "invoices": {
+  "table": "invoices",
+  "pk": "id"
+ },
+ "invoiceItems": {
+  "table": "invoice_items",
+  "pk": "id"
+ },
+ "purchases": {
+  "table": "purchases",
+  "pk": "id"
+ },
+ "purchaseItems": {
+  "table": "purchase_items",
+  "pk": "id"
+ },
+ "payments": {
+  "table": "payments",
+  "pk": "id"
+ },
+ "paymentAllocations": {
+  "table": "payment_allocations",
+  "pk": "id"
+ },
+ "customerReturns": {
+  "table": "customer_returns",
+  "pk": "id"
+ },
+ "customerReturnItems": {
+  "table": "customer_return_items",
+  "pk": "id"
+ },
+ "supplierReturns": {
+  "table": "supplier_returns",
+  "pk": "id"
+ },
+ "supplierReturnItems": {
+  "table": "supplier_return_items",
+  "pk": "id"
+ },
+ "orders": {
+  "table": "orders",
+  "pk": "id"
+ },
+ "orderItems": {
+  "table": "order_items",
+  "pk": "id"
+ },
+ "stockDocs": {
+  "table": "stock_docs",
+  "pk": "id"
+ },
+ "stockDocItems": {
+  "table": "stock_doc_items",
+  "pk": "id"
+ },
+ "migrationBackups": {
+  "table": "migration_backups",
+  "pk": "id"
+ },
+ "operations": {
+  "table": "operations",
+  "pk": "opId"
+ },
+ "documentEdits": {
+  "table": "document_edits",
+  "pk": "id"
+ },
+ "supplierProducts": {
+  "table": "supplier_products",
+  "pk": "id"
+ },
+ "priceHistory": {
+  "table": "price_history",
+  "pk": "id"
+ },
+ "priceApprovals": {
+  "table": "price_approvals",
+  "pk": "id"
+ },
+ "costHistory": {
+  "table": "cost_history",
+  "pk": "id"
+ },
+ "users": {
+  "table": "users",
+  "pk": "id"
+ },
+ "salesmen": {
+  "table": "salesmen",
+  "pk": "id"
+ },
+ "accountAdjustments": {
+  "table": "account_adjustments",
+  "pk": "id"
+ },
+ "expenses": {
+  "table": "expenses",
+  "pk": "id"
+ },
+ "documents": {
+  "table": "documents",
+  "pk": "no"
+ },
+ "auditLog": {
+  "table": "audit_log",
+  "pk": "id"
+ },
+ "landedCosts": {
+  "table": "landed_costs",
+  "pk": "id"
+ },
+ "landedCostExpenses": {
+  "table": "landed_cost_expenses",
+  "pk": "id"
+ },
+ "inventoryCostAdjust": {
+  "table": "inventory_cost_adjust",
+  "pk": "id"
+ },
+ "employees": {
+  "table": "employees",
+  "pk": "id"
+ },
+ "salaryPayments": {
+  "table": "salary_payments",
+  "pk": "id"
+ },
+ "millingJobs": {
+  "table": "milling_jobs",
+  "pk": "id"
+ },
+ "millingJobItems": {
+  "table": "milling_job_items",
+  "pk": "id"
+ },
+ "syncQueue": {
+  "table": "sync_queue",
+  "pk": "opId"
+ },
+ "legacy": {
+  "table": "legacy",
+  "pk": "k"
+ }
+}

@@ -349,6 +349,44 @@ Things learned doing this — worth knowing before touching the server config ag
 - The `dbhub` MCP DSN is the only place the password is stored in plain text on this machine besides the
   local config; it is never copied into the repo, an artifact, or a chat.
 
+## Importing the client's backup into the server database (2026-09-20)
+
+`scripts/import-backup.php` loads a `Settings → Backup Database` JSON (`farooq-co-erp-backup-<date>-<id>.json`)
+into the 46 tables. **It only ever reads the backup and is a dry run unless you pass `--commit`.**
+
+1. Client sends the file. Save a pristine copy in `client-backups/` (gitignored — real business data; the
+   filename pattern is also ignored anywhere in the repo). Never edit it.
+2. Upload to a private folder on the server (outside the web root):
+   ```
+   ssh -p 65002 u943531942@31.97.219.57 'mkdir -p ~/import && chmod 700 ~/import'
+   scp -P 65002 scripts/import-backup.php public_html/ERP/database/stores.json client-backups/<file>.json \
+       u943531942@31.97.219.57:import/
+   ```
+3. **Dry run first** (changes nothing): `ssh … 'cd ~/import && php import-backup.php <file>.json'`. Read the report:
+   every store must say `OK`, "records identical" must be `N / N`, the 13 money/quantity totals must match,
+   and the backup's SHA-256 must be unchanged. Orphan references are informational.
+4. Keep it: `php import-backup.php <file>.json --commit` (only commits if every check passed; otherwise it rolls
+   back and says why). It refuses to load into tables that already hold rows.
+5. Afterwards keep the file on the server under `/home/u943531942/backups/client-backup-<date>/` (mode 700) and
+   delete `~/import`.
+
+What it refuses (nothing touched, exit 2): not a backup / wrong format version, a store the schema has no
+table for, a record without its key, duplicate keys, a `counts` header that disagrees with the file,
+truncated or non-UTF-8-clean JSON (e.g. a lone surrogate). A duplicate invoice/receipt/purchase number is
+refused by the database's UNIQUE index and rolled back.
+
+**Tested 2026-09-20 on the live server (dry runs)** with a backup exported by the real app after driving
+purchases, invoices (incl. draft + cancelled), payments, returns, transfers, adjustments, payroll and a milling
+job through the services (34 stores populated): all 1,000+ records read back identical, 13 totals equal to the
+paisa. Awkward values survive (`{}` vs `[]`, `0.30000000000000004`, `9007199254740991`, `1e21`, emoji, Urdu,
+numeric-string keys, `Z-a` and `Z-A` as different keys, three drafts with an empty invoice number).
+**Mutation-tested**: deliberately corrupting data mid-import (one invoice total, `{}`→`[]`, a rounded float, a
+dropped record, invalid JSON) is caught every time and rolled back.
+
+Not covered / known limits: the importer keeps `meta.sessionUserId` and `meta.lastSaveAt` exactly as in the
+file (they are per-browser values — see `docs/MYSQL_MIGRATION_PLAN.md` → "Per-browser keys"); it does not
+merge two backups (one backup → empty database); it cannot repair a backup that was already inconsistent.
+
 ## Phase 3 rollout (login gate) — checklist
 
 **STATUS: rolled out and ENFORCING since 2026-09-20.** Order actually run: `migrate` (a first attempt

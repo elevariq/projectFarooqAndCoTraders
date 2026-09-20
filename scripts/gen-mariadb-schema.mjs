@@ -108,7 +108,8 @@ SET NAMES utf8mb4;
 `;
 for (const store of appStores) {
   const t = T[store], name = snake(store), lines = [], idx = [];
-  lines.push(`  ${q('pk')} VARCHAR(128) NOT NULL COMMENT 'record key = ${t.pk}'`);
+  /* exact-match key: the default *_ci collation would treat 'A1' and 'a1' as one record, and even utf8mb4_bin ignores trailing spaces (PAD SPACE); nopad_bin is exact */
+  lines.push(`  ${q('pk')} VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_nopad_bin NOT NULL COMMENT 'record key = ${t.pk}'`);
   lines.push(`  ${q('doc')} LONGTEXT NOT NULL`);
   lines.push(`  ${q('rev')} INT UNSIGNED NOT NULL DEFAULT 1`);
   /* not `updated_at`: the app's own records carry an `updatedAt` field that becomes a column */
@@ -127,4 +128,7 @@ for (const store of appStores) {
   sql += `CREATE TABLE IF NOT EXISTS ${q(name)} (\n${[...lines, ...idx].join(',\n')}\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;\n\n`;
 }
 fs.writeFileSync(OUT, sql);
+/* store -> table + key field, so the importer / API never keep their own copy of this list */
+const manifest = Object.fromEntries(appStores.map(s => [s, { table: snake(s), pk: T[s].pk }]));
+fs.writeFileSync(path.join(path.dirname(OUT), 'stores.json'), JSON.stringify(manifest, null, 1) + '\n');
 console.log(`wrote ${path.relative(ROOT, OUT)} — ${appStores.length} tables`);

@@ -2,3 +2,8 @@ node_modules/
 .DS_Store
 Thumbs.db
 clientNewReq/
+
+# Real client data — never commit. The app names its backups farooq-co-erp-backup-<date>-<id>.json
+client-backups/
+farooq-co-erp-backup-*.json
+**/farooq-co-erp-backup-*.json

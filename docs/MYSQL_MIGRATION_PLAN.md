@@ -21,6 +21,27 @@ survives exactly, Urdu text is fine, junk values never fail a write, and `JSON_V
 as `1`/`0` (not `'true'`) — the generator accounts for that. `01-db.js` is the only file that touches
 IndexedDB, so it is the one seam to replace.
 
+**Edge cases found while auditing (2026-09-20) — decisions baked into the design, and work still to do.**
+- Keys are exact-match (`utf8mb4_nopad_bin`): the default collation treats `A1`/`a1` as one record, and even
+  `utf8mb4_bin` ignores trailing spaces. Verified.
+- **Per-browser values live in shared records and must NOT go to the shared database.** `meta.sessionUserId`
+  (who is signed in on *this* browser — shared, everyone would "be" the same user) and `meta.lastSaveAt`
+  (written on every save — a hot row that would make every concurrent save conflict) stay in the browser;
+  also `meta.appVersion`/`adoptedFrom` are per-install. `business.currentRole` is a per-user value inside a
+  shared record — with server sign-in the role comes from the server, so the app must stop reading it.
+- No code reads a whole store inside a transaction (only `importAll`), so conflict detection can be per
+  record (`rev` check on every record read with `get`) — no store-level locking needed.
+- Every commit must be one MySQL transaction; a conflict returns the fresh records and the client re-runs the
+  transaction body (sequence numbers are read+written inside the same transaction, so two users can never
+  take the same invoice number, and an aborted attempt leaves no gap).
+- Other people's changes: the in-memory mirror is hydrated once at boot, so it goes stale with several
+  users. Needs a cheap version check + refresh (deletes must be visible too, hence a version counter, not
+  `row_updated_at`).
+- Permissions: the server must enforce role rules on writes; today roles are only advisory in the browser.
+- The server runs non-strict SQL mode, so an over-long value in an *index helper* column is truncated rather
+  than failing a write (the stored record is never truncated). Keep helper columns short; do not switch the
+  API session to strict mode without re-testing junk values.
+
 **The client's backup is never modified.** Keep a pristine read-only copy outside git (gitignored
 folder); the importer only reads it; after import, compare row counts and money totals between the file
 and the database before anything is switched over; the client's browser data stays untouched until then.
