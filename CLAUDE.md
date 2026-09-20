@@ -897,6 +897,13 @@ zero silently.
   one extra voucher, and a second window editing from a stale copy is refused. **Not seen by anyone yet:** the
   new Edit button and edit screen in a real browser / on a phone (jsdom has no layout), and an edit against the
   real MySQL API (`php` is not installed on this machine; `test-gate.mjs` also skips for that reason).
+- **Deployed live 2026-09-20** (commits `4a5c75f` + `1ef0ddd`) by the user running `scripts/deploy-erp.sh` (full suite green
+  inside the script first); Hostinger cache cleared for the ERP subdomain from a Claude session. Verified in the user's
+  signed-in Chrome: the file the gate serves is byte-identical to the local `dist/` build (1,872,122 bytes, SHA-256 checked
+  in the page), the app frame has the new API on the server backend, and both real purchases (PUR-2026-000001/2) show Edit
+  next to Invoice under an *Actions* column. The edit form was seen opening live ("Save changes", the paid hint) but **no
+  real purchase has been edited yet** and nothing was saved during verification — try a harmless edit (a note) on one first.
+  Rollback: `/home/u943531942/backups/erp-deploy-20260920155305/` (copy the three files back into `ERP/_app/`, clear cache).
 
 ## The top bar and the phone dashboard (2026-09-20)
 
