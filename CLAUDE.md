@@ -992,6 +992,14 @@ spinners, search-clear, autofill wash, selection colour, `color-scheme`, and the
   emulated mousedown really stops the native picker on iOS Safari is unverified), Firefox, Safari desktop.
 - Pre-existing, not changed: in dark mode the filter pills on list screens have light borders (`--ink-2` in the base CSS — identical
   with the kit removed).
+- **Deployed live 2026-09-20** (commit `18cd42f`) by the user running `scripts/deploy-erp.sh` (full suite green inside it; the permission
+  layer refused it when a Claude session tried, so it was handed over); Hostinger cache cleared for the ERP subdomain from a Claude
+  session. Verified: the gated files on the server are byte-identical to a fresh build of that commit in an isolated worktree
+  (`_app/farooq-co-erp.html` md5 `05314bbd…`, 1,942,630 bytes; `_app/index.html` md5 `85286e05…`), site answers 401 (gated, healthy).
+  Rollback: `/home/u943531942/backups/erp-deploy-20260920205449/` (copy the three files back into `ERP/_app/`, clear cache).
+  **Not yet seen on the live site by anyone:** the themed dropdowns / calendar / dialogs in the user's signed-in browser, a physical
+  phone, Firefox. Run a `deploy-erp.sh` from the repo root (`cd /d/projectFarooqAndCoTraders && ./scripts/deploy-erp.sh`); it takes
+  over 2 minutes, so from this tool it moves to the background — do not start a second run (the lock refuses it, correctly).
 
 ## Where to look for more detail
 
