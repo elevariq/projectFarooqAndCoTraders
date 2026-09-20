@@ -345,6 +345,111 @@ async function main() {
   check('V7 the scope is offered in the invoice list',
     IS.SCOPES.some(s => s[0] === 'payment' && /Receipt/.test(s[1])));
 
+  /* ══════════════════════════════════════════════════════════════════════
+     SECOND PASS (2026-09-21) — edge cases found by reviewing the first
+     ══════════════════════════════════════════════════════════════════════ */
+  const closePanel = async () => { const b = $('#panel .x') || $('[data-close]') || $('#scrim'); if (b) click(b); await sleep(100); };
+  w.go('payments'); await sleep(200);
+  PS.reset(PL);
+
+  /* the old box had a Print button; so does this one */
+  check('X1 the Payments screen has a Print button', !!$('[data-export="print"]'));
+
+  /* a payment recorded while a filter hides it must not look unsaved */
+  type($('[data-fcpq]'), 'CHQ-84711'); await sleep(260);
+  check('X2 setup: a search is on and there is no warning yet', !$('.fcb-note.warn'));
+  const hidden = await ERP.Payments.receive({ customerId: c2.id, amount: 77, method: 'Cash', reference: 'HIDDEN-NEW-1', date: todayIso });
+  w.paint(); await sleep(150);
+  check('X3 a new payment the search hides is announced by its receipt number',
+    $$('.fcb-note.warn').some(n => n.textContent.includes(hidden.receiptNumber) && /hidden/.test(n.textContent)),
+    $$('.fcb-note').map(n => n.textContent).join(' / '));
+  check('X4 and the warning has its own Clear filters button', !!$('.fcb-note.warn [data-fcpact="clear"]'));
+  type($('[data-fcpq]'), 'CHQ-84711 '); await sleep(260);
+  check('X5 typing again answers the warning (it goes away)', !$$('.fcb-note.warn').some(n => /hidden/.test(n.textContent)));
+  click($('[data-fcpact="clear"]')); await sleep(150);
+  const shownNew = await ERP.Payments.receive({ customerId: c2.id, amount: 78, method: 'Cash', reference: 'SHOWN-NEW-2', date: todayIso });
+  w.paint(); await sleep(150);
+  check('X6 with no filter on, a new payment raises no warning and is listed',
+    !$$('.fcb-note.warn').length && $('#view').textContent.includes(shownNew.receiptNumber));
+  type($('[data-fcpq]'), 'SHOWN-NEW-2'); await sleep(260);
+  const visible = await ERP.Payments.receive({ customerId: c2.id, amount: 79, method: 'Cash', reference: 'SHOWN-NEW-2B', date: todayIso });
+  w.paint(); await sleep(150);
+  check('X7 a new payment that the search DOES match raises no warning',
+    !$$('.fcb-note.warn').some(n => /hidden/.test(n.textContent)) && $('#view').textContent.includes(visible.receiptNumber));
+  click($('[data-fcpact="clear"]')); await sleep(100);
+
+  /* a reversal made by another window changes no count — the index must still notice */
+  const quiet = await ERP.Payments.receive({ customerId: c2.id, amount: 5, method: 'Cash', reference: 'QUIET-REV', date: todayIso });
+  name[quiet.id] = 'Q'; mineIds.add(quiet.id);
+  const before = hits({ q: 'QUIET-REV reversed' });
+  ERP.S.payments.find(p => p.id === quiet.id).status = 'REVERSED';       /* as a refresh from the server would */
+  const afterRev = hits({ q: 'QUIET-REV reversed' });
+  check('X8 a reversal that changed no record count is still picked up by the search', before === '' && afterRev === 'Q',
+    `before [${before}] after [${afterRev}]`);
+
+  /* ── the Pay supplier button ── */
+  const supSel = () => $('#panel [data-f="sup"]');
+  const supBanner = () => ($('#fcSupBal') || {}).textContent || '';
+  const openPaySup = async () => { click($('[data-fcpayopen="paysup"]')); await sleep(180); };
+  check('X9 the Pay supplier button on this screen is the clearing kind', !!$('.sec-t [data-fcpayopen="paysup"]') && !$('[data-paysup]'));
+  await openPaySup();
+  check('X10 the panel opens with NO supplier chosen (it used to show the first one)',
+    !!supSel() && supSel().value === '' && /Choose the supplier/.test(supBanner()), supSel() ? `value=[${supSel().value}] ${supBanner()}` : 'no panel');
+  $('#panel [data-f="amt"]').value = '100';
+  click($('[data-save="1"]')); await sleep(250);
+  check('X11 Save with no supplier is refused and pays nobody',
+    !!supSel() && !ERP.S.payments.some(p => p.direction === 'OUT' && p.partyType !== 'CUSTOMER' && p.amount === M.toP(100) && p.paymentDate === todayIso),
+    'panel closed or a payment was written');
+  change(supSel(), sup.id); await sleep(80);
+  check('X12 choosing a supplier shows what is payable to it', /Payable:/.test(supBanner()) && supBanner().includes(M.fmt(ERP.Ledger.supplierBalance(sup.id))), supBanner());
+  $('#panel [data-f="amt"]').value = '100';
+  click($('[data-save="1"]')); await sleep(400);
+  const paid = ERP.S.payments.find(p => p.direction === 'OUT' && p.partyId === sup.id && p.amount === M.toP(100) && p.paymentDate === todayIso);
+  check('X13 with a supplier chosen it is paid', !!paid);
+  if ($('[data-fcv="close"]')) click($('[data-fcv="close"]'));
+  await sleep(100);
+  /* the hand-over variables left behind by other screens must not leak in */
+  ERP.setPayFor(c1.id);                                    /* "Payment" on an invoice leaves a SHOP id here */
+  w.go('payments'); await sleep(150);
+  await openPaySup();
+  check('X14 a shop id left in PAY_FOR does not become "the first supplier"', supSel() && supSel().value === '', supSel() ? supSel().value : 'no panel');
+  await closePanel();
+  ERP.setPayFor(sup.id);                                   /* Statement of Account -> "Pay this supplier" */
+  w.go('payments'); await sleep(150);
+  await openPaySup();
+  check('X15 nor does a supplier chosen on another screen', supSel() && supSel().value === '', supSel() ? supSel().value : 'no panel');
+  await closePanel();
+  /* the routes that SHOULD pre-select still do */
+  ERP.setPayFor(sup.id);
+  w.openPanel('paysup'); await sleep(150);
+  check('X16 Pay this supplier (Statement of Account) still pre-selects that supplier', supSel() && supSel().value === sup.id, supSel() ? supSel().value : 'no panel');
+  await closePanel();
+  ERP.setPayFor(null);
+  w.go('supplierProfile', sup.id); await sleep(200);
+  click($(`[data-paysup="${sup.id}"]`)); await sleep(180);
+  check('X17 a supplier own page still opens the panel with that supplier', supSel() && supSel().value === sup.id, supSel() ? supSel().value : 'no panel');
+  await closePanel();
+  w.go('payments'); await sleep(150);
+  await openPaySup();
+  check('X18 and going from that page to Payments does not keep it', supSel() && supSel().value === '', supSel() ? supSel().value : 'no panel');
+  await closePanel();
+
+  /* ── the invoice list says WHY an invoice is there ── */
+  w.go('invoices'); await sleep(200);
+  ERP.InvoiceList.reset();
+  type($('[data-fcq]'), 'CHQ-84711'); await sleep(300);
+  const hitText = () => $$('.fcb-hit').map(h => h.textContent).join(' | ');
+  check('X19 an invoice found by a cheque reference says which receipt paid it',
+    /Paid by/.test(hitText()) && hitText().includes(mine.P1.receiptNumber) && hitText().includes('CHQ-84711'), hitText());
+  type($('[data-fcq]'), invA.invoiceNumber); await sleep(300);
+  check('X20 searching an invoice number itself shows no "Paid by" note', !/Paid by/.test(hitText()), hitText());
+  ERP.InvoiceList.reset();
+  ERP.InvoiceList.scope = 'payment'; ERP.InvoiceList.q = mine.P1.receiptNumber; w.paint(); await sleep(200);
+  check('X21 the receipt number, in the payment scope, finds the invoice and says so',
+    /Paid by/.test(hitText()) && $$('#view table.fcb-list tbody tr').length >= 1, hitText());
+  ERP.InvoiceList.reset(); w.paint(); await sleep(100);
+  check('X22 and after Clear the invoice list has its rows again', $$('#view table.fcb-list tbody tr').length >= 1);
+
   console.log(out.join('\n'));
   console.log(`\n${pass} passed, ${fail} failed`);
   w.close();

@@ -94,7 +94,7 @@ var DEFAULTS = { q: '', scope: 'all', dir: 'all', method: 'all', period: 'all', 
                  min: '', max: '', region: 'all', sort: 'newest' };
 
 /* the screen's remembered state — every control writes straight into it */
-var PL = ERP.PaymentList = Object.assign({ limit: {} }, DEFAULTS);
+var PL = ERP.PaymentList = Object.assign({ limit: {}, seen: null, notice: null }, DEFAULTS);
 
 /* ══════════════════════════════════════════════════════════════════════════
    WHAT KIND OF PAYMENT IS THIS
@@ -150,7 +150,9 @@ function build() {
 }
 
 function ensure(force) {
-  var S = ERP.S, s = [S.payments.length, S.allocations.length, S.invoices.length, S.purchases.length, version].join('.');
+  var S = ERP.S, rev = 0;
+  S.payments.forEach(function (p) { if (p.status === 'REVERSED') rev++; });    /* a reversal changes no length */
+  var s = [S.payments.length, rev, S.allocations.length, S.invoices.length, S.purchases.length, version].join('.');
   if (!force && cache && s === stamp) return cache;
   cache = build(); stamp = s;
   return cache;
@@ -299,7 +301,7 @@ function reset(state) {
   var keep = state.sort;
   Object.keys(DEFAULTS).forEach(function (k) { state[k] = DEFAULTS[k]; });
   state.sort = keep || DEFAULTS.sort;
-  state.limit = {};
+  state.limit = {}; state.notice = null;
   return state;
 }
 
@@ -380,6 +382,15 @@ function section(key, list, whole, filtering, emptyIdle, emptyFiltered, cols, ro
 global.PAGES.payments = function () {
   var r = results(PL), filtering = active(PL), info = describe(PL);
   var g = r.groups, S = ERP.S;
+
+  /* A payment recorded while a search or filter is on can be one that filter hides: it would seem not to have
+     been saved. Say so (until the person next changes a control). */
+  var shown = {}; r.list.forEach(function (p) { shown[p.id] = 1; });
+  var fresh = [];
+  if (PL.seen) S.payments.forEach(function (p) { if (!PL.seen[p.id] && !shown[p.id]) fresh.push(p.receiptNumber); });
+  PL.seen = {}; S.payments.forEach(function (p) { PL.seen[p.id] = 1; });
+  if (fresh.length && filtering) PL.notice = fresh;
+  else if (!filtering) PL.notice = null;
   var show = function (k) { return PL.dir === 'all' || PL.dir === k; };
 
   /* ── the four figures ── */
@@ -419,6 +430,7 @@ global.PAGES.payments = function () {
         '<select data-fcpfil="sort" aria-label="Sort by">' + options(SORTS, PL.sort) + '</select></label>' +
       '<div class="grow"></div>' +
       '<button class="btn" data-fcpact="csv">' + I('sheet') + 'CSV</button>' +
+      '<button class="btn" data-export="print">' + I('print') + 'Print</button>' +
     '</div>' +
     '<div class="bar fcb-filters">' +
       '<label class="fld">' + I('wallet') + '<select data-fcpfil="dir" aria-label="Kind of payment">' + options(DIRS, PL.dir) + '</select></label>' +
@@ -435,6 +447,11 @@ global.PAGES.payments = function () {
       '<label class="f"><span>Amount to</span><input inputmode="decimal" data-fcpfil="max" placeholder="any" value="' + esc(PL.max) + '"></label>' +
       (filtering ? '<button class="btn" data-fcpact="clear">Clear filters</button>' : '') +
     '</div>' +
+    (PL.notice && filtering
+      ? '<div class="fcb-note warn">' + I('alert') + '<span>' + (PL.notice.length === 1 ? 'The payment you just recorded, ' : PL.notice.length + ' payments just recorded, ') +
+        '<b>' + PL.notice.slice(0, 3).map(esc).join(', ') + (PL.notice.length > 3 ? '…' : '') + '</b>, ' +
+        (PL.notice.length === 1 ? 'is' : 'are') + ' saved but hidden by the search or filters above. ' +
+        '<button class="btn sm" data-fcpact="clear">Clear filters</button></span></div>' : '') +
     info.problems.map(function (m) { return '<div class="fcb-note warn">' + I('alert') + '<span>' + esc(m) + '</span></div>'; }).join('') +
     info.notes.map(function (m) { return '<div class="fcb-note">' + I('cal') + '<span>' + esc(m) + '</span></div>'; }).join('');
 
@@ -493,9 +510,8 @@ global.PAGES.payments = function () {
 
   /* ── Supplier payments ── */
   if (show('sup')) {
-    var firstSup = (global.SUPPLIERS && global.SUPPLIERS[0]) ? global.SUPPLIERS[0].id : '';
     html += heading('Supplier payments', 'payment', g.sup.length, r.whole.sup, r.sums.sup, filtering,
-        '<div class="r"><button class="btn sm" data-paysup="' + esc(firstSup) + '">' + I('plus') + 'Pay supplier</button></div>') +
+        '<div class="r"><button class="btn sm" data-fcpayopen="paysup">' + I('plus') + 'Pay supplier</button></div>') +
       section('sup', g.sup, r.whole.sup, filtering,
         'No supplier payments yet. Payments made to the mills will be recorded here.',
         'No supplier payment matches these words and filters.',
@@ -595,14 +611,15 @@ function repaint(delay) {
 D.addEventListener('input', function (e) {
   var el = e.target, ds = el && el.dataset;
   if (!ds) return;
-  if (ds.fcpq !== undefined) { PL.q = el.value; PL.limit = {}; repaint(160); return; }
+  if (ds.fcpq !== undefined) { PL.q = el.value; PL.limit = {}; PL.notice = null; repaint(160); return; }
   /* the two amount boxes are typed into, so they follow the keys like the search box */
-  if (ds.fcpfil === 'min' || ds.fcpfil === 'max') { PL[ds.fcpfil] = el.value; PL.limit = {}; repaint(160); }
+  if (ds.fcpfil === 'min' || ds.fcpfil === 'max') { PL[ds.fcpfil] = el.value; PL.limit = {}; PL.notice = null; repaint(160); }
 });
 D.addEventListener('change', function (e) {
   var el = e.target, ds = el && el.dataset;
   if (!ds || !ds.fcpfil) return;
   PL[ds.fcpfil] = el.value;
+  PL.notice = null;
   if (ds.fcpfil !== 'sort') PL.limit = {};              /* a new order keeps its place; a new filter starts over */
   repaint(0);
 });

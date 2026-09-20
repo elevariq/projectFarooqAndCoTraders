@@ -286,6 +286,13 @@ PANELS.payment = {
   }
 };
 
+/* the "Payable" banner of the Pay supplier panel; blank until a supplier is chosen */
+function supPayableHtml(id) {
+  return I('wallet') + '<div><p>' + (id
+    ? 'Payable: <b>' + M.fmt(ERP.Ledger.supplierBalance(id)) + '</b>'
+    : 'Choose the supplier to see what is payable.') + '</p></div>';
+}
+
 PANELS.paysup = {
   t: 'Pay supplier', s: 'Money paid to a mill', cta: 'Record payment & print voucher',
   f: function () {
@@ -296,14 +303,18 @@ PANELS.paysup = {
        fallback, so opening it from a specific supplier's page silently
        defaulted to the first supplier in the list instead. */
     var watarget = typeof WATARGET !== 'undefined' ? WATARGET : null;
-    var pre = PAY_FOR || (watarget && sups.some(function (s) { return s.id === watarget; }) ? watarget : null) ||
-      (sups[0] || {}).id;
+    /* Only a supplier that is really in the list may be pre-selected. PAY_FOR is shared with "Receive payment", so after
+       "Payment" on an invoice it holds a SHOP's id: it used to be taken as-is, no option matched, and the browser then
+       showed the FIRST supplier while the banner said "Payable: 0" — a payment to the wrong mill was one click away.
+       With nothing valid to pre-select the choice is left blank and Save refuses until one is picked. */
+    var isSup = function (id) { return !!id && sups.some(function (s) { return s.id === id; }); };
+    var pre = isSup(PAY_FOR) ? PAY_FOR : isSup(watarget) ? watarget : '';
     return '<label class="f"><span>Supplier</span><select data-f="sup">' +
+        '<option value=""' + (pre ? '' : ' selected') + '>— Choose a supplier —</option>' +
         sups.map(function (s) {
           return '<option value="' + s.id + '"' + (s.id === pre ? ' selected' : '') + '>' + esc(s.co) + '</option>';
         }).join('') + '</select></label>' +
-      '<div class="banner info">' + I('wallet') + '<div><p>Payable: <b>' +
-        M.fmt(ERP.Ledger.supplierBalance(pre)) + '</b></p></div></div>' +
+      '<div class="banner info" id="fcSupBal">' + supPayableHtml(pre) + '</div>' +
       '<div class="f2 fc-amtpaid"><label class="f"><span>Amount Paid</span><input data-f="amt" inputmode="decimal"></label>' +
         '<label class="f"><span>Method</span><select data-f="method">' +
           ERP.ENUM.methods.map(function (m) { return '<option>' + m + '</option>'; }).join('') + '</select></label></div>' +
@@ -316,6 +327,7 @@ PANELS.paysup = {
   },
   save: function (v) {
     var amount = String(v.amt || '').replace(/[^\d.]/g, '');
+    if (!v.sup) return 'Choose the supplier.';
     if (!amount || Number(amount) <= 0) return 'Enter the amount paid.';
     ERP.Payments.pay({ supplierId: v.sup, amount: amount, method: v.method, reference: v.ref,
       date: v.date || todayISO(), note: v.note, description: v.desc })
@@ -856,6 +868,8 @@ D.addEventListener('click', function (e) {
   if (po) {
     e.preventDefault();
     if (po.dataset.fcpayopen === 'refund') REFUND_FOR = null; else PAY_FOR = null;
+    /* the base app's own supplier hand-over (a supplier's profile page) is a lexical `let` of the base script */
+    if (po.dataset.fcpayopen === 'paysup' && typeof WATARGET !== 'undefined') WATARGET = '';
     global.openPanel(po.dataset.fcpayopen);
     return;
   }
@@ -936,6 +950,10 @@ D.addEventListener('change', function (e) {
     ERP.InvoiceList[el.dataset.fcfil] = el.value;
     if (el.dataset.fcfil !== 'sort') ERP.InvoiceList.page = 1;    /* a new order keeps its place; a new filter starts over */
     repaintList(); return;
+  }
+  if (el.dataset.f === 'sup' && D.getElementById('fcSupBal') && el.closest('#panel')) {
+    D.getElementById('fcSupBal').innerHTML = supPayableHtml(el.value);
+    return;
   }
   if (el.id === 'fcPayCust') {
     var box = D.getElementById('fcPayBal');

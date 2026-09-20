@@ -224,6 +224,12 @@ function build() {
          happens to end the same way. Receipt numbers are found with the
          "Receipt / payment ref." choice. */
       payRef: joinN((payByInv[i.id] || []).reduce(function (a, p) { return a.concat([p.reference, compact(p.reference)]); }, [])),
+      /* one entry per receipt applied, for the "Paid by …" hint under a row found through it */
+      pays: (payByInv[i.id] || []).map(function (p) {
+        return { no: p.receiptNumber, ref: p.reference || '',
+                 refText: joinN([p.reference, compact(p.reference)]),
+                 allText: joinN([p.receiptNumber, compact(p.receiptNumber), p.reference, compact(p.reference), p.method]) };
+      }),
       other: joinN([i.notes, i.description, i.salesperson, i.paymentMethod, i.warehouseSnapshot,
                     ERP.STATUS_LABEL[i.status], ERP.STATUS_LABEL[i.paymentStatus]]),
       items: lines
@@ -378,12 +384,14 @@ function results(state) {
   return sortList(ERP.Invoices.all().filter(matcher(state)), state.sort);
 }
 
-/* For a search that landed on a product, the lines that matched — so the
-   list can show WHY that invoice is there ("Taj Mahal Sella × 20"). Words
-   that the invoice number or the shop already explain are not counted. */
+/* For a search that landed on a product or on a payment, what matched — so the
+   list can show WHY that invoice is there ("Taj Mahal Sella × 20", "Paid by
+   REC-2026-000031 (cheque 4471)"). Words that the invoice number or the shop
+   already explain are not counted. */
 function hitsFor(state) {
   var pr = prepare(state), idx = ensure(), terms = pr.p.terms;
-  if (!terms.length || (pr.scope !== 'all' && pr.scope !== 'product')) return function () { return null; };
+  var prod = pr.scope === 'all' || pr.scope === 'product', pay = pr.scope === 'all' || pr.scope === 'payment';
+  if (!terms.length || (!prod && !pay)) return function () { return null; };
   var cur = currentCustomerText();
   return function (inv) {
     var e = idx[inv.id];
@@ -394,10 +402,18 @@ function hitsFor(state) {
       want = terms.filter(function (t) { return !hasTerm(others, t); });
     }
     if (!want.length) return null;
-    var hit = e.items.filter(function (x) {
+    var hit = prod ? e.items.filter(function (x) {
       return x.n && want.some(function (t) { return hasTerm([x.n], t); });
-    });
-    return hit.length ? { lines: hit.slice(0, 3), more: Math.max(0, hit.length - 3) } : null;
+    }) : [];
+    /* "Everything" looks at cheque / transaction references only (see payRef); the receipt number is for the "Receipt / payment ref." choice */
+    var paid = pay ? e.pays.filter(function (x) {
+      var text = pr.scope === 'all' ? x.refText : x.allText;
+      return text && want.some(function (t) { return hasTerm([text], t); });
+    }) : [];
+    if (!hit.length && !paid.length) return null;
+    return { lines: hit.slice(0, 3), more: Math.max(0, hit.length - 3),
+             pays: paid.slice(0, 3).map(function (x) { return x.no + (x.ref ? ' (' + x.ref + ')' : ''); }),
+             morePays: Math.max(0, paid.length - 3) };
   };
 }
 

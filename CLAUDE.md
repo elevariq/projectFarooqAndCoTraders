@@ -1269,9 +1269,21 @@ not filtered at all, and the "Receipts & vouchers" log stopped at the latest 200
   addition); mutation-checked with six deliberate breakages (each turns it red). `test-pay-a-shop.mjs` S1–S17 still pass unchanged against the new
   screen. Looked at in real headless Chrome (desktop 1320px + 390px phone). **Not seen on the live site or a physical phone.** App deploy only
   (`deploy-erp.sh`) — no table, no API change.
-- Not done: search inside the printed receipt text; per-shop payment search on a shop's own page; fuzzy/typo matching (the Ctrl+K palette does
-  that); "Pay supplier" on this screen still opens with the first supplier pre-selected (`PANELS.paysup` has no blank choice) — the shop buttons
-  don't have that problem.
+- Not done: search inside the printed receipt text; per-shop payment search on a shop's own page; fuzzy/typo matching (the Ctrl+K palette does that).
+- **Second pass (2026-09-21, "any edge case left?") — found by tracing the neighbouring code, fixed and tested (`test-payment-search.mjs` X1–X22, 126 checks now, each new behaviour mutation-checked):**
+  (1) **`PANELS.paysup` ("Pay supplier") could pay the wrong mill.** `PAY_FOR` is shared with "Receive payment" — after "Payment" on an invoice it holds a
+  SHOP's id, no supplier option matched, the browser silently showed the FIRST supplier and the banner said "Payable: 0"; a stale `PAY_FOR`/`WATARGET` from
+  another screen did the same. Now only a supplier that is really in the list is pre-selected, otherwise the choice is blank ("— Choose a supplier —"), Save
+  refuses without one, and the "Payable" banner follows the chosen supplier (it was static). The Payments screen's button goes through `data-fcpayopen="paysup"`
+  (clears `PAY_FOR`, and `WATARGET` — a lexical `let` of the base script — before opening). The routes that should pre-select still do (a supplier's own
+  page, Statement of Account → "Pay this supplier"). This is a change in `06-wiring.js`.
+  (2) A payment recorded while a search/filter hides it looked unsaved: the screen now says "The payment you just recorded, REC-…, is saved but hidden by the
+  search or filters above" with a Clear button (answered by touching any control). (3) The Print button of the old toolbar came back. (4) The index also notices a
+  reversal made in another window (a reversal changes no record count). (5) **Invoice list:** a row found through a receipt/cheque now says "Paid by REC-… (CHQ-…)"
+  under the invoice number, as a product hit already did (`hitsFor` returns `pays`; rendered in `05-ui-builder.js`).
+  Checked in real headless Chrome with real mouse and keyboard: the themed dropdown drives the Kind filter, typing keeps focus, "Show more" does not jump the scroll.
+- Reviewed, found correct, no change: the other sessions' `Payments._write` `balanceAfter` fix and the Pay-a-shop balance preview (3a5f708), the milling second
+  pass (`meta` guard row — the `meta` table exists in `schema-mariadb.sql`), stock-value "Lying at mills" (d3d9017). Full suite: 38 harnesses, 0 failing.
 
 ## Where to look for more detail
 

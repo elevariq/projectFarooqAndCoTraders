@@ -779,7 +779,11 @@ global.PAGES.invoices = function () {
         (i.orderNumber ? '<div class="sub mono">' + esc(i.orderNumber) + '</div>' : '') +
         (hit ? '<div class="fcb-hit">' + hit.lines.map(function (l) {
             return esc(l.name) + (l.qty ? ' × ' + esc(l.qty) : '');
-          }).join(' · ') + (hit.more ? ' · +' + hit.more + ' more' : '') + '</div>' : '') + '</td>' +
+          }).join(' · ') + (hit.more ? ' · +' + hit.more + ' more' : '') +
+          (hit.pays && hit.pays.length
+            ? (hit.lines.length ? ' · ' : '') + 'Paid by ' + hit.pays.map(esc).join(' · ') +
+              (hit.morePays ? ' · +' + hit.morePays + ' more' : '')
+            : '') + '</div>' : '') + '</td>' +
       '<td data-label="Date">' + esc(fmtDate(i.invoiceDate)) + '</td>' +
       '<td data-label="Shop"><button class="lnk" data-cust="' + i.customerId + '">' +
         esc(i.shopNameSnapshot || '—') + '</button>' +
