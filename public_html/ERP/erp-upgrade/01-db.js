@@ -485,6 +485,7 @@ FDB.status = function () {
   };
 };
 
+FDB.STORES = STORES;   /* key paths per store — used by the server driver (01b-server-db.js) */
 global.FDB = FDB;
 global.Money = Money;
 global.FAROOQ_UPGRADE_VERSION = UPGRADE_VERSION;

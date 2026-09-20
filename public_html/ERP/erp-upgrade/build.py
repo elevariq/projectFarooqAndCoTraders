@@ -15,6 +15,7 @@ OUT.mkdir(exist_ok=True)
 MODULES = [
     ("00-bridge.js",         "BRIDGE — window view of the app's lexical state"),
     ("01-db.js",             "PERSISTENCE — IndexedDB, atomic transactions, sequences, money"),
+    ("01b-server-db.js",     "SERVER DRIVER — the same FDB on the company MySQL database (off unless the server says so)"),
     ("02-services.js",       "DOMAIN — invoices, purchases, payments, returns, ledgers, migration"),
     ("03-docx.js",           "WORD — real editable .docx generation"),
     ("04-documents.js",      "DOCUMENTS — one model, A4 preview / print / PDF / Word / WhatsApp"),
