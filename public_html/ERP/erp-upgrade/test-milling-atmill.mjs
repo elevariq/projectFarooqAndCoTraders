@@ -340,6 +340,41 @@ async function main() {
   w.go('milling'); await sleep(150); click2($2('[data-millview="' + big.id + '"]')); await sleep(120);
   check('U1 the job detail lists the flour by its full name', shown().includes(flourP.ur));
 
+  /* ══ round 3 (2026-09-21): goods at the mills are shown BESIDE the stock value, never inside it ══ */
+  const SVx = ERP.StockValue, millE = w.SUPPLIERS[4].id;
+  await ERP.Purchases.save({ supplierId: millD, warehouseId: whX, purchaseDate: '2026-09-02', items: [{ productId: wheatP.id, quantity: 100, unitPrice: 100 }] });
+  const svBefore = SVx.build({});
+  await ERP.Milling.save({ millId: millE, warehouseId: whX, jobDate: '2026-09-20', receiveMode: 'AT_MILL', settle: 'NET',
+    issue: [{ productId: wheatP.id, quantity: 100, weightKg: 4900, unitRate: 100, rateBasis: 'BAG' }],
+    receive: [{ productId: flourP.id, quantity: 60, weightKg: 3000, unitRate: 120, rateBasis: 'BAG' }, { productId: chokarP.id, quantity: 30, weightKg: 1020, unitRate: 40, rateBasis: 'BAG' }] });
+  const svAfter = SVx.build({});
+  check('V1 the warehouse stock figure lost the wheat and gained NOTHING for the flour/chokar still at the mill',
+    svAfter.totals.bags === svBefore.totals.bags - 100, svBefore.totals.bags + ' -> ' + svAfter.totals.bags);
+  check('V2 the mills figure grew by exactly the 90 bags made, worth 60×120 + 30×40 at cost',
+    svAfter.atMills.bags - svBefore.atMills.bags === 90 && svAfter.atMills.valueP - svBefore.atMills.valueP === 60 * w.Money.toP(120) + 30 * w.Money.toP(40));
+  check('V3 a warehouse, category or search filter shows no mills figure (it is about shelves)',
+    SVx.build({ warehouseId: whX }).atMills.bags === 0 && SVx.build({ category: flourP.cat }).atMills.bags === 0 && SVx.build({ q: 'flour' }).atMills.bags === 0);
+  w.go('stockvalue'); await sleep(200);
+  check('V4 the Stock value screen has a "Lying at mills (not yet here)" card saying it is not in the warehouse figure',
+    /Lying at mills \(not yet here\)/.test(shown()) && /not in the warehouse figure/.test(shown()) && !!$2('.sv-mills'));
+  click2($2('.sv-mills')); await sleep(200);
+  check('V5 clicking the card opens Stock at mills', /What is lying at the mill/.test(shown()));
+  w.go('dashboard'); await sleep(200);
+  check('V6 the dashboard card adds a line for what is lying at the mills', /lying at the mills/.test(shown()));
+  w.go('inventory'); await sleep(200);
+  check('V7 the Inventory strip mentions it', /lying at mills/.test(shown()));
+  const dm = SVx.docModel({}), sh = SVx.sheets({});
+  check('V8 the printed report lists it separately and says it is NOT in the total', /Lying at mills/.test(JSON.stringify(dm.totals)) && /NOT in the stock value/.test(JSON.stringify(dm.summary || dm.notes || dm)));
+  check('V9 the Excel summary has the two extra lines', JSON.stringify(sh[0].rows).includes('Lying at mills, bags (not in total)') && JSON.stringify(sh[0].rows).includes('Lying at mills, at cost (not in total)'));
+  const flourWhV = ERP.Inventory.available(flourP.id, whX);
+  await ERP.Milling.receiveArrival({ millId: millE, warehouseId: whX, lines: [{ productId: flourP.id, quantity: 20, weightKg: 1000 }] });
+  const svArr = SVx.build({});
+  check('V10 when 20 bags arrive the mills figure falls by 20 and the warehouse figure rises by 20 — nothing counted twice',
+    svAfter.atMills.bags - svArr.atMills.bags === 20 && svArr.totals.bags - svAfter.totals.bags === 20 &&
+    svArr.totals.bags + svArr.atMills.bags === svAfter.totals.bags + svAfter.atMills.bags && ERP.Inventory.available(flourP.id, whX) === flourWhV + 20);
+  const dWh = svArr.totals.valueP - svAfter.totals.valueP, dMill = svAfter.atMills.valueP - svArr.atMills.valueP;
+  check('V11 the value leaves the mills figure EXACTLY (20 × the mill cost); it enters the warehouse figure at that cost blended into the row moving average, so to within whole-paisa rounding',
+    dMill === 20 * w.Money.toP(120) && Math.abs(dWh - dMill) <= 100, dWh + ' / ' + dMill);
   w.close();
   console.log(out.join('\n'));
   console.log(`\n${pass} passed, ${fail} failed`);

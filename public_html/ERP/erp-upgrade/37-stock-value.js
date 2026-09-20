@@ -146,6 +146,25 @@
   var SV = ERP.StockValue = {
     permission: PERM,
 
+    /* Goods lying at flour mills (32-milling.js) are on no warehouse shelf, so they are NOT in the stock figure and are never added
+       to it — they are reported beside it (bags, kg, worth at the job's cost per bag). Only for the whole-company view: a warehouse,
+       category or search filter is about shelves, so it shows none. Zeros when the milling module is absent. */
+    atMills: function (o) {
+      o = o || {};
+      var out = { bags: 0, kg: 0, valueP: 0, products: 0, unvaluedBags: 0 };
+      if (!ERP.Milling || typeof ERP.Milling.atMill !== 'function') return out;
+      if (o.warehouseId || o.category || (o.q && String(o.q).trim())) return out;
+      var seen = {};
+      ERP.Milling.atMill().forEach(function (r) {
+        if (!(r.qty > 0)) return;
+        out.bags += r.qty; out.kg += r.kg; out.valueP += r.valueP; seen[r.productId] = 1;
+        if (!r.costPerBagP) out.unvaluedBags += r.qty;
+      });
+      out.bags = Math.round(out.bags * 1000) / 1000; out.kg = Math.round(out.kg * 1000) / 1000;
+      out.unvaluedBags = Math.round(out.unvaluedBags * 1000) / 1000; out.products = Object.keys(seen).length;
+      return out;
+    },
+
     /* o: { warehouseId, category, q, noSell } — all optional. noSell skips the
        selling-price work (price list, last invoiced rate) for callers that
        only need the cost figures, e.g. the dashboard card. */
@@ -231,7 +250,7 @@
       }).map(function (w) { return { key: w.id, label: w.name }; });
 
       return {
-        rows: rows, totals: t, negative: negative,
+        rows: rows, totals: t, negative: negative, atMills: SV.atMills(o),
         byWarehouse: group(function (r) { return r.warehouseId; }, function (r) {
           var w = (global.WAREHOUSES || []).filter(function (x) { return x.id === r.warehouseId; })[0];
           return r.warehouse + (w && w.active === false ? ' (inactive)' : '');
@@ -262,11 +281,13 @@
       var totals = [{ label: 'Total bags in stock', value: nf(t.bags) }];
       if (t.sellValueP) totals.push({ label: 'Worth at selling price', value: M.fmt(t.sellValueP) });
       totals.push({ label: 'STOCK VALUE (at cost)', value: M.fmt(t.valueP), big: true, rule: true });
+      if (data.atMills.bags) totals.push({ label: 'Lying at mills — not in the total above', value: nf(data.atMills.bags) + ' bags · ' + M.fmt(data.atMills.valueP), bold: true });
 
       var notes = ['Value = bags on hand × average purchase cost per bag, as of ' + fmtDate(today()) + '.'];
       if (t.estimatedRows) notes.push('* Rs. ' + num(t.estimatedP) + ' of the total uses an estimated cost — the product’s purchase price, as no purchase of it is recorded.');
       if (t.unvaluedRows) notes.push(t.unvaluedProducts + ' product(s), ' + nf(t.unvaluedBags) + ' bags, have no cost recorded and are NOT in the total.');
       if (t.damagedQty) notes.push('Damaged stock (' + nf(t.damagedQty) + ' bags, ' + M.fmt(t.damagedValueP) + ' at cost) is not included.');
+      if (data.atMills.bags) notes.push(nf(data.atMills.bags) + ' bags (' + M.fmt(data.atMills.valueP) + ' at cost) are still lying at flour mills and have not reached a warehouse; they are shown separately and are NOT in the stock value.');
 
       var m = ERP.Analytics.docModel({
         id: 'stockvalue', title: 'Stock value', from: null, to: null,
@@ -298,6 +319,7 @@
         ['Of which estimated cost', M.toR(t.estimatedP)],
         ['Bags with no cost (not in total)', t.unvaluedBags],
         ['Damaged bags (not in total)', t.damagedQty], ['Damaged, at cost', M.toR(t.damagedValueP)],
+        ['Lying at mills, bags (not in total)', data.atMills.bags], ['Lying at mills, at cost (not in total)', M.toR(data.atMills.valueP)],
         [], ['By warehouse'], ['Warehouse', 'Products', 'Bags', 'Value at cost', 'Share %']];
       data.byWarehouse.forEach(function (g) { sum.push([g.label, g.products, g.bags, M.toR(g.valueP), g.share]); });
       sum.push([], ['By category'], ['Category', 'Products', 'Bags', 'Value at cost', 'Share %']);
@@ -344,7 +366,8 @@
     }).join('');
   }
 
-  function kpis(t) {
+  function kpis(t, am) {
+    am = am || { bags: 0 };
     var sell = t.pricedBags
       ? '<div class="v">' + rs(t.sellValueP) + '</div><div class="d">' +
         (t.unpricedBags ? 'Priced bags only — ' + nf(t.unpricedBags) + ' bags have no selling price' : 'All bags priced') + '</div>'
@@ -359,6 +382,13 @@
         '<div class="v">' + (t.damagedQty ? rs(t.damagedValueP) : '—') + '</div>' +
         '<div class="d">' + (t.damagedQty ? nf(t.damagedQty) + ' bags \u2014 not in the figure at left' +
           (t.damagedUnvalued ? ' \u00B7 ' + nf(t.damagedUnvalued) + ' have no cost' : '') : 'None recorded') + '</div></div>' +
+      (am.bags
+        ? '<div class="kpi sv-mills" data-go="millstock" role="link" tabindex="0" title="Open Stock at mills" aria-label="Goods lying at mills. Open Stock at mills">' +
+          '<div class="k">' + I('mill') + 'Lying at mills (not yet here)</div>' +
+          '<div class="v">' + (am.valueP ? rs(am.valueP) : '\u2014') + '</div>' +
+          '<div class="d">' + nf(am.bags) + ' bags \u2014 not in the warehouse figure' + (am.unvaluedBags ? ' \u00B7 ' + nf(am.unvaluedBags) + ' have no cost' : '') +
+            (am.valueP ? ' \u00B7 with them: ' + rs(t.valueP + am.valueP) : '') + '</div></div>'
+        : '') +
     '</div>';
   }
 
@@ -435,7 +465,7 @@
   function results() {
     var data = SV.build(ST);
     var showWh = !ST.warehouseId, showCat = !ST.category;
-    return kpis(data.totals) + warnings(data) +
+    return kpis(data.totals, data.atMills) + warnings(data) +
       '<div class="sv-two">' +
         (showWh ? breakdown('By warehouse', data.byWarehouse.length + ' warehouses', data.byWarehouse) : '') +
         (showCat ? breakdown('By category', data.byCategory.length + ' categories', data.byCategory) : '') +
@@ -474,11 +504,12 @@
   global.PAGES.dashboard = function () {
     var html = origDash ? origDash.apply(global, arguments) : '';
     if (!can(PERM)) return html;
-    var t = SV.build({ noSell: true }).totals;
+    var dd = SV.build({ noSell: true }), t = dd.totals, am = dd.atMills;
     var kpi = '<div class="kpi sv-dash" data-go="stockvalue" role="link" tabindex="0" title="Open the stock value report" aria-label="Stock value at cost. Open the report">' +
       '<div class="k">' + I('wallet') + 'Stock value (at cost)</div>' +
       '<div class="v">' + (t.valueP ? rs(t.valueP) : '\u2014') + '</div>' +
-      '<div class="d">' + (t.bags ? nf(t.bags) + ' bags in the warehouses' + (t.unvaluedRows ? (t.valueP ? ' \u00B7 some without cost' : ' \u00B7 cost not recorded yet') : '') : 'No stock on hand') + '</div></div>';
+      '<div class="d">' + (t.bags ? nf(t.bags) + ' bags in the warehouses' + (t.unvaluedRows ? (t.valueP ? ' \u00B7 some without cost' : ' \u00B7 cost not recorded yet') : '') : 'No stock on hand') +
+      (am.bags ? '<br>+ ' + (am.valueP ? rs(am.valueP) + ' (' + nf(am.bags) + ' bags)' : nf(am.bags) + ' bags') + ' lying at the mills' : '') + '</div></div>';
     var i = html.indexOf('All bags available');
     if (i > -1) {
       var e = html.indexOf('</div></div>', i);
@@ -495,7 +526,8 @@
     var strip = '<div class="card sv-strip"><div class="card-b"><div class="sv-strip-in">' +
       '<div class="sv-strip-main"><small>' + I('wallet') + 'Stock value at cost</small><b>' + (t.valueP ? rs(t.valueP) : '\u2014') + '</b>' +
         '<span>' + (t.bags ? nf(t.bags) + ' bags in stock' : 'No stock on hand') +
-          (t.unvaluedRows ? ' · ' + nf(t.unvaluedBags) + ' bags have no cost yet' : '') + '</span></div>' +
+          (t.unvaluedRows ? ' · ' + nf(t.unvaluedBags) + ' bags have no cost yet' : '') +
+          (data.atMills.bags ? ' · plus ' + nf(data.atMills.bags) + ' bags lying at mills' : '') + '</span></div>' +
       '<div class="sv-strip-wh">' + data.byWarehouse.map(function (g) {
         return '<div><small>' + esc(g.label) + '</small><b>' + (g.bags ? rs(g.valueP) : '—') + '</b></div>';
       }).join('') + '</div>' +
@@ -580,6 +612,7 @@
     '.sv-q{flex:1 1 220px;min-width:180px}.sv-q input{width:100%}' +
     '.sv-asof{margin:10px 0 0}' +
     '.sv-kpis{margin:16px 0}' +
+    '.sv-mills{cursor:pointer}.sv-mills:hover{border-color:var(--violet)}' +
     '.sv-main .v{font-size:26px;color:var(--violet)}' +
     '.sv-dash{cursor:pointer}.sv-dash:hover{background:var(--surface-2,rgba(127,127,127,.06))}' +
     '.sv-dash:focus-visible{outline:2px solid var(--violet,#6d4aff);outline-offset:-2px}' +

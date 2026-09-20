@@ -302,7 +302,7 @@ run it.
 8. ~~Client message (2026-09-16): "Payroll = Employee salary management system"~~ — **Resolved
    2026-09-16** as a deliberately minimal MVP (no real requirements were ever given). See below.
 
-9. **Stock lying at the mill (Punjab) — built 2026-09-20, LIVE since 2026-09-21, two questions for the client.** The feature itself is in
+9. **Stock lying at the mill (Punjab) — built 2026-09-20, LIVE since 2026-09-21 (except the Stock-value "Lying at mills" line — committed 2026-09-21, **NOT deployed**: the user will deploy when the other sessions finish); the open questions are DECIDED with recommended answers below. The plain-language story (who does what, how each form is filled) is `docs/MILLING_WORKFLOW.md`.** The feature itself is in
    `main` (see "Stock lying at the mill" below). Decision taken with the user on 2026-09-20: **go with it as built**, and keep these two
    points written down until the client answers:
    a. *Where does the wheat come from?* Today the wheat sent to a mill is taken out of one of **our warehouses' stock**, so the stock must
@@ -316,6 +316,7 @@ run it.
       (bags, kg, and worth at the job's cost per bag). If the client wants "everything we own, including what is in Punjab" on the
       dashboard, add a line for it there (a separate "At mills" figure, not folded into warehouse stock — the bags cannot be sold from a
       warehouse shelf until they arrive).
+   **DECIDED 2026-09-21 (recommended answers, kept until the client says otherwise — reasoning in `docs/MILLING_WORKFLOW.md`):** (a) wheat comes from our own books — record the wheat purchase first, then the milling job (keeps payables, cost and stock honest; no code change); (b) goods at the mills are shown BESIDE the stock value, never inside it — **built** (see "(9)" in the second pass below); (c) arrivals are recorded by the roles that can record purchases (`PURCHASE_CREATE`), warehouse staff hand over the slip; (d) the job carries the agreed rates as on the paper khata; (e) one job per handover of wheat; (f) the 1–8 % loss band stays a warning only. Not built, recommended next: a dated running in / out / balance statement per mill (the paper page's آمد / نکاس / باقی).
    c. **Deploy order (the one thing that can break a first save):** *(DONE. Table `milling_arrivals` created on the live database 2026-09-20 (by Claude, with the user's explicit permission; 7 columns, same shape as `milling_jobs`). `scripts/deploy-api.sh` 2026-09-20 ~23:14 server time (backup `~/backups/api-20260920231437`; its first attempt rolled itself back correctly on a dropped probe, see the Windows/Git Bash traps). `scripts/deploy-erp.sh` 2026-09-21 (backup `~/backups/erp-deploy-20260921003630`; commit `e7e4bf1`; the three files in `_app/` are md5-identical to that commit's build, `_app/farooq-co-erp.html` cfb35743…). Both were run from a clean clone of `main` (`git clone --local` + a `node_modules` junction) because another session's uncommitted files make the script refuse to run in the main folder — see "Shared working tree". Hostinger cache: the Hostinger MCP tools were disconnected, so it was NOT cleared from Claude — clear it in hPanel if the old build still shows. Rollback of the app: copy the three files from that backup back into `ERP/_app/`; of the API: `scripts/deploy-api.sh rollback`.)*  the new store `millingArrivals` needs its table on the live database
       (`milling_arrivals`, generated into `database/schema-mariadb.sql`) and `scripts/deploy-api.sh` run **before** `scripts/deploy-erp.sh`;
       otherwise the first arrival is refused as an unknown store ("NOT saved"). Production commands are handed to the user (`!` prefix).
@@ -836,6 +837,12 @@ mill could not be represented at all. That was the gap.
   (7) The job list Excel has a "Finished goods" column; the "Still at the mill" card is neutral (it is not a debt).
   (8) **`deploy-erp.sh` aborted after a fully successful upload** (2026-09-20): its last "Verifying" curl hit the same dropped-TLS-handshake
   as `deploy-api.sh` (exit 35) under `set -e`. The verify loop now retries and can no longer fail a good deploy.
+  (9) **Goods lying at the mills shown beside the stock value, never in it** (`37-stock-value.js`, `SV.atMills()`): a "Lying at mills (not yet here)"
+  card on the Stock value screen (links to Stock at mills; shows "with them: Rs …"), a second line on the dashboard card, a phrase on the Inventory strip,
+  a separate line in the print/PDF totals and notes, two rows in the Excel summary. Whole-company view only — a warehouse / category / search filter
+  shows none. Bags leave that figure exactly as they enter the warehouse figure (no double count; the warehouse side is blended into the row's moving
+  average, so it matches only to whole-paisa rounding). Tests: `test-milling-atmill.mjs` V1–V11 (110 checks in the file now); `test-stock-value.mjs` unchanged.
+  **Committed, NOT deployed** (waiting for the other sessions).
 - **DEPLOY ORDER (new store):** `millingArrivals` is a new table. **Apply `database/schema-mariadb.sql`'s `milling_arrivals` table to the live
   database and run `scripts/deploy-api.sh` BEFORE `scripts/deploy-erp.sh`**, otherwise the first arrival is refused as an unknown store
   ("NOT saved"). A job saved with the new field needs nothing on the server (the `doc` JSON holds it).
@@ -1235,6 +1242,7 @@ server first.
 ## Where to look for more detail
 
 - **`docs/SERVER_DATA.md` — the current guide to the server-side data system (how it works, what users see, everyday operations, backups, how to change it, known limits). Start here for anything about where the data lives.**
+- `docs/MILLING_WORKFLOW.md` — how Milling and Stock at mills work in real life (the story, each form, who does what, decisions on the open questions).
 - `docs/OPERATIONS.md` — full access inventory, exact commands used, and the deploy checklist.
 - `docs/MYSQL_MIGRATION_PLAN.md` — the IndexedDB → MySQL migration: decisions needed, steps, risks.
 - `scripts/deploy-erp.sh` — the recommended ERP deploy flow, runnable directly.
