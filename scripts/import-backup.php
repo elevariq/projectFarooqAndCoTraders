@@ -260,6 +260,11 @@ if ($errors) {
     say("RESULT: $errors verification problem(s) — ROLLED BACK, the database is untouched.");
     exit(1);
 }
-if ($commit) { $pdo->commit(); say('RESULT: everything verified — COMMITTED.'); }
+if ($commit) {
+    // tell every open browser that the data changed (they poll this counter)
+    try { if ($pdo->exec('UPDATE data_version SET v = v + 1 WHERE id = 1') === 0) $pdo->exec('INSERT IGNORE INTO data_version (id, v) VALUES (1, 1)'); }
+    catch (PDOException $e) { /* older database without the counter: nothing to bump */ }
+    $pdo->commit(); say('RESULT: everything verified — COMMITTED.');
+}
 else { $pdo->rollBack(); say('RESULT: everything verified — DRY RUN, rolled back (add --commit to keep it).'); }
 exit(0);

@@ -33,7 +33,7 @@ REMOTE_ERP="/home/u943531942/domains/farooqandcotraders.online/public_html/ERP"
 BACKUPS="/home/u943531942/backups"
 SITE="https://erp.farooqandcotraders.online"
 FILES=(_bootstrap.php _session.php _gate_login.php gate.php auth/login.php auth/me.php auth/logout.php \
-       auth/ticket.php auth/change-password.php auth/users.php)
+       auth/ticket.php auth/change-password.php auth/users.php        _data.php _stores.php data/_guard.php data/status.php data/version.php data/hydrate.php data/read.php data/commit.php)
 
 rssh() { ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_HOST" "$@"; }
 rscp() { scp -P "$SSH_PORT" -o BatchMode=yes "$@"; }
@@ -65,10 +65,11 @@ rssh "mkdir -p '$BK' && cp -pr '$REMOTE_ERP/api' '$BK/api'"
 
 echo "==> Uploading ${#FILES[@]} files"
 UPLOADED=1
+rssh "mkdir -p '$REMOTE_ERP/api/data'"
 for f in "${FILES[@]}"; do rscp "$ERP_DIR/api/$f" "$SSH_HOST:$REMOTE_ERP/api/$f"; done
 
 echo "==> Linting every PHP file with the server's own PHP"
-if ! rssh "cd '$REMOTE_ERP/api' && for f in *.php auth/*.php; do php -l \"\$f\" >/dev/null || { echo \"LINT FAILED: \$f\"; exit 1; }; done; echo lint ok"; then
+if ! rssh "cd '$REMOTE_ERP/api' && for f in *.php auth/*.php data/*.php; do php -l \"\$f\" >/dev/null || { echo \"LINT FAILED: \$f\"; exit 1; }; done; echo lint ok"; then
   restore_from "$BK"; die "PHP lint failed on the server — previous files restored."
 fi
 
@@ -91,6 +92,16 @@ else echo "  FAIL  JSON sign-in path answered HTTP $j (expected 400)"; bad=1; fi
 
 m="$(curl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/api/auth/me.php" || echo 000)"
 if [ "$m" = "401" ] || [ "$m" = "200" ]; then echo "  OK    me.php answers (HTTP $m)"; else echo "  FAIL  me.php answered HTTP $m"; bad=1; fi
+
+# the business-data endpoints must refuse an anonymous caller (they hand out / accept the company's records)
+for ep in status.php version.php hydrate.php read.php; do
+  c="$(curl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/api/data/$ep?stores=sequences" || echo 000)"
+  if [ "$c" = "401" ]; then echo "  OK    data/$ep refuses an anonymous request (401)"; else echo "  FAIL  data/$ep answered HTTP $c to an anonymous request (expected 401)"; bad=1; fi
+done
+c="$(curl -s -m 60 -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"ops":[],"reads":[]}' "$SITE/api/data/commit.php" || echo 000)"
+if [ "$c" = "401" ]; then echo "  OK    data/commit.php refuses an anonymous save (401)"; else echo "  FAIL  data/commit.php answered HTTP $c to an anonymous save (expected 401)"; bad=1; fi
+c="$(curl -s -m 60 -o /dev/null -w '%{http_code}' "$SITE/api/_data.php" || echo 000)"
+if [ "$c" = "403" ]; then echo "  OK    the shared include _data.php is not reachable over HTTP (403)"; else echo "  FAIL  api/_data.php answered HTTP $c (expected 403)"; bad=1; fi
 
 if [ "$bad" != 0 ]; then restore_from "$BK"; die "a live check failed — previous files restored. Backup kept at $BK."; fi
 OK=1
