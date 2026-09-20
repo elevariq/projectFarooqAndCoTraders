@@ -33,6 +33,11 @@
        invoice (the snapshot — it never changes) and the shop's current
        name, so an old invoice is found by either.
 
+   Also searchable (added 2026-09-21): the receipts that paid an invoice. A
+   cheque / transaction reference is found from "Everything"; the receipt number
+   and method only through the "Receipt / payment ref." choice (see `payRef`
+   below for why) — so "which invoice did cheque 4471 pay?" is answered here.
+
    Deliberately NOT done here: fuzzy/typo matching (11-search's palette does
    that; a filter list has to be predictable), a saved-searches feature, and
    searching inside the invoice's hand-edited print text (12-invoice-editor).
@@ -57,9 +62,10 @@ var SCOPES = [
   ['customer', 'Customer / phone'],
   ['product',  'Product'],
   ['amount',   'Amount'],
+  ['payment',  'Receipt / payment ref.'],
   ['notes',    'Notes & other']
 ];
-var SCOPE_FIELD = { number: 'number', product: 'product', amount: 'amount', notes: 'other' };
+var SCOPE_FIELD = { number: 'number', product: 'product', amount: 'amount', payment: 'pay', notes: 'other' };
 
 var SORTS = [
   ['newest', 'Newest first'],
@@ -183,8 +189,15 @@ function dateText(iso) {
 }
 
 function build() {
-  var S = ERP.S, byInv = {}, out = {};
+  var S = ERP.S, byInv = {}, out = {}, payByInv = {}, payById = {};
   S.invoiceItems.forEach(function (it) { (byInv[it.invoiceId] = byInv[it.invoiceId] || []).push(it); });
+  /* the receipts that were applied to each invoice, so "the invoice that
+     receipt REC-2026-000031 / cheque 4471 paid" can be found from this list */
+  S.payments.forEach(function (p) { payById[p.id] = p; });
+  S.allocations.forEach(function (a) {
+    var p = a.invoiceId && payById[a.paymentId];
+    if (p && p.status !== 'REVERSED') (payByInv[a.invoiceId] = payByInv[a.invoiceId] || []).push(p);
+  });
   S.invoices.forEach(function (i) {
     var items = (byInv[i.id] || []).slice().sort(function (a, b) { return a.sortOrder - b.sortOrder; });
     var lines = items.map(function (x) {
@@ -201,18 +214,28 @@ function build() {
       product: lines.map(function (l) { return l.n; }).filter(Boolean).join(SEP),
       amount: joinN([String(total), Number(total).toLocaleString('en-US')].concat(withPaisa)),
       date: dateText(i.invoiceDate),
+      pay: joinN((payByInv[i.id] || []).reduce(function (a, p) {
+        return a.concat([p.receiptNumber, compact(p.receiptNumber), p.reference, compact(p.reference), p.method]);
+      }, [])),
+      /* what "Everything" looks at: the cheque / transaction references only. A
+         receipt number is left out on purpose — it has the same shape as an
+         invoice number (REC-2026-000001 / INV-2026-000001), so searching the tail
+         of an invoice number would also pull in every invoice whose receipt
+         happens to end the same way. Receipt numbers are found with the
+         "Receipt / payment ref." choice. */
+      payRef: joinN((payByInv[i.id] || []).reduce(function (a, p) { return a.concat([p.reference, compact(p.reference)]); }, [])),
       other: joinN([i.notes, i.description, i.salesperson, i.paymentMethod, i.warehouseSnapshot,
                     ERP.STATUS_LABEL[i.status], ERP.STATUS_LABEL[i.paymentStatus]]),
       items: lines
     };
-    e.all = [e.number, e.customer, e.product, e.amount, e.date, e.other].filter(Boolean).join(SEP);
+    e.all = [e.number, e.customer, e.product, e.amount, e.date, e.payRef, e.other].filter(Boolean).join(SEP);
     out[i.id] = e;
   });
   return out;
 }
 
 function ensure(force) {
-  var S = ERP.S, s = [S.invoices.length, S.invoiceItems.length, version].join('.');
+  var S = ERP.S, s = [S.invoices.length, S.invoiceItems.length, S.payments.length, S.allocations.length, version].join('.');
   if (!force && cache && s === stamp) return cache;
   cache = build(); stamp = s;
   return cache;
@@ -429,6 +452,10 @@ function reset(state) {
 ERP.InvoiceSearch = {
   SCOPES: SCOPES, SORTS: SORTS, DEFAULTS: DEFAULTS,
   parse: parse, matcher: matcher, results: results, hitsFor: hitsFor, describe: describe,
-  active: active, reset: reset, index: ensure, toPaisa: toPaisa
+  active: active, reset: reset, index: ensure, toPaisa: toPaisa,
+  /* the same folding, date and word-matching rules, reused by 38-payment-search.js
+     so the two search boxes behave identically */
+  util: { norm: norm, joinN: joinN, compact: compact, hasTerm: hasTerm, dateText: dateText,
+          presetRange: presetRange, validISO: validISO, isoLocal: isoLocal, SEP: SEP }
 };
 })(typeof window !== 'undefined' ? window : globalThis);

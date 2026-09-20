@@ -52,6 +52,7 @@ MODULES = [
     ("35-topbar.js",        "TOP BAR — one clean row on every screen, account menu, no dead controls"),
     ("36-ui-kit.js",        "UI KIT — themed scrollbars, dropdowns, calendar, dialogs, tooltips and controls in place of the browser's own"),
     ("37-stock-value.js",   "STOCK VALUE — what the goods in the warehouses are worth at cost; dashboard card, Inventory strip, own screen, print and Excel"),
+    ("38-payment-search.js", "PAYMENT SEARCH — find a payment by receipt no., party, reference, amount, date or invoice; the Payments screen it drives"),
 ]
 
 MARKER = "<!-- FAROOQ & CO ERP — INVOICE, RECEIPT & DATABASE UPGRADE -->"

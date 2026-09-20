@@ -1239,6 +1239,40 @@ server first.
   schema change, so no `deploy-api.sh`. Rollback: `/home/u943531942/backups/erp-deploy-20260920222516/` (copy the three files back into
   `ERP/_app/`, clear cache). **Not yet seen on the live site by anyone in a signed-in browser, or on a physical phone.**
 
+## Payment search — the Payments screen's search bar (2026-09-21)
+
+Client request: "search bar of payment and invoice". The invoice list already had the 2026-09-19 search; the **Payments screen did not**:
+its box said "Search shop or reference…" but the base app only indexed `"<shop> <method>"` per row — a cheque/transaction reference, receipt
+number, amount or date could never be found, Urdu letter variants and word order mattered, the Paid-to-shops list and the reversed vouchers were
+not filtered at all, and the "Receipts & vouchers" log stopped at the latest 200 payments with no way to reach older ones.
+
+- New module **`38-payment-search.js`** (`ERP.PaymentSearch` engine + `ERP.PaymentList` screen state). Same rules as the invoice search on purpose
+  (its date parsing, Urdu/English folding, AND-of-words, "search in", custom From–To, amount range come from `ERP.InvoiceSearch.util`, exported
+  from 33 for this): index per payment = receipt/voucher no., party (printed name AND the shop's *current* name/phone/owner/region, looked up at
+  search time), reference, invoice/purchase numbers it was applied to, amount, date, notes & other. Filters: kind (received / paid to shops / paid
+  to suppliers), method, region (a supplier has none, so it drops out while one is chosen), dates, amount, sort. Impossible inputs (From after To,
+  min above max) are said on screen. CSV = every match.
+- **It replaces `PAGES.payments`** (it loads after 06-wiring.js and does not call the earlier wrapper). `06-wiring.js`'s `paidToShopsSection` and
+  its `PAGES.payments` wrapper are now **dead code** — the screen is drawn from 38. Kept from that work: `data-fcpayopen` (start a payment with no
+  shop pre-selected — its click handler is still in 06), `#fcPaidToShops`, `data-fcreceipt`, the "No payments to shops yet" text.
+  The screen: 4 figures (Paid out now counts shops as well as suppliers), search + filter bars, Customer payments, Paid to shops, Supplier payments,
+  and a **Reversed receipts & vouchers** list (only when there are some; counted in no total). Each list shows 100 rows and a "Show more" button —
+  nothing is unreachable; a receipt/voucher number column was added because people now search by it.
+- **Invoice list** (`33-invoice-search.js`): also finds the invoice a receipt paid — a cheque/transaction **reference** from "Everything", the receipt
+  number and method through the new **"Receipt / payment ref."** choice. The receipt number is deliberately *not* in "Everything": `REC-2026-000001`
+  has the same shape as `INV-2026-000001`, and it made searching the tail of an invoice number also return other invoices (`test-invoice-search`
+  N3 caught it). The same collision exists in the Payments box in a milder form (an invoice number's tail also matches a receipt's) — both rows say
+  their number, so it is visible why they match.
+- Auto-allocation surprise worth knowing: a receipt entered with no invoice chosen is applied to the shop's *oldest unpaid invoices*, so "payments
+  for invoice X" also lists those, not just ones the person ticked.
+- Tests: `test-payment-search.mjs` (104 checks: engine, every filter, the real controls, paging, CSV, focus kept while typing, the invoice-list
+  addition); mutation-checked with six deliberate breakages (each turns it red). `test-pay-a-shop.mjs` S1–S17 still pass unchanged against the new
+  screen. Looked at in real headless Chrome (desktop 1320px + 390px phone). **Not seen on the live site or a physical phone.** App deploy only
+  (`deploy-erp.sh`) — no table, no API change.
+- Not done: search inside the printed receipt text; per-shop payment search on a shop's own page; fuzzy/typo matching (the Ctrl+K palette does
+  that); "Pay supplier" on this screen still opens with the first supplier pre-selected (`PANELS.paysup` has no blank choice) — the shop buttons
+  don't have that problem.
+
 ## Where to look for more detail
 
 - **`docs/SERVER_DATA.md` — the current guide to the server-side data system (how it works, what users see, everyday operations, backups, how to change it, known limits). Start here for anything about where the data lives.**
