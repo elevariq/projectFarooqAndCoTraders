@@ -1,9 +1,8 @@
 # MySQL Migration Plan — from IndexedDB to a real server database
 
-**Update 2026-09-20 (later): the API and the browser driver are built and tested; the switch is OFF.** See
-`docs/OPERATIONS.md` → "Server-side business data — how it works, and the CUTOVER runbook". Steps 2 (API) and 5
-(driver) below are done; step 8 (cutover) is the runbook there and waits for the user's go-ahead and a fresh
-client backup. The design constraints listed further down as "still to do" (per-browser keys, stale mirror,
+**Update 2026-09-20 (end of day): DONE AND LIVE — the ERP runs on the server database (switch ON).** The operating guide is now
+`docs/SERVER_DATA.md`; the cutover log is in `docs/OPERATIONS.md`. Steps 1–8 below are complete (the cutover used the existing
+import without a fresh backup, by the user's decision). The design constraints listed further down as "still to do" (per-browser keys, stale mirror,
 concurrency, hot rows) are implemented in `01b-server-db.js`; server-side per-store role rules are the one item
 deliberately left for later.
 
@@ -55,7 +54,7 @@ and the database before anything is switched over; the client's browser data sta
 
 ## Where things stand today
 
-- The ERP (`erp.farooqandcotraders.online`) is 100% client-side: no server backend, no API. Every
+- **[Historical — 2026-09-15; superseded, see the status paragraphs at the top and `docs/SERVER_DATA.md`.]** The ERP (`erp.farooqandcotraders.online`) was 100% client-side: no server backend, no API. Every
   read/write goes straight to the browser's own IndexedDB (`farooqco_erp_ledger`), primarily
   through `erp-upgrade/01-db.js` (the persistence layer — transactions, sequences, money, backup)
   and `02-services.js` (the domain logic built on top of it: invoices, purchases, payments,
