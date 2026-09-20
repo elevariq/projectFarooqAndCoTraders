@@ -302,7 +302,7 @@ run it.
 8. ~~Client message (2026-09-16): "Payroll = Employee salary management system"~~ — **Resolved
    2026-09-16** as a deliberately minimal MVP (no real requirements were ever given). See below.
 
-9. **Stock lying at the mill (Punjab) — built 2026-09-20, LIVE since 2026-09-21 (except the Stock-value "Lying at mills" line — committed 2026-09-21, **NOT deployed**: the user will deploy when the other sessions finish); the open questions are DECIDED with recommended answers below. The plain-language story (who does what, how each form is filled) is `docs/MILLING_WORKFLOW.md`.** The feature itself is in
+9. **Stock lying at the mill (Punjab) — built 2026-09-20, LIVE since 2026-09-21 (the Stock-value "Lying at mills" line went live in the 2026-09-21 ~01:35 deploy below); the open questions are DECIDED with recommended answers below. The plain-language story (who does what, how each form is filled) is `docs/MILLING_WORKFLOW.md`.** The feature itself is in
    `main` (see "Stock lying at the mill" below). Decision taken with the user on 2026-09-20: **go with it as built**, and keep these two
    points written down until the client answers:
    a. *Where does the wheat come from?* Today the wheat sent to a mill is taken out of one of **our warehouses' stock**, so the stock must
@@ -842,7 +842,7 @@ mill could not be represented at all. That was the gap.
   a separate line in the print/PDF totals and notes, two rows in the Excel summary. Whole-company view only — a warehouse / category / search filter
   shows none. Bags leave that figure exactly as they enter the warehouse figure (no double count; the warehouse side is blended into the row's moving
   average, so it matches only to whole-paisa rounding). Tests: `test-milling-atmill.mjs` V1–V11 (110 checks in the file now); `test-stock-value.mjs` unchanged.
-  **Committed, NOT deployed** (waiting for the other sessions).
+  **Deployed 2026-09-21 ~01:35** (see "Payment search" → Deployed).
 - **DEPLOY ORDER (new store):** `millingArrivals` is a new table. **Apply `database/schema-mariadb.sql`'s `milling_arrivals` table to the live
   database and run `scripts/deploy-api.sh` BEFORE `scripts/deploy-erp.sh`**, otherwise the first arrival is refused as an unknown store
   ("NOT saved"). A job saved with the new field needs nothing on the server (the `doc` JSON holds it).
@@ -1284,6 +1284,15 @@ not filtered at all, and the "Receipts & vouchers" log stopped at the latest 200
   Checked in real headless Chrome with real mouse and keyboard: the themed dropdown drives the Kind filter, typing keeps focus, "Show more" does not jump the scroll.
 - Reviewed, found correct, no change: the other sessions' `Payments._write` `balanceAfter` fix and the Pay-a-shop balance preview (3a5f708), the milling second
   pass (`meta` guard row — the `meta` table exists in `schema-mariadb.sql`), stock-value "Lying at mills" (d3d9017). Full suite: 38 harnesses, 0 failing.
+- **Deployed live 2026-09-21 ~01:35 — everything of all sessions in one deploy** (`main` = `f55a6fc`, local = origin, nothing stashed, no PRs, both other sessions confirmed
+  "nothing pending"): payment search + Payments screen (38), the invoice "Paid by" hint, the Pay-supplier fix, Pay a shop on the Payments screen + balance preview +
+  `balanceAfter` fix, and the Stock-value "Lying at mills" line. Run from a clean clone of `main` (`git clone --no-hardlinks` + `node_modules` copied in) so nobody's
+  edits in the shared folder could leak in; full suite green inside the script (36 harnesses; `test-gate` skips without PHP). Backup of the previous live files:
+  `/home/u943531942/backups/erp-deploy-20260921013522` (rollback = copy its three files back into `ERP/_app/`, clear cache). Verified: `_app/index.html` md5 `9200ad20…`,
+  `_app/farooq-co-erp.html` md5 `01dad76a…` (contains module 38), `_app/farooq-erp-data.js` md5 `bf0bf077…` are identical to the clone's `dist/`; `app/farooq-co-erp.html`
+  identical; no `*.uploading` leftovers; the ERP answers `401` (gated, healthy), the homepage `200`. Hostinger cache cleared for `erp.farooqandcotraders.online`
+  (`hosting_clearWebsiteCacheV1`, accepted). No API or schema change, so no `deploy-api.sh`. **Still not seen by anyone in a signed-in browser or on a physical phone:**
+  the Payments screen (search box, filters, Show more, Print), the Pay-a-shop and Pay-supplier panels, the "Paid by" hint, the "Lying at mills" card — check them once live.
 
 ## Where to look for more detail
 
