@@ -302,7 +302,7 @@ run it.
 8. ~~Client message (2026-09-16): "Payroll = Employee salary management system"~~ — **Resolved
    2026-09-16** as a deliberately minimal MVP (no real requirements were ever given). See below.
 
-9. **Stock lying at the mill (Punjab) — built 2026-09-20, NOT YET DEPLOYED, two questions for the client.** The feature itself is in
+9. **Stock lying at the mill (Punjab) — built 2026-09-20, LIVE since 2026-09-21, two questions for the client.** The feature itself is in
    `main` (see "Stock lying at the mill" below). Decision taken with the user on 2026-09-20: **go with it as built**, and keep these two
    points written down until the client answers:
    a. *Where does the wheat come from?* Today the wheat sent to a mill is taken out of one of **our warehouses' stock**, so the stock must
@@ -316,7 +316,7 @@ run it.
       (bags, kg, and worth at the job's cost per bag). If the client wants "everything we own, including what is in Punjab" on the
       dashboard, add a line for it there (a separate "At mills" figure, not folded into warehouse stock — the bags cannot be sold from a
       warehouse shelf until they arrive).
-   c. **Deploy order (the one thing that can break a first save):** *(2026-09-20: the table `milling_arrivals` HAS BEEN CREATED on the live database, by Claude with the user's explicit permission, and checked — 7 columns, same shape as `milling_jobs`. **Still to do, in this order:** `scripts/deploy-api.sh`, then `scripts/deploy-erp.sh`, run from a clean clone of `main` because another session's uncommitted files block the script in the main folder.)*  the new store `millingArrivals` needs its table on the live database
+   c. **Deploy order (the one thing that can break a first save):** *(DONE. Table `milling_arrivals` created on the live database 2026-09-20 (by Claude, with the user's explicit permission; 7 columns, same shape as `milling_jobs`). `scripts/deploy-api.sh` 2026-09-20 ~23:14 server time (backup `~/backups/api-20260920231437`; its first attempt rolled itself back correctly on a dropped probe, see the Windows/Git Bash traps). `scripts/deploy-erp.sh` 2026-09-21 (backup `~/backups/erp-deploy-20260921003630`; commit `e7e4bf1`; the three files in `_app/` are md5-identical to that commit's build, `_app/farooq-co-erp.html` cfb35743…). Both were run from a clean clone of `main` (`git clone --local` + a `node_modules` junction) because another session's uncommitted files make the script refuse to run in the main folder — see "Shared working tree". Hostinger cache: the Hostinger MCP tools were disconnected, so it was NOT cleared from Claude — clear it in hPanel if the old build still shows. Rollback of the app: copy the three files from that backup back into `ERP/_app/`; of the API: `scripts/deploy-api.sh rollback`.)*  the new store `millingArrivals` needs its table on the live database
       (`milling_arrivals`, generated into `database/schema-mariadb.sql`) and `scripts/deploy-api.sh` run **before** `scripts/deploy-erp.sh`;
       otherwise the first arrival is refused as an unknown store ("NOT saved"). Production commands are handed to the user (`!` prefix).
    d. Nobody has seen the new screens on the live site or a physical phone (real headless Chrome only), and the arrival save has not been
