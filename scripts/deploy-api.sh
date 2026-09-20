@@ -20,6 +20,11 @@
 # 403 even on the original site (see CLAUDE.md). A real-browser check is still the final word.
 set -euo pipefail
 
+# Git Bash on Windows rewrites arguments shaped like key=/path into key=C:/Program Files/Git/path, which mangled
+# this script's form-post probe on 2026-09-20 (the server rightly rejected the bogus "next" and the check failed).
+# No-op everywhere else.
+export MSYS_NO_PATHCONV=1
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ERP_DIR="$REPO_ROOT/public_html/ERP"
 SSH_HOST="u943531942@31.97.219.57"
@@ -72,7 +77,7 @@ elif [ "$pst" = "200" ]; then
   echo "  OK    the gate is dormant, so the app is served directly (HTTP 200) — sign-in page not applicable"
 else echo "  FAIL  / is HTTP $pst and is not the expected sign-in form"; bad=1; fi
 
-loc="$(curl -s -m 60 -o /dev/null -w '%{http_code} %{redirect_url}' -d 'username=&password=&next=/%3Fapp%3Derp' "$SITE/api/auth/login.php")"
+loc="$(curl -s -m 60 -o /dev/null -w '%{http_code} %{redirect_url}' -d 'username=&password=&next=%2F%3Fapp%3Derp' "$SITE/api/auth/login.php")"
 if [ "$loc" = "303 $SITE/?app=erp&signin=empty" ]; then echo "  OK    a form post is answered with a 303 back to the page with ?signin=empty"
 else echo "  FAIL  form post answered '$loc' (expected '303 $SITE/?app=erp&signin=empty')"; bad=1; fi
 
