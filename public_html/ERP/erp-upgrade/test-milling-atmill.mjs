@@ -16,6 +16,8 @@ function check(name, cond, detail) {
   else { fail++; out.push(`  ✘ ${name}${detail ? '  [' + detail + ']' : ''}`); }
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+/* the text a person can actually see: document.body.textContent also contains the source of every inlined <script>, which would make a check for a sentence pass just because the module contains that sentence */
+const shownIn = win => { const c = win.document.body.cloneNode(true); c.querySelectorAll('script,style').forEach(n => n.remove()); return c.textContent; };
 
 function boot(store) {
   const vc = new VirtualConsole();
@@ -43,6 +45,7 @@ async function main() {
   let w = boot(store);
   await ready(w);
   let ERP = w.ERP, D = w.document, M = w.Money;
+  const shown = () => shownIn(w);
   const $ = q => D.querySelector(q);
   const $$ = q => [...D.querySelectorAll(q)];
   const click = el => el && el.dispatchEvent(new w.Event('click', { bubbles: true }));
@@ -201,7 +204,7 @@ async function main() {
 
   check('K1 the nav has "Stock at mills"', w.NAV.some(n => n.id === 'millstock') && w.NAVGROUPS.some(g => g[1].includes('millstock')));
   w.go('millstock'); await sleep(150);
-  check('K2 the screen shows what is lying at the mill', /Stock at mills/.test(D.body.textContent) && /Still at the mill/.test(D.body.textContent));
+  check('K2 the screen shows what is lying at the mill', /Stock at mills/.test(shown()) && /Still at the mill/.test(shown()));
   check('K3 a row per mill + product still holding goods (A: 3)', $$('table.tbl tbody tr').length >= 3);
   check('K4 the filter lists both mills', $$('[data-msfilter] option').length === 3);
   change($('[data-msfilter]'), millA); await sleep(80);
@@ -217,7 +220,7 @@ async function main() {
   check('K9 the weight fills in from the bag size and stays editable', Number($('[data-msrow][data-msf="weight"]').value) === 20 * (flour.kg || 0));
   check('K10 the before/after table shows 60 → 40', /40/.test($$('table.kh-table')[0] ? $$('table.kh-table')[0].textContent : ''));
   change($('[data-msrow][data-msf="qty"]'), '61'); await sleep(60);
-  check('K11 too many bags is called out on screen before saving', /more than is at the mill/.test(D.body.textContent));
+  check('K11 too many bags is called out on screen before saving', /more than is at the mill/.test(shown()));
   click($('[data-mssave]')); await sleep(150);
   check('K12 …and Save refuses it', ERP.Milling.arrivals().filter(a => a.status !== 'CANCELLED' && a.millId === millA).length === 0 && !!$('[data-mssave]'));
   change($('[data-msrow][data-msf="qty"]'), '20'); await sleep(60);
@@ -227,7 +230,7 @@ async function main() {
   const posted = ERP.Milling.arrivals().find(a => a.millId === millA && a.status !== 'CANCELLED');
   check('K13 saving from the screen posts the arrival', !!posted && posted.vehicle === 'TRK-77' && posted.totalQty === 20);
   check('K14 …adds the bags to the warehouse and returns to the list', avail(flour) === flourWhBefore + 20 && !!$('[data-msnew]') && !$('[data-mssave]'));
-  check('K15 the list now says 40 bags of flour still at the mill', /40/.test(D.body.textContent) && ERP.Milling.atMillBalance(millA, flour.id).qty === 40);
+  check('K15 the list now says 40 bags of flour still at the mill', /40/.test(shown()) && ERP.Milling.atMillBalance(millA, flour.id).qty === 40);
 
   const m = ERP.DocModel.millingArrival(posted.id);
   check('L1 the arrival document has the load, the vehicle and what is left', m && m.kind === 'MILLING_ARRIVAL' && m.rows.length === 1 && m.meta.some(r => r[1] === 'TRK-77') && /80 bags/.test(JSON.stringify(m.totals)));
@@ -241,7 +244,7 @@ async function main() {
   await ERP.Milling.cancel(jB.id, 'x').catch(() => {});
   await ERP.Milling.cancel(jA.id, 'x');
   change($('[data-msfilter]'), ''); await sleep(60);
-  check('N1 with nothing left the screen says so', /Nothing is lying at a mill/.test(D.body.textContent));
+  check('N1 with nothing left to receive the rows read "All received" and the balance at the mills is zero (an empty state is only for a mill that never had goods)', /All received/.test(shown()) && ERP.Milling.atMillTotals('').qty === 0 && ERP.Milling.atMill().every(r => r.qty === 0));
 
   /* ── survives a restart ─────────────────────────────────────────────── */
   const jR = await ERP.Milling.save(jobDraft('AT_MILL'));
@@ -255,6 +258,89 @@ async function main() {
   check('R3 the job still remembers where its goods are', ERP.Milling.receiveMode(ERP.Milling.byId(jR.id)) === 'AT_MILL');
   w.close();
 
+  /* ══ round 2 (2026-09-21): full product names, real dates/warehouses, weight difference, over-receipt warning, the client's 30,000 ══ */
+  w.close(); w = boot(store); await ready(w); ERP = w.ERP; D = w.document;
+  const $2 = q => w.document.querySelector(q);
+  const $$2 = q => [...w.document.querySelectorAll(q)];
+  const click2 = el => el && el.dispatchEvent(new w.Event('click', { bubbles: true }));
+  const change2 = (el, v) => { if (el) { el.value = v; el.dispatchEvent(new w.Event('change', { bubbles: true })); } };
+  const flourP = w.PRODUCTS.find(p => p.id === 'PRD-0004'), wheatP = w.PRODUCTS.find(p => p.id === 'PRD-0097'), chokarP = w.PRODUCTS.find(p => p.id === 'PRD-0041');
+  const whX = w.WAREHOUSES[0].id, millC = w.SUPPLIERS[2].id, millD = w.SUPPLIERS[3].id;
+  await ERP.Purchases.save({ supplierId: millD, warehouseId: whX, purchaseDate: '2026-09-01', items: [{ productId: wheatP.id, quantity: 50000, unitPrice: 100 }] });
+
+  /* full names: the flour's English name is only "50 kg" — the real name is the Urdu one */
+  w.go('milling'); await sleep(150);
+  click2($2('[data-millnew]')); await sleep(100);
+  const opts = $$2('[data-millside="receive"][data-millf="product"] option, [data-millside="issue"][data-millf="product"] option').map(o => o.textContent);
+  check('N1 the product list shows the flour by its real name (not just "50 kg")', opts.some(t => t.includes(flourP.ur)), opts.filter(t => /50 kg/i.test(t)).slice(0, 2).join(' | '));
+  const plain = t => t.replace(/[\u2066-\u2069]/g, '');
+  check('N2 a product whose two names differ shows both, Urdu first (wheat)', opts.some(t => plain(t).startsWith(wheatP.ur + ' — ' + wheatP.en)), opts.find(t => /Wheat/.test(t)));
+  check('N2b each language part sits in its own bidi isolate so Urdu digits do not jump around ("سوجر 50 kg", not "50 سوجر kg")',
+    opts.some(t => t.startsWith('\u2068' + wheatP.ur + '\u2069 — \u2068' + wheatP.en + '\u2069')) && opts.some(t => t.startsWith('\u2068' + flourP.ur + '\u2069')));
+  const errText = await ERP.Milling.receiveArrival({ millId: w.SUPPLIERS[2].id, warehouseId: w.WAREHOUSES[0].id, lines: [{ productId: flourP.id, quantity: 1, weightKg: 50 }] }).then(() => '', e => (e.validation || []).join(' '));
+  check('N2c error messages and Excel use the plain name (no invisible bidi marks)', !/[\u2066-\u2069]/.test(errText) && errText.includes(flourP.ur), errText);
+  check('N3 the bag weight is not tacked on when the name already says it (no "49 kg — 49 KG")', !opts.some(t => /49 kg — 49 KG/i.test(t)) && !opts.some(t => /50 kg — 50 KG/i.test(t)));
+  click2($2('[data-millentrycancel]')); await sleep(80);
+
+  /* the client's own example: 30,000 bags made, all still at the mill, then loads arrive */
+  const big = await ERP.Milling.save({ millId: millC, warehouseId: whX, jobDate: '2026-09-18', receiveMode: 'AT_MILL', settle: 'NET',
+    issue: [{ productId: wheatP.id, quantity: 40000, weightKg: 1960000, unitRate: 100, rateBasis: 'BAG' }],
+    receive: [{ productId: flourP.id, quantity: 30000, weightKg: 1500000, unitRate: 120, rateBasis: 'BAG' },
+              { productId: chokarP.id, quantity: 8000, weightKg: 272000, unitRate: 40, rateBasis: 'BAG' }] });
+  check('P1 30,000 bags made and none in any warehouse', ERP.Milling.atMillBalance(millC, flourP.id).qty === 30000 && ERP.Milling.atMillBalance(millC, flourP.id).kg === 1500000);
+  const flourWh0 = ERP.Inventory.available(flourP.id, whX);
+  await ERP.Milling.receiveArrival({ millId: millC, warehouseId: whX, arrivalDate: '2026-09-19', lines: [{ productId: flourP.id, quantity: 12000, weightKg: 600000 }] });
+  check('P2 12,000 arrive: 18,000 still at the mill, 12,000 in the warehouse', ERP.Milling.atMillBalance(millC, flourP.id).qty === 18000 && ERP.Inventory.available(flourP.id, whX) === flourWh0 + 12000);
+  const rej = await ERP.Milling.receiveArrival({ millId: millC, warehouseId: whX, lines: [{ productId: flourP.id, quantity: 18001, weightKg: 900050 }] }).then(() => null, e => e);
+  check('P3 one bag too many is refused, and the message uses the full name', rej && rej.validation && /Only 18000 bags of/.test(rej.validation[0]) && rej.validation[0].includes(flourP.ur), rej && rej.validation && rej.validation[0]);
+  w.go('millstock'); await sleep(200);
+  check('P4 the screen shows the client\'s figures with thousands separators', /30,000/.test(shown()) && /18,000/.test(shown()));
+  const rowNames = $$2('table.tbl tbody tr td[data-label="Product"]').map(td => td.textContent);
+  check('P5 the at-the-mill table lists products by full name', rowNames.some(t => t.includes(flourP.ur)), rowNames.join(' | '));
+  click2($2('[data-msnew]')); await sleep(100);
+  change2($2('[data-msh="mill"]'), millC); await sleep(80);
+  const arrOpts = $$2('[data-msrow][data-msf="product"] option').map(o => o.textContent);
+  check('P6 the arrival form offers the flour by full name with the bags left', arrOpts.some(t => t.includes(flourP.ur) && /18,000 bags at the mill/.test(t)), arrOpts.join(' | '));
+  click2($2('[data-msentrycancel]')); await sleep(60);
+
+  /* ledger wording for goods that have not been received yet */
+  const led = ERP.Ledger.supplier(millC).rows.filter(r => r.ref === big.jobNumber).map(r => r.what);
+  check('Q1 the mill\'s statement says "made at the mill", not "received", while the goods are still there', led.some(t => /made at the mill/i.test(t)) && !led.some(t => /Received from mill/i.test(t)), led.join(' | '));
+
+  /* dates and warehouses must be real */
+  const bad = (d) => ERP.Milling.receiveArrival(Object.assign({ millId: millC, warehouseId: whX, lines: [{ productId: flourP.id, quantity: 1, weightKg: 50 }] }, d)).then(() => null, e => e);
+  const b1 = await bad({ arrivalDate: '2026-02-31' }), b2 = await bad({ arrivalDate: 'yesterday' }), b3 = await bad({ warehouseId: 'wh-nope' });
+  check('R1 an impossible or non-date arrival date is refused', b1 && b1.validation && /not a real date/.test(b1.validation[0]) && b2 && b2.validation && /not a real date/.test(b2.validation[0]));
+  check('R2 an arrival into a warehouse that does not exist is refused', b3 && b3.validation && /no longer exists/.test(b3.validation[0]));
+  const j1 = await ERP.Milling.save({ millId: millC, warehouseId: 'wh-nope', jobDate: '2026-09-18', receiveMode: 'AT_MILL', issue: [{ productId: wheatP.id, quantity: 1, weightKg: 49, unitRate: 1, rateBasis: 'BAG' }], receive: [{ productId: flourP.id, quantity: 1, weightKg: 40, unitRate: 1, rateBasis: 'BAG' }] }).then(() => null, e => e);
+  const j2 = await ERP.Milling.save({ millId: millC, warehouseId: whX, jobDate: '2026-13-01', receiveMode: 'AT_MILL', issue: [{ productId: wheatP.id, quantity: 1, weightKg: 49, unitRate: 1, rateBasis: 'BAG' }], receive: [{ productId: flourP.id, quantity: 1, weightKg: 40, unitRate: 1, rateBasis: 'BAG' }] }).then(() => null, e => e);
+  check('R3 a job with a made-up warehouse or date is refused too', j1 && j1.validation && j1.validation.some(m => /no longer exists/.test(m)) && j2 && j2.validation && j2.validation.some(m => /not a real date/.test(m)));
+
+  /* a load that weighs more than the mill wrote: bags reach zero, the weight difference is shown as such, never as stock */
+  const small = await ERP.Milling.save({ millId: millD, warehouseId: whX, jobDate: '2026-09-18', receiveMode: 'AT_MILL', settle: 'NET',
+    issue: [{ productId: wheatP.id, quantity: 10, weightKg: 490, unitRate: 100, rateBasis: 'BAG' }],
+    receive: [{ productId: flourP.id, quantity: 5, weightKg: 250, unitRate: 100, rateBasis: 'BAG' }] });
+  await ERP.Milling.receiveArrival({ millId: millD, warehouseId: whX, lines: [{ productId: flourP.id, quantity: 5, weightKg: 260 }] });
+  const row0 = ERP.Milling.atMillBalance(millD, flourP.id);
+  check('S1 all 5 bags arrived but 10 kg heavier: 0 bags, -10 kg, 0 worth', row0.qty === 0 && row0.kg === -10 && row0.valueP === 0);
+  w.go('millstock'); await sleep(150); change2($2('[data-msfilter]'), millD); await sleep(100);
+  check('S2 the screen says "weight difference" for it (and "All received"), not a bare negative stock figure', /weight difference/.test(shown()) && /All received/.test(shown()));
+
+  /* more received than ever made (two people saving at once): a loud warning */
+  w.ERP.Milling.arrivals();  /* keep the service warm */
+  w.ERP.S.millingArrivals.unshift({ id: 'mar-injected', arrivalNumber: 'MAR-9999-000001', arrivalDate: '2026-09-20', millId: millD, millSnapshot: 'x',
+    warehouseId: whX, warehouseSnapshot: 'x', lines: [{ id: 'l1', productId: flourP.id, productSnapshot: '', quantity: 3, weightKg: 150, unitCostP: 0 }],
+    totalQty: 3, totalKg: 150, status: 'POSTED' });
+  change2($2('[data-msfilter]'), ''); await sleep(60); change2($2('[data-msfilter]'), millD); await sleep(100);
+  check('T1 more bags received than the mill was ever recorded as making shows a warning naming the product and the excess',
+    /More has arrived than the mill was recorded as making/.test(shown()) && /by 3 bags/.test(shown()));
+  w.ERP.S.millingArrivals = w.ERP.S.millingArrivals.filter(a => a.id !== 'mar-injected');
+
+  /* job Excel/detail use full names too */
+  w.go('milling'); await sleep(150); click2($2('[data-millview="' + big.id + '"]')); await sleep(120);
+  check('U1 the job detail lists the flour by its full name', shown().includes(flourP.ur));
+
+  w.close();
   console.log(out.join('\n'));
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

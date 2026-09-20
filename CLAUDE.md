@@ -804,10 +804,33 @@ mill could not be represented at all. That was the gap.
   The job entry gets "Where are the finished goods?"; the job list marks "Goods at the mill"; the printed job says where they are.
   Recording/cancelling needs `PURCHASE_CREATE`, like the jobs; viewing is open. Browser-side roles only, as elsewhere.
 - **Form look + icons (same day):** the boxes in the job and arrival line tables (product, bags, weight, basis, rate) sat outside `label.f`, so they showed as plain browser boxes; they now match the app's fields (38px, 8px corners, themed border, violet focus, right-aligned numbers, "Bags"/"kg" hints; the phone already stacks them as labelled cards). Module 32's icon helper read `window.icon`, which does not exist (the base app's is `window.I`), so every icon on the Milling screens was silently blank — fixed here (modules 28/29/30 still have the same line). Looked at in real headless Chrome, desktop + 390px phone.
-- **Tests:** `test-milling-atmill.mjs` (80 checks: the flow with three by-products, both mills, every refusal, cancel rules, legacy jobs,
-  the screens driven through the DOM, the two documents, restart), mutation-checked with four deliberate breakages (an at-mill job still
-  stocking the warehouse, no bag limit on an arrival, job cancel ignoring arrivals, an arrival not adding stock — each turns it red).
-  `test-milling.mjs` (80) is unchanged and still green.
+- **Tests:** `test-milling-atmill.mjs` (99 checks: the flow with three by-products, both mills, every refusal, cancel rules, legacy jobs,
+  the screens driven through the DOM, the two documents, restart, the client's 30,000-bag example, full names), mutation-checked with eight
+  deliberate breakages (an at-mill job still stocking the warehouse, no bag limit on an arrival, job cancel ignoring arrivals, an arrival not
+  adding stock, product names back to `en||ur`, no guard row, no over-receipt warning, impossible dates accepted — each turns it red).
+  `test-server-db.mjs` section J (7 checks) runs it on the server driver. `test-milling.mjs` (80) is unchanged and still green.
+  **Test pitfall found here:** `document.body.textContent` also contains the source of every inlined `<script>`, so a check for a sentence
+  that exists in a module passes even if nothing is drawn — read only rendered text (`test-milling-atmill.mjs` has `shownIn(win)`, which clones
+  the body and drops `script`/`style`). Older tests that check body text for a phrase the module itself contains may be passing falsely.
+- **Second pass (2026-09-21) — found by asking "what is still wrong", all fixed and tested:**
+  (1) **Product names.** The dropdowns showed `en || ur`, but this catalogue's English name is often a fragment ("50 kg" for flour; the real name
+  is the Urdu "سوجر 50 kg"). `fullName()` in 32: Urdu first (the app's convention), English after it only when it adds something; where one is
+  contained in the other only the fuller one shows; the bag weight is appended only when the name does not already say it. **On screen each
+  part sits in its own Unicode bidi isolate** (`isoName`, U+2068…U+2069) — plain Urdu-with-digits dropped into an LTR list reorders itself
+  ("50 سوجر kg"); error messages and Excel use the plain text. The stored `productSnapshot` (`en||ur`) is unchanged, so print documents are as before.
+  (2) **Stock at mills was not permission-gated** — `PAGES.millstock` was missing from the `ACCESS` map in `34-accounts.js`, so any role could open
+  it; now `PURCHASE_CREATE`, like Milling (`test-accounts.mjs` covers it).
+  (3) **Two windows working from old copies could both receive the same bags into different warehouses** — the server accepted both (they share
+  no revision-checked record; proven by `test-server-db.mjs` J before the fix). Now every arrival, and every cancel of a job whose goods are at the
+  mill, reads and rewrites one small shared row per mill (`meta` store, key `millguard:<millId>`, value = counter; `touchGuard` in 32), so the
+  stale second save is refused ("NOT saved — reload"). Costs one tiny row per mill; nothing else reads those keys (`meta` is `k`/`v`).
+  If negative at-mill stock ever appears anyway (old data, a job edited around it), the screen shows a warning banner naming product and excess.
+  (4) A save with an impossible date (`2026-02-31`, text) or a warehouse that does not exist is refused (jobs and arrivals).
+  (5) The mill's statement says "Finished goods made at the mill" (not "Received from mill") while the goods are still there.
+  (6) A load that weighs more than the mill wrote leaves 0 bags and a negative kg: the table shows "weight difference", never a stock figure.
+  (7) The job list Excel has a "Finished goods" column; the "Still at the mill" card is neutral (it is not a debt).
+  (8) **`deploy-erp.sh` aborted after a fully successful upload** (2026-09-20): its last "Verifying" curl hit the same dropped-TLS-handshake
+  as `deploy-api.sh` (exit 35) under `set -e`. The verify loop now retries and can no longer fail a good deploy.
 - **DEPLOY ORDER (new store):** `millingArrivals` is a new table. **Apply `database/schema-mariadb.sql`'s `milling_arrivals` table to the live
   database and run `scripts/deploy-api.sh` BEFORE `scripts/deploy-erp.sh`**, otherwise the first arrival is refused as an unknown store
   ("NOT saved"). A job saved with the new field needs nothing on the server (the `doc` JSON holds it).

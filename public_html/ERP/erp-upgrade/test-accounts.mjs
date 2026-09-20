@@ -85,19 +85,19 @@ async function main() {
     const w = boot(store, mockFetch({ 'me.php': () => ({ status: 401, data: {} }) }));
     await ready(w); await sleep(150);
     check('A1 with no server session (today\'s live state) Payroll, Milling and Statements open exactly as before',
-      !isLocked(w.PAGES.payroll()) && !isLocked(w.PAGES.milling()) && !isLocked(w.PAGES.soa()));
+      !isLocked(w.PAGES.payroll()) && !isLocked(w.PAGES.milling()) && !isLocked(w.PAGES.millstock()) && !isLocked(w.PAGES.soa()));
     check('A2 …and Company accounts tells the owner to sign in first instead of failing',
       /Sign in with your company account first/.test(w.PAGES.accounts()));
-    check('A2b the guards are applied exactly once (no stacked wrappers)', ['payroll', 'milling', 'soa'].every(k => w.PAGES[k].__fcGuarded === true));
+    check('A2b the guards are applied exactly once (no stacked wrappers)', ['payroll', 'milling', 'millstock', 'soa'].every(k => w.PAGES[k].__fcGuarded === true));
     check('A2c Company accounts is NOT a wholesale-guarded screen: everyone signed in may open it for "My account"', !w.PAGES.accounts.__fcGuarded);
     w.close();
   }
   const expect = {
-    OWNER:      { payroll: true,  milling: true,  soa: true  },
-    MANAGER:    { payroll: false, milling: true,  soa: true  },
-    ACCOUNTANT: { payroll: false, milling: false, soa: true  },
-    SALES:      { payroll: false, milling: false, soa: true  },
-    INVENTORY:  { payroll: false, milling: false, soa: false },
+    OWNER:      { payroll: true,  milling: true,  millstock: true,  soa: true  },
+    MANAGER:    { payroll: false, milling: true,  millstock: true,  soa: true  },
+    ACCOUNTANT: { payroll: false, milling: false, millstock: false, soa: true  },
+    SALES:      { payroll: false, milling: false, millstock: false, soa: true  },
+    INVENTORY:  { payroll: false, milling: false, millstock: false, soa: false },
   };
   for (const role of Object.keys(expect)) {
     let usersCalls = 0;

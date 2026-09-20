@@ -87,7 +87,7 @@
       L + 'input:focus,' + L + 'select:focus{border-color:var(--violet);box-shadow:0 0 0 4px rgba(124,58,237,.14)}' +
       L + 'input[data-millf="qty"],' + L + 'input[data-millf="weight"],' + L + 'input[data-millf="rate"],' +
         L + 'input[data-msf="qty"],' + L + 'input[data-msf="weight"]{text-align:right;font-variant-numeric:tabular-nums}' +
-      'div.f.fc-mill-lines table.tbl td:first-child{min-width:220px}' +
+      'div.f.fc-mill-lines table.tbl td:first-child{min-width:260px}' +
       L + 'select[data-millf="basis"]{min-width:78px}' +
       'div.f.fc-mill-lines table.tbl td.r{white-space:nowrap;font-variant-numeric:tabular-nums}' +
       'table.tbl .sub{font-size:12px;color:var(--muted);margin-top:1px}' +
@@ -111,6 +111,37 @@
   function currentUser() { return global.CURRENT_USER || 'Owner'; }
   function can(p) { return ERP.Can ? ERP.Can(p) : true; }
   function qtyFmt(q) { return Number(q).toLocaleString('en-US'); }
+  /* The name people know a product by: Urdu first (the app's own convention, 05-ui-builder), then English. Where the
+     English name is only a piece of the Urdu one — this catalogue has "50 kg" inside "سوجر 50 kg" — only the fuller of the
+     two is shown, so nothing repeats and nothing is cut short. Falls back to the names saved on a document line, then the id. */
+  function nameKey(v) { return String(v || '').toLowerCase().replace(/\s+/g, ' ').trim(); }
+  function nameParts(p, snapEn, snapUr) {
+    var ur = String((p && p.ur) || snapUr || '').trim(), en = String((p && p.en) || snapEn || '').trim();
+    if (!ur && !en) return [];
+    if (!ur) return [en];
+    if (!en) return [ur];
+    var a = nameKey(ur), b = nameKey(en);
+    if (a === b || a.indexOf(b) !== -1) return [ur];
+    if (b.indexOf(a) !== -1) return [en];
+    return [ur, en];
+  }
+  function fullName(p, snapEn, snapUr) {
+    var a = nameParts(p, snapEn, snapUr);
+    return a.length ? a.join(' — ') : (p ? String(p.id || '') : '');
+  }
+  /* ON-SCREEN ONLY: each language part in its own Unicode bidi isolate (FSI…PDI). An Urdu name is right-to-left; dropped as plain
+     text into a left-to-right list or dropdown, its digits and the "kg" after it get reordered ("50 سوجر kg"). Isolated, it reads
+     as an Urdu reader expects ("سوجر 50 kg"). Error messages and Excel keep the plain text from fullName(). */
+  function isoName(p, snapEn, snapUr) {
+    var a = nameParts(p, snapEn, snapUr);
+    return a.length ? a.map(function (x) { return '\u2068' + x + '\u2069'; }).join(' — ') : (p ? String(p.id || '') : '');
+  }
+  /* the same, plus the bag weight when the name does not already say it */
+  function prodLabel(p) {
+    var n = fullName(p), kg = Number(p && p.kg) || 0, tail = '';
+    if (kg && !new RegExp('(^|[^0-9.])' + kg + '([^0-9.]|$)').test(n)) tail = ' — ' + kg + ' KG';
+    return isoName(p) + tail;
+  }
   function activeProducts() {
     var list = ERP.sources ? ERP.sources.PRODS() : (global.PRODUCTS || []);
     return list.filter(function (p) { return p.active !== false; });
@@ -119,6 +150,23 @@
   /* ══════════════════════════════════════════════════════════════════════════
      SERVICE
      ══════════════════════════════════════════════════════════════════════════ */
+  /* a date the person typed must be a real calendar day (the field is a date box, but a pasted or scripted value is not) */
+  function validDay(v) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(v))) return false;
+    var d = new Date(v + 'T00:00:00Z');
+    return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v;
+  }
+  /* One small shared row per mill that every arrival — and every cancel of a job whose goods are at the mill — reads and rewrites
+     inside its own transaction. Without it, two windows working from old copies both see the same bags "still at the mill" and both
+     receive them; into two different warehouses they share no other record, so the server's per-record revision check cannot tell.
+     With it the second save is refused ("NOT saved — reload") and the person sees the real balance. Stored in the existing `meta`
+     key-value store as {k:'millguard:<mill>', v:<counter>}; harmless in the single-window browser mode. */
+  function touchGuard(api, millId) {
+    var k = 'millguard:' + millId;
+    return api.get('meta', k).then(function (g) { api.put('meta', { k: k, v: ((g && Number(g.v)) || 0) + 1 }); });
+  }
+  function whExists(id) { return (global.WAREHOUSES || []).some(function (w) { return w.id === id; }); }
+
   var Milling = ERP.Milling = {
     all: function () {
       return (S.millingJobs || []).slice().sort(function (a, b) {
@@ -183,8 +231,8 @@
         r.kg = Math.round((r.producedKg - r.arrivedKg) * 1000) / 1000;
         r.costPerBagP = r.producedQty > 0 ? Math.round(r.producedValueP / r.producedQty) : 0;
         r.valueP = r.qty > 0 ? Math.round(r.qty * r.costPerBagP) : 0;
-        var p = prodOf(r.productId);
-        r.productName = p ? (p.en || p.ur || r.productId) : r.productId;
+        r.productName = fullName(prodOf(r.productId)) || r.productId;
+        r.productLabel = isoName(prodOf(r.productId)) || r.productId;   /* for the screen; productName is the plain text */
         return r;
       });
     },
@@ -239,6 +287,8 @@
       var errs = [];
       if (!mill) errs.push('Choose a mill.');
       if (!draft.warehouseId) errs.push('Choose a warehouse.');
+      else if (!whExists(draft.warehouseId)) errs.push('That warehouse no longer exists.');
+      if (draft.jobDate && !validDay(draft.jobDate)) errs.push('The date is not a real date.');
       var settle = draft.settle === 'FEE_ONLY' ? 'FEE_ONLY' : 'NET';
       var mode = draft.receiveMode === 'AT_MILL' ? 'AT_MILL' : 'DELIVERED';
 
@@ -249,7 +299,7 @@
 
       function checkLine(l, n, side) {
         var p = prodOf(l.productId);
-        var label = side + ' line ' + (n + 1) + (p ? ' (' + (p.en || p.ur) + ')' : '');
+        var label = side + ' line ' + (n + 1) + (p ? ' (' + fullName(p) + ')' : '');
         if (!p) { errs.push(label + ': that product no longer exists.'); return null; }
         var qty = M.qty(l.quantity);
         if (!(qty > 0)) { errs.push(label + ': bag count must be more than zero.'); return null; }
@@ -278,7 +328,7 @@
           var have = Inventory.available(pid, draft.warehouseId);
           if (demand[pid] > have) {
             var p = prodOf(pid) || {};
-            errs.push('Only ' + have + ' bags of ' + (p.en || p.ur || pid) + ' are available in ' +
+            errs.push('Only ' + have + ' bags of ' + (fullName(p) || pid) + ' are available in ' +
               whName(draft.warehouseId) + '. Requested: ' + demand[pid] + '.');
           }
         });
@@ -378,7 +428,8 @@
         if (bad.length) return Promise.reject({ validation: ['This job cannot be cancelled: ' + bad.join(', ') +
           ' from it have already arrived here. Cancel those arrivals first.'] });
       }
-      return FDB.tx(['millingJobs', 'inventory', 'stockMovements', 'auditLog'], function (api) {
+      return FDB.tx(['millingJobs', 'inventory', 'stockMovements', 'auditLog', 'meta'], function (api) {
+        return (atMill ? touchGuard(api, job.millId) : Promise.resolve()).then(function () {
         Milling.items(id).forEach(function (it) {
           if (it.side === 'RECEIVE' && atMill) return;  /* never entered a warehouse */
           if (it.side === 'ISSUE') {
@@ -403,6 +454,7 @@
           oldValues: old, newValues: { status: 'CANCELLED' }, reason: reason || ''
         });
         return job;
+        });
       }).then(function (r) { if (ERP.Mirror) ERP.Mirror.refresh(); return r; });
     },
 
@@ -415,12 +467,14 @@
       var errs = [];
       if (!mill) errs.push('Choose a mill.');
       if (!draft.warehouseId) errs.push('Choose the warehouse the goods arrived in.');
+      else if (!whExists(draft.warehouseId)) errs.push('That warehouse no longer exists.');
+      if (draft.arrivalDate && !validDay(draft.arrivalDate)) errs.push('The arrival date is not a real date.');
       var raw = (draft.lines || []).filter(function (l) { return l && l.productId; });
       if (!raw.length) errs.push('Add at least one product that arrived.');
       var clean = [], demand = {};
       raw.forEach(function (l, n) {
         var p = prodOf(l.productId);
-        var label = 'Line ' + (n + 1) + (p ? ' (' + (p.en || p.ur) + ')' : '');
+        var label = 'Line ' + (n + 1) + (p ? ' (' + fullName(p) + ')' : '');
         if (!p) { errs.push(label + ': that product no longer exists.'); return; }
         var qty = M.qty(l.quantity);
         if (!(qty > 0)) { errs.push(label + ': bag count must be more than zero.'); return; }
@@ -431,18 +485,20 @@
       });
       if (mill && !errs.length) {
         Object.keys(demand).forEach(function (pid) {
-          var have = Milling.atMillBalance(draft.millId, pid).qty, p = prodOf(pid) || {};
+          var have = Milling.atMillBalance(draft.millId, pid).qty, p = prodOf(pid) || {}, nm = fullName(p) || pid;
           if (demand[pid] > have) errs.push(have > 0
-            ? 'Only ' + have + ' bags of ' + (p.en || p.ur || pid) + ' are lying at ' + mill.co + '; this load has ' + demand[pid] + '.'
-            : 'No ' + (p.en || p.ur || pid) + ' is recorded as lying at ' + mill.co + '. Record the milling job that produced it first.');
+            ? 'Only ' + have + ' bags of ' + nm + ' are lying at ' + mill.co + '; this load has ' + demand[pid] + '.'
+            : 'No ' + nm + ' is recorded as lying at ' + mill.co + '. Record the milling job that produced it first.');
         });
       }
       if (errs.length) return Promise.reject({ validation: errs });
 
       draft.id = draft.id || FDB.uid('mar');
       var opId = (draft.clientOpId || draft.id) + '#0';
-      return FDB.tx(['sequences', 'millingArrivals', 'inventory', 'stockMovements', 'auditLog', 'operations'], function (api) {
+      return FDB.tx(['sequences', 'millingArrivals', 'inventory', 'stockMovements', 'auditLog', 'operations', 'meta'], function (api) {
         return FDB.claimOperation(api, opId, 'MillingArrival', { entityId: draft.id }).then(function () {
+          return touchGuard(api, draft.millId);
+        }).then(function () {
           return FDB.nextNumber(api, 'MAR').then(function (number) {
             var date = draft.arrivalDate || today();
             var totalQty = 0, totalKg = 0;
@@ -515,7 +571,8 @@
           dr: j.issuedValue, cr: 0, kind: 'MILLING', id: j.id + '#issue', createdAt: (j.createdAt || '') + '#1'
         });
         if (j.receivedValue) rows.push({
-          iso: j.jobDate, ref: j.jobNumber, what: 'Received from mill — milling job',
+          iso: j.jobDate, ref: j.jobNumber,
+          what: Milling.receiveMode(j) === 'AT_MILL' ? 'Finished goods made at the mill — milling job' : 'Received from mill — milling job',
           dr: 0, cr: j.receivedValue, kind: 'MILLING', id: j.id + '#recv', createdAt: (j.createdAt || '') + '#2'
         });
       }
@@ -606,7 +663,7 @@
         '<option value="">— choose —</option>' +
         activeProducts().map(function (p) {
           return '<option value="' + esc(p.id) + '"' + (p.id === l.productId ? ' selected' : '') + '>' +
-            esc(p.en || p.ur || p.id) + (p.kg ? ' — ' + p.kg + ' KG' : '') + '</option>';
+            esc(prodLabel(p)) + '</option>';
         }).join('') + '</select></td>' +
       '<td><input data-millrow="' + l.rid + '" data-millside="' + side + '" data-millf="qty" ' +
         'inputmode="decimal" placeholder="Bags" value="' + esc(l.quantity) + '"></td>' +
@@ -684,7 +741,7 @@
   }
 
   function itemRow(it) {
-    return '<tr><td>' + esc(it.productSnapshot) + '</td><td class="r">' + it.quantity + '</td>' +
+    return '<tr><td>' + esc(isoName(prodOf(it.productId), it.productSnapshot, it.productUrSnapshot)) + '</td><td class="r">' + it.quantity + '</td>' +
       '<td class="r">' + it.weightKg + ' kg</td>' +
       '<td class="r">' + M.fmtPlain(it.unitRate) + ' /' + (it.rateBasis === 'KG' ? 'kg' : 'bag') + '</td>' +
       '<td class="r">' + M.fmtPlain(it.lineTotal) + '</td></tr>';
@@ -816,13 +873,13 @@
     ADRAFT.lines.forEach(function (l) { if (l.productId) want[l.productId] = (want[l.productId] || 0) + (Number(l.quantity) || 0); });
     var after = bal.filter(function (r) { return r.qty > 0 || want[r.productId]; }).map(function (r) {
       var left = Math.round((r.qty - (want[r.productId] || 0)) * 1000) / 1000;
-      return '<tr><td>' + esc(r.productName) + '</td><td class="r">' + n0(r.qty) + '</td><td class="r">' + n0(want[r.productId] || 0) +
+      return '<tr><td>' + esc(r.productLabel) + '</td><td class="r">' + n0(r.qty) + '</td><td class="r">' + n0(want[r.productId] || 0) +
         '</td><td class="r">' + (left < 0 ? '<b style="color:var(--bad,#c0392b)">' + n0(left) + ' — more than is at the mill</b>' : n0(left)) + '</td></tr>';
     }).join('');
     var rows = ADRAFT.lines.map(function (l) {
       var opts = bal.filter(function (r) { return r.qty > 0 || r.productId === l.productId; }).map(function (r) {
         return '<option value="' + esc(r.productId) + '"' + (r.productId === l.productId ? ' selected' : '') + '>' +
-          esc(r.productName) + ' — ' + n0(r.qty) + ' bags at the mill</option>';
+          esc(r.productLabel) + ' — ' + n0(r.qty) + ' bags at the mill</option>';
       }).join('');
       return '<tr><td><select data-msrow="' + l.rid + '" data-msf="product"><option value="">' +
           (ADRAFT.millId ? '— choose —' : '— choose a mill first —') + '</option>' + opts + '</select></td>' +
@@ -865,7 +922,15 @@
     var canWrite = can('PURCHASE_CREATE');
     var canArrive = rows.some(function (r) { return r.qty > 0; });
 
-    var head = '<div class="card"><div class="card-h"><h3>Stock at mills</h3><div class="grow"></div>' +
+    /* more bags received than the mill was ever recorded as making: only possible by two people saving at once (the server's
+       revision check is per record, and the two loads are two new records) or a job edited out from under an arrival — say so */
+    var over = rows.filter(function (r) { return r.qty < 0; });
+    var overBanner = over.length
+      ? '<div class="banner warn" style="margin:0 0 14px">' + I('alert') + '<div><p><b>More has arrived than the mill was recorded as making</b> — ' +
+        over.map(function (r) { return esc(r.productLabel) + ' by ' + n0(-r.qty) + ' bags'; }).join(', ') +
+        '. Check the milling jobs for that mill and cancel any load entered twice.</p></div></div>'
+      : '';
+    var head = overBanner + '<div class="card"><div class="card-h"><h3>Stock at mills</h3><div class="grow"></div>' +
         '<label class="f" style="margin:0"><select data-msfilter aria-label="Mill">' +
           '<option value="">All mills</option>' + ids.map(function (id) {
             return '<option value="' + esc(id) + '"' + (id === mill ? ' selected' : '') + '>' + esc(millName(id)) + '</option>';
@@ -878,7 +943,7 @@
             card('', 'Wheat given', n0(tot.issuedKg) + ' kg') +
             card('', 'Made at the mill', n0(tot.producedQty) + ' bags', n0(tot.producedKg) + ' kg · loss ' + n0(tot.lossKg) + ' kg') +
             card('', 'Arrived here', n0(tot.arrivedQty) + ' bags', n0(tot.arrivedKg) + ' kg') +
-            card('', 'Still at the mill', n0(tot.qty) + ' bags', n0(tot.kg) + ' kg · worth ' + M.fmt(tot.valueP)) +
+            card(over.length ? 'due' : '', 'Still at the mill', n0(tot.qty) + ' bags', n0(tot.kg) + ' kg · worth ' + M.fmt(tot.valueP)) +
           '</div>'
         : '') + '</div></div>';
 
@@ -888,11 +953,12 @@
           '<th>Product</th><th class="r">Made (bags)</th><th class="r">Arrived (bags)</th><th class="r">At the mill (bags)</th><th class="r">At the mill (kg)</th><th class="r">Worth</th></tr></thead><tbody>' +
           rows.map(function (r) {
             return '<tr>' + (mill ? '' : '<td data-label="Mill">' + esc(millName(r.millId)) + '</td>') +
-              '<td data-label="Product">' + esc(r.productName) + '</td>' +
+              '<td data-label="Product">' + esc(r.productLabel) + '</td>' +
               '<td data-label="Made" class="r">' + n0(r.producedQty) + '</td>' +
               '<td data-label="Arrived" class="r">' + n0(r.arrivedQty) + '</td>' +
               '<td data-label="At the mill" class="r"><b>' + n0(r.qty) + '</b>' + (r.qty <= 0 ? ' ' + pill('ok', 'All received') : '') + '</td>' +
-              '<td data-label="Kg" class="r">' + n0(r.kg) + '</td>' +
+              '<td data-label="Kg" class="r">' + (r.qty > 0 ? n0(r.kg) :
+                '<span class="sub">' + (r.kg ? 'weight difference ' + n0(r.kg) : '—') + '</span>') + '</td>' +
               '<td data-label="Worth" class="r">' + M.fmtPlain(r.valueP) + '</td></tr>';
           }).join('') + '</tbody></table></div>'
         : '<div class="empty"><div class="ei">' + I('mill') + '</div><b>Nothing is lying at a mill</b>' +
@@ -1071,7 +1137,7 @@
       var sheetB = [['Date', 'No.', 'Mill', 'Into', 'Product', 'Bags', 'Kg', 'Vehicle', 'Status']];
       Milling.arrivals().filter(function (a) { return !MS.mill || a.millId === MS.mill; }).forEach(function (a) {
         (a.lines || []).forEach(function (l) {
-          sheetB.push([fmtDate(a.arrivalDate), a.arrivalNumber, a.millSnapshot, a.warehouseSnapshot, l.productSnapshot, l.quantity, l.weightKg, a.vehicle || '', a.status]);
+          sheetB.push([fmtDate(a.arrivalDate), a.arrivalNumber, a.millSnapshot, a.warehouseSnapshot, fullName(prodOf(l.productId), l.productSnapshot, l.productUrSnapshot), l.quantity, l.weightKg, a.vehicle || '', a.status]);
         });
       });
       if (ERP.XLSX) {
@@ -1153,11 +1219,11 @@
     }
     if (e.target.closest('[data-millexcel]')) {
       e.preventDefault();
-      var rows = [['Date', 'Job #', 'Mill', 'In (kg)', 'Out (kg)', 'Loss (kg)', 'Loss %', 'Issued', 'Received', 'Fee', 'Net', 'Status']];
+      var rows = [['Date', 'Job #', 'Mill', 'In (kg)', 'Out (kg)', 'Loss (kg)', 'Loss %', 'Issued', 'Received', 'Fee', 'Net', 'Status', 'Finished goods']];
       Milling.all().forEach(function (j) {
         rows.push([fmtDate(j.jobDate), j.jobNumber, j.millSnapshot, j.inWeightKg, j.outWeightKg,
           j.lossKg, j.lossPct, M.toR(j.issuedValue), M.toR(j.receivedValue), M.toR(j.feeAmount),
-          M.toR(j.netAmount), j.status]);
+          M.toR(j.netAmount), j.status, Milling.receiveMode(j) === 'AT_MILL' ? 'At the mill' : 'In our warehouse']);
       });
       if (ERP.XLSX) {
         ERP.XLSX.download([{ name: 'Milling jobs', rows: rows }], 'Milling-jobs-' + today() + '.xlsx',

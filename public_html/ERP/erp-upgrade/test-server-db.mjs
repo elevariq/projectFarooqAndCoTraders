@@ -29,7 +29,8 @@ async function waitUntil(fn, ms = 6000) { const t = Date.now(); while (Date.now(
 /* ── the mock server: same rules as api/_data.php ─────────────────────────── */
 const UNIQUE = { invoices: 'invoiceNumber', purchases: 'purchaseNumber', payments: 'receiptNumber', customerReturns: 'returnNumber',
   supplierReturns: 'returnNumber', orders: 'orderNumber', stockDocs: 'docNumber', accountAdjustments: 'adjustmentNumber',
-  expenses: 'expenseNumber', landedCosts: 'referenceNumber', salaryPayments: 'salaryNumber', millingJobs: 'jobNumber' };
+  expenses: 'expenseNumber', landedCosts: 'referenceNumber', salaryPayments: 'salaryNumber', millingJobs: 'jobNumber',
+  millingArrivals: 'arrivalNumber' };
 class Mock {
   constructor(seed, opts = {}) {
     this.backend = opts.backend || 'server'; this.stores = {}; this.version = 1; this.csrf = 'csrf-test-token';
@@ -448,6 +449,45 @@ async function main() {
     !S8.rows('regions').find(r => r.id === drJ.id).deleted && S8.rows('customers').filter(c => c.region === drJ.id).length === nJ &&
     /NOT saved/.test(overlayText(wJ, 'fcsd-failed') || ''), delErr && delErr.message);
   for (const b of [I1, I2, I3, I4, I5]) b.w.close();
+
+  /* ══ J. stock lying at the mill on the server (2026-09-21) ════════════════════════
+     A job whose goods stay at the mill and a load that arrives are separate records written by the milling module;
+     the server must accept the new store, keep the record whole, and the screen must say so when two people saving at
+     once must not both receive the same bags — into two different warehouses they share no stock row, so every arrival
+     (and every cancel of a job whose goods are at the mill) also rewrites one small per-mill guard row, and the second,
+     stale save is refused. */
+  const S9 = new Mock(SEED);
+  const J1 = await boot(S9), wJ1 = J1.w, EJ = wJ1.ERP;
+  const prJ = wJ1.PRODUCTS.filter(x => x.active !== false), whJ0 = wJ1.WAREHOUSES[0].id, whJ1 = wJ1.WAREHOUSES[1].id, millJ = wJ1.SUPPLIERS[0].id;
+  await EJ.Purchases.save({ supplierId: wJ1.SUPPLIERS[1].id, warehouseId: whJ0, purchaseDate: '2026-09-01', items: [{ productId: prJ[0].id, quantity: 50, unitPrice: 100 }] });
+  const jobJ = await EJ.Milling.save({ millId: millJ, warehouseId: whJ0, jobDate: '2026-09-10', receiveMode: 'AT_MILL', settle: 'NET',
+    issue: [{ productId: prJ[0].id, quantity: 20, weightKg: 980, unitRate: 100, rateBasis: 'BAG' }],
+    receive: [{ productId: prJ[1].id, quantity: 10, weightKg: 500, unitRate: 100, rateBasis: 'BAG' }] });
+  check('J1 a job whose goods stay at the mill reaches the server with that flag, and no warehouse stock is written for those goods',
+    S9.rows('millingJobs').some(j => j.id === jobJ.id && j.receiveMode === 'AT_MILL') &&
+    !S9.rows('inventory').some(r => r.productId === prJ[1].id && r.warehouseId === whJ0 && r.qty > 0));
+  const J2 = await boot(S9), J2b = await boot(S9), J2c = await boot(S9);   /* three more windows, loaded before the arrival — their copies will go stale */
+  const arrJ = await EJ.Milling.receiveArrival({ millId: millJ, warehouseId: whJ0, arrivalDate: '2026-09-12', lines: [{ productId: prJ[1].id, quantity: 10, weightKg: 500 }] });
+  check('J2 an arrival reaches the server (the new store is accepted): number, lines, and the warehouse stock',
+    S9.rows('millingArrivals').some(a => a.id === arrJ.id && /^MAR-\d{4}-\d{6}$/.test(a.arrivalNumber) && a.lines.length === 1 && a.status === 'POSTED') &&
+    S9.rows('inventory').find(r => r.productId === prJ[1].id && r.warehouseId === whJ0).qty === 10);
+  const staleSame = await J2.w.ERP.Milling.receiveArrival({ millId: millJ, warehouseId: whJ0, arrivalDate: '2026-09-12', lines: [{ productId: prJ[1].id, quantity: 10, weightKg: 500 }] }).then(() => null, e => e);
+  check('J3 a second window, from its OLD copy, receiving the same bags into the SAME warehouse is refused — one arrival on the server',
+    !!staleSame && S9.rows('millingArrivals').length === 1, staleSame && staleSame.message);
+  /* a FRESH stale window (a refused window is locked until reloaded) saving the same bags into a DIFFERENT warehouse: nothing
+     revision-checked is shared, so the save can land — and then the screen must say so */
+  const staleOther = await J2b.w.ERP.Milling.receiveArrival({ millId: millJ, warehouseId: whJ1, arrivalDate: '2026-09-12', lines: [{ productId: prJ[1].id, quantity: 10, weightKg: 500 }] }).then(() => null, e => e);
+  check('J4 a FRESH stale window receiving the same bags into a DIFFERENT warehouse is refused too (the per-mill guard row) — still one arrival, no stock in the other warehouse',
+    !!staleOther && S9.rows('millingArrivals').length === 1 && !S9.rows('inventory').some(r => r.productId === prJ[1].id && r.warehouseId === whJ1 && r.qty > 0), staleOther && staleOther.message);
+  check('J5 the guard is one small shared row per mill in the existing meta store', S9.rows('meta').filter(m => m.k === 'millguard:' + millJ).length === 1 && S9.rows('meta').find(m => m.k === 'millguard:' + millJ).v >= 1);
+  const cancelStale = await J2c.w.ERP.Milling.cancel(jobJ.id, 'from a window that never saw the arrival').then(() => null, e => e);
+  check('J6 cancelling the job from a stale window that does not know the goods already arrived is refused — the job stands, the arrival stands',
+    !!cancelStale && S9.rows('millingJobs').find(j => j.id === jobJ.id).status === 'POSTED' && S9.rows('millingArrivals').length === 1, cancelStale && cancelStale.message);
+  const J3 = await boot(S9), wJ3 = J3.w;
+  wJ3.go('millstock'); await sleep(300);
+  check('J7 a freshly loaded window shows the true balance: 0 bags left, no warning, one load listed',
+    wJ3.ERP.Milling.atMillBalance(millJ, prJ[1].id).qty === 0 && !/More has arrived/.test((() => { const c = wJ3.document.body.cloneNode(true); c.querySelectorAll('script,style').forEach(n => n.remove()); return c.textContent; })()) && wJ3.ERP.Milling.arrivals().length === 1);
+  for (const b of [J1, J2, J2b, J2c, J3]) b.w.close();
 
   /* ══ F. failures are never hidden ═════════════════════════════════════ */
   const S3 = new Mock(SEED); const F1 = await boot(S3), wF = F1.w;

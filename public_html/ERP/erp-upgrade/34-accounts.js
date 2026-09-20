@@ -50,6 +50,7 @@ function pill(cls, t) { return '<span class="pill ' + cls + '">' + t + '</span>'
 var ACCESS = ERP.PageAccess = {
   payroll:  ['PAYROLL_MANAGE',  'Payroll'],
   milling:  ['PURCHASE_CREATE', 'Milling'],
+  millstock: ['PURCHASE_CREATE', 'Stock at mills'],
   soa:      ['COLLECTION_VIEW', 'Statement of Account']
 };
 

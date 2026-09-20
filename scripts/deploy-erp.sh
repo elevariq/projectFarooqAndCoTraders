@@ -110,7 +110,14 @@ echo "    for erp.farooqandcotraders.online, or clear it manually in hPanel."
 echo "==> Verifying"
 sleep 2
 for url in "https://farooqandcotraders.online/" "https://erp.farooqandcotraders.online/"; do
-  code="$(curl -s -o /dev/null -w '%{http_code}' "$url")"
+  # The Hostinger edge drops about one TLS handshake in three from the dev machine (curl exit 35). Under `set -e` one
+  # dropped probe used to abort the script AFTER a fully successful upload (2026-09-20). Retry a dropped connection,
+  # and never let this informational step fail the deploy.
+  code=000
+  for _try in 1 2 3 4 5 6; do
+    if code="$(curl -s -m 30 -o /dev/null -w '%{http_code}' "$url")"; then break; fi
+    code=000; sleep 2
+  done
   echo "  $url -> $code   (200 while the gate is dormant; 401 once enforcing — that is the sign-in page)"
 done
 
