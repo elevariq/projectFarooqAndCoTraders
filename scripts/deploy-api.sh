@@ -3,7 +3,7 @@
 #
 # scripts/deploy-erp.sh ships only the app files (_app/). The PHP lives here instead, and it is the live
 # sign-in path, so this script treats it accordingly:
-#   1. refuses to run with uncommitted changes;
+#   1. refuses to run if public_html/ERP/api has uncommitted changes (what is uploaded must equal what is committed);
 #   2. backs up the server's whole api/ folder to /home/u943531942/backups/api-<timestamp>/;
 #   3. uploads the files, then lints EVERY php file with the server's own PHP;
 #   4. exercises the live endpoints WITHOUT needing any password:
@@ -46,7 +46,9 @@ if [ "${1:-}" = "rollback" ]; then
 fi
 
 cd "$REPO_ROOT"
-[ -z "$(git status --porcelain)" ] || die "uncommitted changes — commit first."
+# Only the PHP folder matters here (this script uploads nothing else), so unrelated uncommitted work elsewhere in
+# the repo — e.g. app-module edits in progress — must not block it. What is uploaded must equal what is committed.
+[ -z "$(git status --porcelain -- public_html/ERP/api)" ] || die "uncommitted changes under public_html/ERP/api — commit first."
 for f in "${FILES[@]}"; do [ -f "$ERP_DIR/api/$f" ] || die "missing local file api/$f"; done
 
 TS="$(date +%Y%m%d%H%M%S)"; BK="$BACKUPS/api-$TS"
