@@ -17,13 +17,16 @@
    warehouse and by category, every product, Print/PDF and Excel.
 
    Rules, decided up front so the number can be trusted:
-   - Cost per bag comes from the stock row itself. A warehouse transfer moves
-     bags but not cost, so stock that arrived by transfer has no cost of its
-     own there: it takes the same product's cost elsewhere — the very rule the
-     ERP uses when it costs a sale — and is labelled "from other warehouse".
-     Only where no purchase exists anywhere is the product's own purchase
-     price used; THAT is an estimate, flagged and totalled separately so the
-     owner can see how much of the figure rests on it.
+   - Cost per bag comes from the stock row itself (kept by purchases and
+     milling receipts). Stock that came in another way — opening stock or
+     "Add stock" with a cost typed, a transfer — never reaches that row's
+     average (Inventory.apply only feeds it from purchases), but the cost IS
+     written on the stock movement that brought it in, so the weighted average
+     of those movements is used and labelled "carried in". Only if even that
+     is missing is the same product's cost in another warehouse used (the rule
+     Inventory.costOf applies when costing a sale), then the product's own
+     purchase price; THAT last one is an estimate, flagged and totalled
+     separately so the owner can see how much of the figure rests on it.
    - Damaged bags are NOT in the main figure — they are shown on their own.
    - Negative stock (only possible when the owner allows it) is left out and
      flagged: minus bags do not reduce what is on the shelf.
@@ -48,7 +51,12 @@
   function say(m) { try { global.say(m); } catch (e) {} }
   function can(p) { return ERP.Can ? ERP.Can(p) : true; }
   function fmtDate(d) { return global.fmtDate ? global.fmtDate(d) : d; }
-  function today() { return new Date().toISOString().slice(0, 10); }
+  /* the LOCAL date — toISOString() is UTC, which in Pakistan is still
+     "yesterday" until 05:00 (the same trap as Reports.range) */
+  function today() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
   function nf(n) { return Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 3 }); }
   function norm(s) {
     s = String(s === null || s === undefined ? '' : s);
@@ -80,8 +88,25 @@
     return m;
   }
 
+  /* the cost written on the movements that brought stock into a row without
+     touching its average: weighted by bags. Only those kinds — a purchase's
+     cost is already in the row, and sales/returns carry no cost of their own. */
+  var CARRIED = { OPENING_STOCK: 1, ADJUSTMENT_IN: 1, TRANSFER_IN: 1 };
+  function carriedMap() {
+    var m = {};
+    (S.movements || []).forEach(function (mv) {
+      if (!CARRIED[mv.kind] || mv.bucket === 'damaged' || !(mv.qtyDelta > 0) || !(mv.unitCostP > 0)) return;
+      var k = mv.productId + '|' + mv.warehouseId, a = m[k] || (m[k] = { qty: 0, cost: 0 });
+      a.qty += mv.qtyDelta; a.cost += mv.qtyDelta * mv.unitCostP;
+    });
+    Object.keys(m).forEach(function (k) { m[k] = Math.round(m[k].cost / m[k].qty); });
+    return m;
+  }
+
   function costFor(row, ctx) {
     if (row.avgCostP > 0) return { p: row.avgCostP, src: 'recorded' };
+    var carried = ctx.carried[row.productId + '|' + row.warehouseId];
+    if (carried > 0) return { p: carried, src: 'carried' };
     if (ctx.other[row.productId]) return { p: ctx.other[row.productId], src: 'other' };
     var pr = global.prodOf ? global.prodOf(row.productId) : null;
     var list = pr ? (pr.buyP !== undefined && pr.buyP !== null ? pr.buyP : (pr.buy ? M.toP(pr.buy) : 0)) : 0;
@@ -121,10 +146,12 @@
   var SV = ERP.StockValue = {
     permission: PERM,
 
-    /* o: { warehouseId, category, q } — all optional */
+    /* o: { warehouseId, category, q, noSell } — all optional. noSell skips the
+       selling-price work (price list, last invoiced rate) for callers that
+       only need the cost figures, e.g. the dashboard card. */
     build: function (o) {
       o = o || {};
-      var ctx = { other: costMap(), sell: {}, last: null };
+      var ctx = { other: costMap(), carried: carriedMap(), sell: {}, last: null };
       var query = norm(o.q).trim();
       var rows = [], negative = [], dmgQty = 0, dmgValue = 0, dmgUnvalued = 0;
 
@@ -134,7 +161,8 @@
         var cat = (pr && pr.cat) || NONE;
         if (o.warehouseId && r.warehouseId !== o.warehouseId) return;
         if (o.category && cat !== o.category) return;
-        var wname = global.whName ? global.whName(r.warehouseId) : r.warehouseId;
+        var wname = global.whName ? global.whName(r.warehouseId) : '';
+        if (!wname || wname === '\u2014') wname = 'Unknown warehouse (' + r.warehouseId + ')';   // a removed warehouse must not read as a dash
         var en = pr ? (pr.en || pr.nameEn || '') : '', ur = pr ? (pr.ur || '') : '';
         var name = en || ur || r.productId;
         if (query) {
@@ -151,7 +179,7 @@
         if (qty < 0) { negative.push({ productId: r.productId, name: name, warehouse: wname, qty: qty }); return; }
         if (qty === 0) return;
 
-        var s = sellFor(r.productId, ctx);
+        var s = o.noSell ? { p: 0, src: 'none' } : sellFor(r.productId, ctx);
         rows.push({
           productId: r.productId, name: name, nameUr: ur, cat: cat, kg: pr ? pr.kg : null,
           warehouseId: r.warehouseId, warehouse: wname, qty: qty,
@@ -214,7 +242,8 @@
     },
 
     /* headline numbers for the dashboard and the Inventory strip */
-    total: function () { return SV.build({}); },
+    total: function () { return SV.build({ noSell: true }); },
+    today: today,
 
     /* the same figures as a printable document (Print, PDF, Word come free) */
     docModel: function (o) {
@@ -276,7 +305,7 @@
 
       var prod = [['Product', 'Urdu name', 'Category', 'Warehouse', 'Bags', 'Cost per bag', 'Cost source',
                    'Value at cost', 'Selling price', 'Price source', 'Value at selling price']];
-      var SRC = { recorded: 'recorded', other: 'same product, other warehouse', list: 'estimated (purchase price)', none: 'no cost' };
+      var SRC = { recorded: 'recorded', carried: 'carried in (opening stock / transfer)', other: 'same product, other warehouse', list: 'estimated (purchase price)', none: 'no cost' };
       var PSRC = { list: 'price list', last: 'last sale', none: 'not priced' };
       data.rows.forEach(function (r) {
         prod.push([r.name, r.nameUr, r.cat, r.warehouse, r.qty, M.toR(r.costP), SRC[r.costSrc],
@@ -322,12 +351,14 @@
       : '<div class="v">—</div><div class="d">No selling prices set yet</div>';
     return '<div class="ledger sv-kpis">' +
       '<div class="kpi sv-main"><div class="k">' + I('wallet') + 'Stock value (at cost)</div>' +
-        '<div class="v">' + rs(t.valueP) + '</div>' +
-        '<div class="d">' + nf(t.bags) + ' bags · ' + t.products + ' products</div></div>' +
+        '<div class="v">' + (t.valueP || !t.bags ? rs(t.valueP) : '\u2014') + '</div>' +
+        '<div class="d">' + nf(t.bags) + ' bags \u00B7 ' + t.products + ' products' +
+          (!t.valueP && t.bags ? ' \u2014 cost not recorded yet' : '') + '</div></div>' +
       '<div class="kpi"><div class="k">' + I('tag') + 'Worth at selling price</div>' + sell + '</div>' +
       '<div class="kpi ' + (t.damagedQty ? 'alert' : '') + '"><div class="k">' + I('alert') + 'Damaged stock (at cost)</div>' +
         '<div class="v">' + (t.damagedQty ? rs(t.damagedValueP) : '—') + '</div>' +
-        '<div class="d">' + (t.damagedQty ? nf(t.damagedQty) + ' bags — not in the figure at left' : 'None recorded') + '</div></div>' +
+        '<div class="d">' + (t.damagedQty ? nf(t.damagedQty) + ' bags \u2014 not in the figure at left' +
+          (t.damagedUnvalued ? ' \u00B7 ' + nf(t.damagedUnvalued) + ' have no cost' : '') : 'None recorded') + '</div></div>' +
     '</div>';
   }
 
@@ -366,6 +397,7 @@
 
   function costCell(r) {
     if (r.costSrc === 'none') return '<span class="pill bad" title="No cost recorded for this product">no cost</span>';
+    if (r.costSrc === 'carried') return num(r.costP) + ' <span class="pill neu" title="The cost recorded when this stock came in (opening stock, stock receipt or transfer)">carried in</span>';
     if (r.costSrc === 'other') return num(r.costP) + ' <span class="pill neu" title="This stock arrived by transfer or adjustment, so it carries the cost of the same product bought elsewhere">from other warehouse</span>';
     if (r.costSrc === 'list') return num(r.costP) + ' <span class="pill low" title="No purchase of this product is recorded — the product’s own purchase price is used">estimated</span>';
     return num(r.costP);
@@ -412,8 +444,17 @@
         ' lines · biggest value first</span></div><div class="card-b">' + productTable(data) + '</div></div>';
   }
 
+  /* a remembered filter must not outlive what it points at: a removed
+     warehouse or a category no product has any more would leave the dropdown
+     saying "All" while the list underneath stayed filtered to nothing */
+  function sanitizeFilters() {
+    if (ST.warehouseId && !(global.WAREHOUSES || []).some(function (w) { return w.id === ST.warehouseId; })) ST.warehouseId = '';
+    if (ST.category && !(global.PRODUCTS || []).some(function (p) { return (p.cat || NONE) === ST.category; })) ST.category = '';
+  }
+
   global.PAGES.stockvalue = function () {
     if (!can(PERM)) return locked();
+    sanitizeFilters();
     return '<div class="card"><div class="card-b"><div class="bar sv-bar">' +
         '<label class="f"><span>Warehouse</span><select data-svf="warehouseId">' + warehouseOptions() + '</select></label>' +
         '<label class="f"><span>Category</span><select data-svf="category">' + categoryOptions() + '</select></label>' +
@@ -433,10 +474,11 @@
   global.PAGES.dashboard = function () {
     var html = origDash ? origDash.apply(global, arguments) : '';
     if (!can(PERM)) return html;
-    var t = SV.build({}).totals;
-    var kpi = '<div class="kpi sv-dash" data-go="stockvalue" title="Open the stock value report"><div class="k">' + I('wallet') + 'Stock value (at cost)</div>' +
-      '<div class="v">' + (t.bags ? rs(t.valueP) : '—') + '</div>' +
-      '<div class="d">' + (t.bags ? nf(t.bags) + ' bags in the warehouses' + (t.unvaluedRows ? ' · some without cost' : '') : 'No stock on hand') + '</div></div>';
+    var t = SV.build({ noSell: true }).totals;
+    var kpi = '<div class="kpi sv-dash" data-go="stockvalue" role="link" tabindex="0" title="Open the stock value report" aria-label="Stock value at cost. Open the report">' +
+      '<div class="k">' + I('wallet') + 'Stock value (at cost)</div>' +
+      '<div class="v">' + (t.valueP ? rs(t.valueP) : '\u2014') + '</div>' +
+      '<div class="d">' + (t.bags ? nf(t.bags) + ' bags in the warehouses' + (t.unvaluedRows ? (t.valueP ? ' \u00B7 some without cost' : ' \u00B7 cost not recorded yet') : '') : 'No stock on hand') + '</div></div>';
     var i = html.indexOf('All bags available');
     if (i > -1) {
       var e = html.indexOf('</div></div>', i);
@@ -449,9 +491,9 @@
   global.PAGES.inventory = function () {
     var html = origInv ? origInv.apply(global, arguments) : '';
     if (!can(PERM)) return html;
-    var data = SV.build({}), t = data.totals;
+    var data = SV.build({ noSell: true }), t = data.totals;
     var strip = '<div class="card sv-strip"><div class="card-b"><div class="sv-strip-in">' +
-      '<div class="sv-strip-main"><small>' + I('wallet') + 'Stock value at cost</small><b>' + (t.bags ? rs(t.valueP) : '—') + '</b>' +
+      '<div class="sv-strip-main"><small>' + I('wallet') + 'Stock value at cost</small><b>' + (t.valueP ? rs(t.valueP) : '\u2014') + '</b>' +
         '<span>' + (t.bags ? nf(t.bags) + ' bags in stock' : 'No stock on hand') +
           (t.unvaluedRows ? ' · ' + nf(t.unvaluedBags) + ' bags have no cost yet' : '') + '</span></div>' +
       '<div class="sv-strip-wh">' + data.byWarehouse.map(function (g) {
@@ -489,6 +531,13 @@
     var el = D.getElementById('svResults');
     if (el) el.innerHTML = results();
   }
+  D.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    var el = e.target && e.target.closest ? e.target.closest('.sv-dash') : null;
+    if (!el) return;
+    e.preventDefault();
+    try { global.go('stockvalue'); } catch (err) {}
+  });
   D.addEventListener('input', function (e) {
     var el = e.target; if (!el || !el.dataset || el.dataset.svq === undefined) return;
     ST.q = el.value; refresh();
@@ -533,6 +582,7 @@
     '.sv-kpis{margin:16px 0}' +
     '.sv-main .v{font-size:26px;color:var(--violet)}' +
     '.sv-dash{cursor:pointer}.sv-dash:hover{background:var(--surface-2,rgba(127,127,127,.06))}' +
+    '.sv-dash:focus-visible{outline:2px solid var(--violet,#6d4aff);outline-offset:-2px}' +
     '.sv-warn{margin-bottom:12px}' +
     '.sv-two{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;margin:16px 0}' +
     '.sv-two:empty{display:none}' +

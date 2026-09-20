@@ -98,7 +98,11 @@ var Staff = ERP.Staff = {
    device opened the app (and be written straight back to the server). The
    marker travels through the same channels the area did, so it wins
    everywhere. `all()` / `active()` / `byId()` never show it. */
-function areaNorm(x) { return String(x === null || x === undefined ? '' : x).toLowerCase().replace(/\s+/g, ' ').trim(); }
+/* compared the way search compares: Urdu/Arabic letter variants (ي/ی, ك/ک …), diacritics, digits and punctuation folded */
+function areaNorm(x) {
+  var t = String(x === null || x === undefined ? '' : x), f = ERP.Search && ERP.Search.normalize;
+  return (f ? f(t) : t.toLowerCase()).replace(/\s+/g, ' ').trim();
+}
 function areaTrim(x) { return String(x === null || x === undefined ? '' : x).replace(/\s+/g, ' ').trim(); }
 /* keep the base app's own saved copy (localStorage) in step with what was just saved */
 function baseSaved() { try { if (ERP.markMasterDirty) ERP.markMasterDirty(); if (global.dbSave) global.dbSave(); } catch (e) {} }
@@ -130,6 +134,8 @@ var Areas = ERP.Areas = {
     if (!en && !ur) errs.push('Give the area a name.');
     if (!en) en = ur;
     if (!ur) ur = en;
+    /* the base app puts names into pages without escaping them, so a name that looks like markup would run */
+    if (/[<>"]/.test(en + ur)) errs.push('An area name cannot contain the characters < > or ".');
     if (!errs.length) {
       /* only a name that is being changed can clash — an older duplicate that
          was already there must not stop someone editing the other field */
@@ -165,6 +171,9 @@ var Areas = ERP.Areas = {
      caller must say where they go (`moveTo`); they move in the same save as the
      delete, so it either all happens or none of it does. Invoices and other
      past documents keep the area name they were made with. */
+  onDelete: function (fn) { Areas._listeners.push(fn); },
+  _listeners: [],
+  _deleting: {},
   remove: function (id, opts) {
     opts = opts || {};
     if (ERP.Can && !ERP.Can('MASTER_DATA_ARCHIVE')) {
@@ -185,6 +194,8 @@ var Areas = ERP.Areas = {
         return Promise.reject({ validation: ['Choose a different, active area to move the shops to.'] });
       }
     }
+    if (Areas._deleting[id]) return Promise.reject({ validation: ['This area is already being deleted.'] });
+    Areas._deleting[id] = true;
     var stamp = nowISO();
     var was = {
       area: { active: r.active, deleted: r.deleted, deletedAt: r.deletedAt, updatedAt: r.updatedAt },
@@ -209,10 +220,14 @@ var Areas = ERP.Areas = {
       });
       return { area: r, moved: shops.length, movedTo: target, unassigned: men.length };
     }).then(function (res) {
+      delete Areas._deleting[id];
       if (ERP.Mirror && ERP.Mirror.refresh) ERP.Mirror.refresh();
       baseSaved();
+      /* screens that remember a chosen area must not be left pointing at one that is gone */
+      Areas._listeners.forEach(function (fn) { try { fn(id, res); } catch (e) {} });
       return res;
     }, function (err) {
+      delete Areas._deleting[id];
       /* the save did not go through — put the screen's copy back as it was */
       Object.assign(r, was.area);
       was.shops.forEach(function (x) { x.c.region = x.region; x.c.regionAssumed = x.assumed; x.c.updatedAt = x.at; });
@@ -1013,6 +1028,12 @@ D.addEventListener('input', function (e) {
       (isCust ? '' : '<button class="btn" data-go="mapping">' + I('box') + 'Products supplied</button>') +
       '</div>' + orig(id);
   };
+});
+
+Areas.onDelete(function (id) {
+  if (ERP.CollectionState && ERP.CollectionState.regionId === id) ERP.CollectionState.regionId = 'all';
+  /* the base app's Shops-page filter is a script-level `const`: readable by name, not through window */
+  try { if (typeof FIL !== 'undefined' && FIL && FIL.region === id) FIL.region = 'all'; } catch (e) {}
 });
 
 /* Regions, where people already look for them.

@@ -399,6 +399,56 @@ async function main() {
     staleErr && (staleErr.conflict === true || staleErr.duplicate === true) && JSON.stringify(S6.rows('purchases').find(p => p.id === puH.id)) === before6, staleErr && staleErr.message);
   for (const b of [H1, H2]) b.w.close();
 
+  /* ══ I. deleting an area on the server (2026-09-20) ═════════════════════════════
+     A deleted area is kept as a hidden marker {deleted:true}. On the server that marker must arrive in ONE commit with the
+     moved shops and the audit row, and NOTHING that runs later — a fresh device, a device with an old saved copy, a window that
+     was already open — may bring the area back. */
+  const S7 = new Mock(SEED);
+  const I1 = await boot(S7), wI = I1.w, EI = wI.ERP;
+  const drI = wI.REGIONS.find(r => /drosh/i.test(r.en)), dirI = wI.REGIONS.find(r => /^dir/i.test(r.en)) || wI.REGIONS[3];
+  const nDr = wI.CUSTOMERS.filter(c => c.region === drI.id).length, nDir = wI.CUSTOMERS.filter(c => c.region === dirI.id).length;
+  const staleCopy = wI.localStorage.getItem('farooqco_erp_v1');            /* what another device's browser would still hold */
+  const I2 = await boot(S7);                                               /* a second window, open before the delete */
+  const commitsI = S7.commits;
+  await EI.Areas.remove(drI.id, { moveTo: dirI.id });
+  const rowsC = S7.rows('customers');
+  check('I1 the delete reaches the server: the area is marked deleted (not removed), inactive, with a date',
+    (r => r && r.deleted === true && r.active === false && !!r.deletedAt)(S7.rows('regions').find(r => r.id === drI.id)));
+  check('I2 …every one of its shops is on the new area on the server, none left behind',
+    rowsC.filter(c => c.region === drI.id).length === 0 && rowsC.filter(c => c.region === dirI.id).length === nDir + nDr && S7.count('customers') === wI.CUSTOMERS.length, `${nDr} moved`);
+  check('I3 …the audit row is there', S7.rows('auditLog').some(a => a.action === 'Area deleted' && a.entityId === drI.id));
+  check('I4 …and it did not go through as a string of separate commits', S7.commits - commitsI <= 3, `${S7.commits - commitsI} commits`);
+  const revAfter = S7.rev('regions', drI.id);
+
+  const I3 = await boot(S7);                                               /* a fresh device: built-in areas re-seeded, no saved copy */
+  const seedSaw = I3.w.REGIONS.find(r => r.id === drI.id);
+  await I3.w.ERP.persistMasterAndLegacy().catch(() => {}); await sleep(300);
+  check('I5 a fresh device sees the area as deleted and its routine save leaves the server row alone',
+    !I3.w.ERP.Areas.byId(drI.id) && seedSaw && seedSaw.deleted === true && S7.rev('regions', drI.id) === revAfter && S7.rows('regions').find(r => r.id === drI.id).deleted === true);
+  const I4 = await boot(S7, { ls: { farooqco_erp_v1: staleCopy } });        /* a device whose saved copy still has the area, active */
+  await I4.w.ERP.persistMasterAndLegacy().catch(() => {}); await sleep(300);
+  check('I6 a device with an OLD saved copy that still has the area is corrected by the server, and cannot bring it back',
+    !I4.w.ERP.Areas.byId(drI.id) && S7.rows('regions').find(r => r.id === drI.id).deleted === true && S7.rev('regions', drI.id) === revAfter && S7.rows('customers').filter(c => c.region === drI.id).length === 0,
+    'rev ' + revAfter + ' → ' + S7.rev('regions', drI.id));
+  /* the window that was already open still shows the area with its shops; a real edit from it is refused, not merged over the delete */
+  const stale = I2.w.CUSTOMERS.find(c => c.region === drI.id) || {}; stale.ph = '0300-9999999'; I2.w.ERP.markMasterDirty();
+  await I2.w.ERP.persistMasterAndLegacy().catch(() => {}); await sleep(300);
+  check('I7 a window that was open before the delete cannot write its old picture over it (refused: "NOT saved")',
+    S7.rows('customers').filter(c => c.region === drI.id).length === 0 && S7.rows('regions').find(r => r.id === drI.id).deleted === true &&
+    /NOT saved/.test(overlayText(I2.w, 'fcsd-failed') || ''), overlayText(I2.w, 'fcsd-failed'));
+
+  /* a commit that fails leaves the server untouched and the screen as it was */
+  const S8 = new Mock(SEED); const I5 = await boot(S8), wJ = I5.w;
+  const drJ = wJ.REGIONS.find(r => /drosh/i.test(r.en)), dirJ = wJ.REGIONS.find(r => /^dir/i.test(r.en)) || wJ.REGIONS[3];
+  const nJ = wJ.CUSTOMERS.filter(c => c.region === drJ.id).length;
+  S8.fail['commit.php'] = { times: 1, kind: 'network' };
+  const delErr = await wJ.ERP.Areas.remove(drJ.id, { moveTo: dirJ.id }).then(() => null, e => e);
+  check('I8 a delete whose save fails is reported, the server is unchanged, and the screen still shows the area with all its shops',
+    delErr && !!wJ.ERP.Areas.byId(drJ.id) && wJ.CUSTOMERS.filter(c => c.region === drJ.id).length === nJ &&
+    !S8.rows('regions').find(r => r.id === drJ.id).deleted && S8.rows('customers').filter(c => c.region === drJ.id).length === nJ &&
+    /NOT saved/.test(overlayText(wJ, 'fcsd-failed') || ''), delErr && delErr.message);
+  for (const b of [I1, I2, I3, I4, I5]) b.w.close();
+
   /* ══ F. failures are never hidden ═════════════════════════════════════ */
   const S3 = new Mock(SEED); const F1 = await boot(S3), wF = F1.w;
   const whF = wF.WAREHOUSES[1].id, pf = wF.PRODUCTS.filter(x => x.active !== false);

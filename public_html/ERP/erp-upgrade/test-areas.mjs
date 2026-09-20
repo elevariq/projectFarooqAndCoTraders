@@ -57,6 +57,13 @@ const run=async()=>{
     /already exists/.test(await rejects(Areas.save({en:'Something Else',ur:'لوئر دیر'}))||''));
   check('A6 a name with nothing in it is refused',
     /name/.test(await rejects(Areas.save({en:'   ',ur:''}))||''));
+  const badName=async o=>/cannot contain/.test(await rejects(Areas.save(o))||'');
+  check('A7 a name that looks like markup is refused (the base app writes names into pages unescaped)',
+    await badName({en:'Bad <b>name</b>',ur:'ایکس'}) && await badName({en:'Ok',ur:'a"b'}) && await badName({en:'x>y',ur:'ایکس'}) &&
+    await badName({id:a1.id,en:'<img src=x onerror=alert(1)>'}) && Areas.byId(a1.id).en==='Lower Dir');
+  const arabicYeh=a1.ur.replace(/ی/g,'ي');
+  check('A8 the same Urdu name typed with Arabic letter forms (ي for ی) is still seen as a duplicate',
+    arabicYeh!==a1.ur && /already exists/.test(await rejects(Areas.save({en:'Another One',ur:arabicYeh}))||''), arabicYeh);
 
   /* ══ B · renaming ══ */
   const shopA=win.CUSTOMERS.find(c=>c.region!==dir.id && c.region!==drosh.id);
@@ -149,6 +156,14 @@ const run=async()=>{
   check('C18 an empty one can, and an archived area can then be deleted',
     Areas.byId(u1.id).active===false && (await Areas.remove(u1.id)).moved===0 && !Areas.byId(u1.id));
 
+  /* two deletes of the same area at the same moment: one wins, the other is told, nothing is done twice */
+  const dz=await Areas.save({en:'Double Zone',ur:'ڈبل زون'});
+  const say2=p=>p.then(()=>'ok',e=>e&&e.validation?e.validation[0]:String(e));
+  const both=await Promise.all([say2(Areas.remove(dz.id)),say2(Areas.remove(dz.id))]);
+  check('C19 deleting the same area twice at once: one succeeds, the other is refused, one audit entry',
+    both.filter(x=>x==='ok').length===1 && both.some(x=>/already being deleted/.test(x)) &&
+    ERP.S.audit.filter(a=>a.action==='Area deleted' && a.entityId===dz.id).length===1, JSON.stringify(both));
+
   /* ══ D · the screens ══ */
   win.go('areas'); await sleep(300);
   const rows=$$('#view table.fcb-list')[0].querySelectorAll('tbody tr').length;
@@ -216,6 +231,41 @@ const run=async()=>{
 
   const all=win.REGIONS.filter(r=>r.deleted).length;
   check('D16 deleted areas are kept as hidden markers, not just dropped', all>=3, String(all));
+
+  /* ══ F · screens that remember a chosen area are not left pointing at a deleted one ══ */
+  const zone=await Areas.save({en:'Filter Zone',ur:'فلٹر زون'});
+  const pick=async(page,sel,val)=>{win.go(page); await sleep(300); const el=$(sel); el.value=val; el.dispatchEvent(new win.Event('change',{bubbles:true})); await sleep(250);};
+  await pick('areawise','[data-awf="regionId"]',zone.id);
+  await pick('soa','[data-soaf="regionId"]',zone.id);
+  win.go('areawise'); await sleep(250);
+  const heldAW=$('[data-awf="regionId"]').value===zone.id && /0 shops · 0 areas/.test($('#view').textContent);   /* filtered to an empty area: nothing is shown */
+  ERP.CollectionState.regionId=zone.id; win.eval("FIL.region='"+zone.id+"'");                 /* (base go() resets FIL, so set it last) */
+  const keepZone=await Areas.save({en:'Other Zone',ur:'دوسرا زون'});
+  await Areas.remove(keepZone.id);                                                             /* deleting some OTHER area changes nothing */
+  const others=ERP.CollectionState.regionId===zone.id && win.eval('FIL.region')===zone.id;
+  await Areas.remove(zone.id);
+  const colNow=ERP.CollectionState.regionId, filNow=win.eval('FIL.region');                   /* read before any screen change (go() resets FIL itself) */
+  win.go('areawise'); await sleep(300);
+  const awText=$('#view').textContent;
+  check('F1 Area-wise report: it was filtered to the area (0 shops shown); after the delete it shows the shops again, not an empty list',
+    heldAW && !/ 0 shops · 0 areas/.test(awText) && !/0 shops · 0 areas/.test(awText.replace(/Area-wise collection/,'')), awText.replace(/\s+/g,' ').slice(60,140));
+  win.go('soa'); await sleep(300);
+  check('F2 Statement of Account: same', $('[data-soaf="regionId"]').value==='', $('[data-soaf="regionId"]').value);
+  check('F3 the collection sheet is back on All areas', colNow==='all', colNow);
+  check('F4 the Shops page filter is back on All regions', filNow==='all', filNow);
+  check('F5 deleting a different area leaves those choices alone', others);
+  ERP.CollectionState.regionId='all';
+
+  /* the warehouse app takes its list of areas from the same saved record and must skip the hidden ones */
+  const pwa=new JSDOM(fs.readFileSync('dist/farooq-co-warehouse-pwa.html','utf8'),{runScripts:'dangerously',pretendToBeVisual:true,
+    virtualConsole:new VirtualConsole(),url:'https://x.local/e',beforeParse(w){w.indexedDB=new FDBFactory();w.IDBKeyRange=FDBKeyRange;
+      w.print=()=>{};w.confirm=()=>true;w.scrollTo=()=>{};w.URL.createObjectURL=()=>'b';w.URL.revokeObjectURL=()=>{};
+      w.localStorage.setItem('farooqco_erp_v1',JSON.stringify({v:1,products:[],warehouses:[],customers:[],stock:{},regions:[
+        {id:'rg-a',ur:'الف',en:'Alpha',active:true},{id:'rg-b',ur:'بے',en:'Beta',active:false,deleted:true},{id:'rg-c',ur:'پے',en:'Gamma',active:false}]}));}});
+  await sleep(1200);
+  const pwaAreas=pwa.window.eval('REGIONS.map(r=>r.id).join()');
+  check('F6 the warehouse app lists only live areas (not the deleted or archived one)', pwaAreas==='rg-a', pwaAreas);
+  pwa.window.close();
 
   /* ══ E · a restart in a browser with no saved copy (another device) ══ */
   const state={live:Areas.all().map(r=>r.id).sort().join(','), dirShops:shopsIn(dir.id), renamed:Areas.byId(target.id).en,

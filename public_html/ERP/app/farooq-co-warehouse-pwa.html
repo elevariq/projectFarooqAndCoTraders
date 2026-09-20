@@ -1087,7 +1087,7 @@ function dbLoad(){
   STOCKMAP=d.stock||{};
   if(d.products&&d.products.length)PRODUCTS=d.products.map(p=>({id:p.id,ur:p.ur,en:p.en,cat:p.cat,kg:p.kg,min:p.min}));
   if(d.warehouses&&d.warehouses.length)WAREHOUSES=d.warehouses.map(w=>({id:w.id,name:w.name}));
-  if(d.regions&&d.regions.length)REGIONS=d.regions.map(r=>({id:r.id,ur:r.ur,en:r.en}));
+  if(d.regions&&d.regions.length)REGIONS=d.regions.filter(r=>r.active!==false&&!r.deleted).map(r=>({id:r.id,ur:r.ur,en:r.en}));
   /* Shops come from the office system */
   SHOPS=(d.customers||[]).map(c=>({id:c.id,sh:c.sh,region:c.region,wa:c.wa}));
   /* Show this device's recent movements, newest first */

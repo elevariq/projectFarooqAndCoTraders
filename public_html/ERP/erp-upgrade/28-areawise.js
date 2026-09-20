@@ -175,6 +175,8 @@
      THE SCREEN
      ════════════════════════════════════════════════════════════════════════ */
   var AW = { from: '', to: '', regionId: '', includeIdle: false };
+  /* an area deleted elsewhere must not stay selected here (the list would silently show nothing) */
+  if (ERP.Areas && ERP.Areas.onDelete) ERP.Areas.onDelete(function (id) { if (AW.regionId === id) AW.regionId = ''; });
 
   function regionOptions() {
     return '<option value="">All areas</option>' +

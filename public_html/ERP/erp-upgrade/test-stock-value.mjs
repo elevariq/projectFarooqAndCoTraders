@@ -15,6 +15,7 @@ import { JSDOM, VirtualConsole } from 'jsdom';
 import FDBFactory from 'fake-indexeddb/lib/FDBFactory';
 import FDBKeyRange from 'fake-indexeddb/lib/FDBKeyRange';
 
+process.env.TZ = 'Asia/Karachi';               // the client's zone: local date and UTC date differ from 19:00 to midnight UTC
 const HTML = fs.readFileSync(path.resolve('dist/farooq-co-erp.html'), 'utf8');
 let pass = 0, fail = 0; const out = [];
 function check(name, cond, detail) {
@@ -116,8 +117,8 @@ async function main() {
   d = SV.build({});
   const src = rowOf(d, pA, wh.id), dst = rowOf(d, pA, wh2.id);
   check('D1 moving 60 bags between warehouses does not change what the stock is worth', d.totals.valueP === before, `${d.totals.valueP} vs ${before}`);
-  check('D2 the destination has no cost of its own, so it carries the product\'s cost from the other warehouse',
-    dst && dst.costSrc === 'other' && dst.costP === R(2500) && dst.valueP === R(150000), JSON.stringify(dst));
+  check('D2 the destination has no average of its own, but the transfer carried the source cost in: 60 x Rs 2,500',
+    dst && dst.costSrc === 'carried' && dst.costP === R(2500) && dst.valueP === R(150000), JSON.stringify(dst));
   check('D3 the source keeps its recorded cost', src.costSrc === 'recorded' && src.qty === 100 && src.valueP === R(250000));
   check('D4 transferred stock is NOT called an estimate (it is the right cost)', d.totals.estimatedRows === 0 && d.totals.estimatedP === 0);
   check('D5 by warehouse: the two figures add up to the total',
@@ -273,6 +274,99 @@ async function main() {
   await sleep(100);
   check('K6 clicking the dashboard card opens the report', !!$('#svResults'));
 
+
+  /* ═════════════════════════════════════════════════════════════════
+     M. STOCK THAT CAME IN WITHOUT A PURCHASE — opening stock, "Add stock"
+        (Inventory.apply only feeds a row's average from purchases, so the
+        cost typed there lives on the movement, not on the row)
+     ═════════════════════════════════════════════════════════════════ */
+  const pG = P[20], pH = P[21], pI = P[22], pJ = P[23], pK = P[24];
+  const receive = (p, qty, cost, opening, date) => ERP.StockDocs.receive({ warehouseId: wh.id, date: date || '2026-09-15',
+    reason: 'count', opening: !!opening, items: [{ productId: p.id, quantity: qty, unitPrice: cost }] });
+  const beforeM = totalOf({}).valueP;
+  await receive(pG, 30, 1800, true);
+  d = SV.build({});
+  check('M1 opening stock entered with a cost is valued at that cost: 30 x Rs 1,800',
+    rowOf(d, pG) && rowOf(d, pG).costP === R(1800) && rowOf(d, pG).valueP === R(54000) && ['carried', 'recorded'].includes(rowOf(d, pG).costSrc),
+    JSON.stringify(rowOf(d, pG)));
+  check('M2 …so it is in the total and not reported as missing a cost',
+    d.totals.valueP === beforeM + R(54000) && !d.rows.some(r => r.productId === pG.id && r.costSrc === 'none'));
+  await receive(pH, 10, 1000, true, '2026-09-15');
+  await receive(pH, 30, 2000, false, '2026-09-16');
+  d = SV.build({});
+  check('M3 two lots at different costs are averaged by bags: (10x1,000 + 30x2,000) / 40 = Rs 1,750',
+    rowOf(d, pH).qty === 40 && rowOf(d, pH).costP === R(1750) && rowOf(d, pH).valueP === R(70000), JSON.stringify(rowOf(d, pH)));
+  const beforeI = totalOf({}).valueP;
+  await receive(pI, 12, undefined, true);        // no cost typed, and the product has no price anywhere
+  d = SV.build({});
+  check('M4 a receipt with no cost typed for a product with no price stays "no cost" and adds nothing',
+    rowOf(d, pI).costSrc === 'none' && d.totals.valueP === beforeI);
+  const pALotsBefore = rowOf(SV.build({}), pA, wh.id);
+  await receive(pA, 5, 9999, false);             // a wildly different typed cost on a row that has a purchase-kept average
+  const pAAfter = rowOf(SV.build({}), pA, wh.id);
+  check('M5 a purchase-kept average is not overridden by a later typed receipt cost (recorded wins)',
+    pAAfter.costSrc === 'recorded' && pAAfter.costP === pALotsBefore.costP && pAAfter.qty === pALotsBefore.qty + 5);
+  set(pJ, wh.id, 5, R(700));
+  set(pJ, wh2.id, 8, 0);                         // a row with stock but no cost and no movement behind it
+  d = SV.build({});
+  check('M6 stock with no own cost and no cost on any movement borrows the same product\'s cost elsewhere',
+    rowOf(d, pJ, wh2.id).costSrc === 'other' && rowOf(d, pJ, wh2.id).costP === R(700) && rowOf(d, pJ, wh2.id).valueP === R(5600));
+  check('M7 …and that is not called an estimate', !d.rows.some(r => r.productId === pJ.id && r.costSrc === 'list'));
+
+  /* ═════════════════════════════════════════════════════════════════
+     N. EDGE CASES
+     ═════════════════════════════════════════════════════════════════ */
+  set(pK, 'wh-gone', 6, R(500));
+  d = SV.build({});
+  check('N1 stock in a warehouse that no longer exists is labelled, not shown as a dash',
+    d.rows.find(r => r.warehouseId === 'wh-gone').warehouse === 'Unknown warehouse (wh-gone)');
+  check('N2 …and is still counted, with the by-warehouse split adding up',
+    d.byWarehouse.reduce((a, g) => a + g.valueP, 0) === d.totals.valueP && d.byWarehouse.some(g => /Unknown warehouse/.test(g.label)));
+
+  ERP.Inventory.row(pC.id, wh.id).damagedQty = 4;   // pC has no cost anywhere
+  d = SV.build({});
+  check('N3 damaged bags with no cost are counted and said to have none', d.totals.damagedUnvalued === 4);
+  check('N4 …on the screen too', /4 have no cost/.test(w.PAGES.stockvalue()));
+
+  let priceCalls = 0; const origOf = ERP.Prices.of;
+  ERP.Prices.of = function () { priceCalls++; return origOf.apply(this, arguments); };
+  const ns = SV.build({ noSell: true }), callsAfterNoSell = priceCalls;
+  const fullB = SV.build({});
+  ERP.Prices.of = origOf;
+  check('N5 noSell does no selling-price work but gives identical cost figures',
+    callsAfterNoSell === 0 && priceCalls > 0 && ns.totals.valueP === fullB.totals.valueP && ns.totals.sellValueP === 0);
+  const seen = []; const realBuild = SV.build;
+  SV.build = function (o) { seen.push(o && o.noSell); return realBuild.apply(this, arguments); };
+  w.PAGES.dashboard(); w.PAGES.inventory();
+  SV.build = realBuild;
+  check('N6 the dashboard card and the Inventory strip use it (they only need cost)', seen.length === 2 && seen.every(x => x === true), JSON.stringify(seen));
+
+  w.go('stockvalue'); await sleep(120);
+  const selW = $('[data-svf="warehouseId"]'); selW.value = wh2.id; selW.dispatchEvent(new w.Event('change', { bubbles: true }));
+  const whIx = w.WAREHOUSES.indexOf(wh2), removedWh = w.WAREHOUSES.splice(whIx, 1)[0];
+  w.go('stockvalue'); await sleep(120);
+  check('N7 a warehouse filter whose warehouse was removed resets to "All" instead of hiding everything',
+    $('[data-svf="warehouseId"]').value === '' && $$$('#svResults > .card tbody tr').length > 1 && $$$('#svResults .sv-two .card').length === 2);
+  w.WAREHOUSES.splice(whIx, 0, removedWh);
+
+  w.go('stockvalue'); await sleep(120);
+  const selC = $('[data-svf="category"]'); selC.value = pB.cat; selC.dispatchEvent(new w.Event('change', { bubbles: true }));
+  const inCat = P.filter(x => x.cat === pB.cat), oldCat = pB.cat;
+  inCat.forEach(x => { x.cat = 'ZZ-renamed'; });
+  w.go('stockvalue'); await sleep(120);
+  check('N8 a category no product has any more resets too',
+    $('[data-svf="category"]').value === '' && $$$('#svResults > .card tbody tr').length > 1);
+  inCat.forEach(x => { x.cat = oldCat; });
+
+  w.go('dashboard'); await sleep(100);
+  const dcard = $('.sv-dash');
+  check('N9 the dashboard card can be reached and used from the keyboard',
+    dcard.getAttribute('tabindex') === '0' && dcard.getAttribute('role') === 'link');
+  dcard.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'a', bubbles: true })); await sleep(80);
+  check('N10 an unrelated key does nothing', !$('#svResults'));
+  dcard.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await sleep(120);
+  check('N11 Enter opens the report', !!$('#svResults'));
+
   /* ═════════════════════════════════════════════════════════════════
      L. WHO MAY SEE WHAT THE GOODS COST
      ═════════════════════════════════════════════════════════════════ */
@@ -300,6 +394,31 @@ async function main() {
   E2.StockValue.build = ob;
   check('L2 a locked role\'s screen never even builds the numbers, and shows no rupee figure', !blocked && !/Rs\. /.test(lockedScreen));
   await E2.Settings.save({ currentRole: 'OWNER' });
+
+  /* ═════════════════════════════════════════════════════════════════
+     O. WHEN NOTHING HAS A COST YET — say so, never "Rs. 0"
+     ═════════════════════════════════════════════════════════════════ */
+  const savedInv = E2.S.inventory;
+  E2.S.inventory = { 'x|y': { id: 'x|y', productId: w2.PRODUCTS[12].id, warehouseId: w2.WAREHOUSES[0].id, qty: 30, damagedQty: 0, avgCostP: 0 } };
+  const cardOnly = (w2.PAGES.dashboard().match(/sv-dash[\s\S]*?<\/div><\/div>/) || [''])[0];
+  const kpiOnly = (w2.PAGES.stockvalue().match(/sv-main[\s\S]*?<\/div><\/div>/) || [''])[0];
+  const stripOnly = (w2.PAGES.inventory().match(/sv-strip-main[\s\S]*?<\/div>/) || [''])[0];
+  E2.S.inventory = savedInv;
+  check('O1 dashboard card: a dash and "cost not recorded yet", not Rs. 0', /—/.test(cardOnly) && /cost not recorded yet/.test(cardOnly) && !/Rs\./.test(cardOnly), cardOnly.slice(0, 200));
+  check('O2 the screen\'s headline says the same', /—/.test(kpiOnly) && /cost not recorded yet/.test(kpiOnly) && !/Rs\./.test(kpiOnly), kpiOnly.slice(0, 200));
+  check('O3 and so does the Inventory strip', /—/.test(stripOnly) && /no cost yet/.test(stripOnly) && !/Rs\./.test(stripOnly), stripOnly.slice(0, 200));
+
+  /* ═════════════════════════════════════════════════════════════════
+     P. "TODAY" IS THE LOCAL DAY — at 03:30 Pakistan time it is still "yesterday" in UTC
+     ═════════════════════════════════════════════════════════════════ */
+  const RD = w2.Date, fixed = new RD('2026-09-20T22:30:00Z').getTime();       // 03:30 on 21 Sep in Karachi
+  check('P0 the test really runs in Pakistan time', new RD(fixed).getDate() === 21 && new RD(fixed).getUTCDate() === 20);
+  class FakeDate extends RD { constructor(...a) { if (a.length === 0) super(fixed); else super(...a); } static now() { return fixed; } }
+  w2.Date = FakeDate;
+  const asOf = E2.StockValue.build({}).asOf, todayFn = E2.StockValue.today(), model = E2.StockValue.docModel({});
+  w2.Date = RD;
+  check('P1 "as at" is the local date, 21 Sep — not the UTC one, 20 Sep', asOf === '2026-09-21' && todayFn === '2026-09-21', asOf);
+  check('P2 the printed document is dated the same day', model.meta.some(x => x[0] === 'As at' && x[1] === w2.fmtDate('2026-09-21')), JSON.stringify(model.meta));
 
   console.log(out.join('\n'));
   console.log(`\n${pass} passed, ${fail} failed`);

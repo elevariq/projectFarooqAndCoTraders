@@ -1032,50 +1032,86 @@ Client request: "editing / adding / deleting region name isn't available right".
   area — gets a fresh unique one, and the base app's saved copy is refreshed (`dbSave`). The base `PANELS.region` ("Add region") now
   delegates to the same code. New top-level **Regions card in Settings** (General & business) with Rename / Delete / Add / a link to
   Areas & salesmen; the Shops page gets a "Manage areas" chip.
-- Tests: `test-areas.mjs` (50 checks: service rules, the three screens, salesmen, audit, failed-save rollback, role gate, and a restart
+- Tests: `test-areas.mjs` (see the count below; service rules, the three screens, salesmen, audit, failed-save rollback, role gate, and a restart
   in a browser with no saved copy); the whole suite reruns clean. Looked at in real headless Chrome (desktop + 390px phone).
   **Not seen by anyone on the live site**, and a delete has not been run against the real MySQL API (`php` is not on this machine) —
   the save is one write per shop moved (at most a few hundred) + the region + the audit row, far under the API's 5,000-operation limit.
   The full suite (all harnesses; `test-gate` skips without PHP) passed on a build of `HEAD` + only these files.
 - Limit worth knowing: two windows open at once — one deletes, the other still shows the old list — is the general stale-window case
-  (the server's revision check refuses the stale save and says "reload"); nothing area-specific was added for it.
+  (the server's revision check refuses the stale save and says "reload"); nothing area-specific was added for it. (Now tested, see below.)
+- **Second pass (same day) — edge cases found by auditing the first, all fixed and tested:**
+  (1) **Names are written into pages unescaped** (the base `u()` helper, and `data-row="…"` attributes, do not escape), so an area name
+  containing `<`, `>` or `"` would run as markup on every screen that shows areas — `Areas.save` now refuses those characters.
+  (2) The Urdu duplicate check now folds letter variants the way search does (`ERP.Search.normalize`: ي/ی, ك/ک, ہ/ه, diacritics, punctuation),
+  so the same name typed with Arabic letters is still a duplicate. (3) Two deletes of one area at once: the second is refused
+  (`Areas._deleting`), nothing done or audited twice. (4) **A screen that remembered the deleted area was left filtered to nothing under an
+  "All areas" label** (Area-wise report, Statement of Account, collection sheet, the base Shops-page filter): new `Areas.onDelete(fn)`
+  hook; 18 resets the collection sheet and the base `FIL.region` (a script-level `const`, readable by bare name from another script,
+  not through `window`), and 28 / 29 reset their own private state. Deleting a *different* area leaves the choice alone.
+  (5) The **warehouse PWA** copied every region from the shared record and would have offered deleted and archived ones
+  (`app/farooq-co-warehouse-pwa.html`, one line). (6) **Server mode was untested** — `test-server-db.mjs` section I (8 checks, on the mock that
+  follows `api/_data.php`'s rules): the delete arrives with the marker, all shops moved and the audit row; a fresh device, a device with an
+  old saved copy, and a window opened before the delete can none of them write the area back (the last is refused "NOT saved"); a delete whose
+  commit fails leaves the server untouched and the screen as it was. Mutation-checked: a real removal instead of the marker fails five of
+  them (I6 shows the built-in area written back to the server as revision 1), and each of the other safeguards fails its own checks.
+- `test-areas.mjs` is now 59 checks. **Still not built (say so if asked):** an *undo* for a delete (the audit row lists the moved shop ids, but
+  there is no button; re-adding the name makes a new area, the shops must be moved back), a bulk "move all shops to another area" without
+  deleting (merging two areas is delete-with-move today), and the **Warehouses card** missing from Settings (same root cause as Regions;
+  its handlers `data-whedit` / `data-whdel` / `data-whadd` still exist in the base app).
 
 ## Stock value — what the goods in the warehouses are worth (2026-09-20)
 
 Client request: "right now the goods we have in the warehouse, how much money's worth of it is lying there for us…".
-Answered as **bags on hand × the average cost per bag the ERP already keeps** (`inventory.avgCostP`, maintained by modules 17/26)
-— what the stock *cost*, not what it might sell for. **Nothing new is stored: no table, no API and no schema change**, so this is an
-app deploy only (`deploy-erp.sh`); nothing to apply on the server first.
+Answered as **bags on hand × the cost per bag the ERP already keeps** — what the stock *cost*, not what it might sell for. **Nothing
+new is stored: no table, no API and no schema change**, so this is an app deploy only (`deploy-erp.sh`); nothing to apply on the
+server first.
 
-- New module **`37-stock-value.js`** (`ERP.StockValue`: `build({warehouseId, category, q})`, `docModel`, `sheets`). Shown in three places: a
-  **Stock value (at cost)** card on the Dashboard (right after "All bags available"), a value strip on Inventory (total + each
-  warehouse), and its own screen **Inventory & supply → Stock value** (KPI cards, split by warehouse and by category, every product
-  biggest-value-first, warehouse/category/search filters, Print/PDF, Excel). On-screen product table capped at 300 lines; print/Excel
-  are complete. Needs **`FINANCIAL_REPORT_VIEW`** (Owner, Manager, Accountant) because it reveals purchase cost — Sales and Warehouse
-  roles get a locked notice, and the card/strip are simply absent for them. Browser-side gate like every role (no server table change).
-- **The rules that keep the number honest** (all covered by tests):
-  - **A warehouse transfer moves bags but not cost** — `Inventory.apply` only sets `avgCostP` on `PURCHASE_IN`/`MILL_RECEIPT_IN`, so
-    transferred stock has cost 0 in its new warehouse. It is valued at the same product's cost elsewhere (the very rule `Inventory.costOf`
-    uses when costing a sale) and labelled *from other warehouse*; it is **not** called an estimate. Only a product with no purchase
-    anywhere falls back to its own `buy` price, and *that* is flagged **estimated** and totalled separately.
-  - **No cost anywhere ⇒ left out of the total, never counted as zero-and-hidden**: a warning says how many products/bags are missing.
-  - **Damaged bags** are not in the main figure; shown as their own card at cost. **Negative stock** (only if the owner allows it) is
-    left out and flagged. Selling-price value is secondary: the price set on the product, else the last non-cancelled invoiced rate, else
-    "not priced" (the column pair is hidden while nothing is priced).
-  - It is the position **right now**; there is no "as at last month" (the app keeps balances, not a daily stock history).
+- New module **`37-stock-value.js`** (`ERP.StockValue`: `build({warehouseId, category, q, noSell})`, `docModel`, `sheets`, `today`). Shown in
+  three places: a **Stock value (at cost)** card on the Dashboard (right after "All bags available"; keyboard-reachable), a value strip
+  on Inventory (total + each warehouse), and its own screen **Inventory & supply → Stock value** (KPI cards, split by warehouse and by
+  category, every product biggest-value-first, warehouse/category/search filters, Print/PDF, Excel). On-screen product table capped at
+  300 lines; print/Excel are complete. Needs **`FINANCIAL_REPORT_VIEW`** (Owner, Manager, Accountant — already in the server's
+  `auth_role_permissions`, no change there) because it reveals purchase cost; Sales and Warehouse roles get a locked notice and the
+  card/strip are simply absent. Browser-side gate like every role. The dashboard and Inventory call `build({noSell:true})` — they only
+  need cost, so the selling-price work (price list, last invoiced rate) is skipped on every paint.
+- **Where a row's cost per bag comes from, in this order** (each labelled on screen and in Excel):
+  1. **recorded** — the row's own `avgCostP`, kept by purchases and milling receipts.
+  2. **carried in** — the bag-weighted average of the cost written on the `OPENING_STOCK` / `ADJUSTMENT_IN` / `TRANSFER_IN` movements
+     that brought stock into that row. A **transfer moves bags but not cost** (and "Add stock" never feeds the average — see the
+     finding below), yet the cost *is* on the movement, so it is read from there. Not called an estimate.
+  3. **from other warehouse** — a row with stock and no cost anywhere on its own movements borrows the same product's cost elsewhere
+     (the rule `Inventory.costOf` uses when costing a sale). Not called an estimate.
+  4. **estimated** — only where no purchase or movement carries a cost, the product's own `buy` price; flagged and totalled separately.
+  5. **no cost** — left out of the total (never counted as zero-and-hidden) with a warning naming the products/bags.
+  Damaged bags are not in the main figure (their own card, with "N have no cost" if applicable). Negative stock (only if the owner allows
+  it) is left out and flagged. Selling-price value is secondary: the price set on the product, else the last non-cancelled invoiced
+  rate, else "not priced" (the column pair is hidden while nothing is priced). When *nothing* has a cost yet the headline reads "—
+  cost not recorded yet", never "Rs. 0". It is the position **right now** (no "as at last month": the app keeps balances, not a daily
+  stock history). "Today" is the **local** date (`toISOString()` would say yesterday in Pakistan until 05:00).
+- **FOUND, NOT FIXED — decide before relying on margins from opening stock:** the **Add stock** screen has a *Cost* field ("e.g. opening
+  stock count, own production"), but `Inventory.apply` only feeds a row's moving average from `PURCHASE_IN` / `MILL_RECEIPT_IN`. A cost
+  typed there is saved on the movement and nothing else, so a later **sale out of that stock is costed by `Inventory.costOf`
+  (02-services `costSnapshot`) from the row's empty average → another warehouse's average → the product's `buy` price → 0** — never the
+  typed cost. Stock value reads the movement, so *it* is right; the margin reports are not. Making
+  `ADJUSTMENT_IN`/`OPENING_STOCK` with an explicit cost feed the average is a shared-core change that moves profit figures, so it wants
+  its own decision. (Also noted while here: `Cost.weightedAverage` counts purchase lines only, so transferred-in bags are not part of
+  a destination row's purchase-kept average.)
 - **Real data at the time (2026-09-20)**: the server held 3 inventory rows, one with stock (20 bags × Rs 3,000) and **0 of 138 products
-  with any buy/sell price set** — so today's headline is small and the selling-price figure will read "No selling prices set yet"
-  until purchases/prices are entered. That is the data, not a fault.
-- Tests: `test-stock-value.mjs` (75 checks — real purchases/sales/transfers, every cost source, damaged/negative, filters, document and
-  Excel, the screen, dashboard card, Inventory strip, five roles on a restarted window; **mutation-checked with six deliberate
-  breakages**). Looked at in **real headless Chrome** (desktop 1320px + 390px phone, light + dark), which caught two layout bugs jsdom
-  cannot see: the base `.tbl` forces `min-width:1050px` (tables ran off their cards — `table.sv-tbl{min-width:0}` overrides it) and the
-  base styles a `<b>` inside a `.banner` as a block (a sentence split in two — headline in `<b>`, detail in `<p>`).
-- **Found, not fixed (unrelated, pre-existing)**: the base app exposes its icon function as `window.I`, **not** `window.icon`, yet
-  modules 28/29/30/32 define `function I(n){ return global.icon ? global.icon(n) : ''; }` — so their icons silently never render
-  (Area-wise, Statement of Account, Payroll, Milling). Module 37 uses `global.I`. One-line fix in each if wanted.
+  with any buy/sell price set** — so today's headline is small and the selling-price figure reads "No selling prices set yet" until
+  purchases/prices are entered. That is the data, not a fault.
+- **Edge cases covered** (`test-stock-value.mjs`, 99 checks, **mutation-checked with 15 deliberate breakages**): every cost source and
+  their precedence, two lots averaged by bags, a no-cost receipt, stock in a warehouse that no longer exists ("Unknown warehouse (id)"),
+  a remembered warehouse/category filter whose target is gone (resets to All — otherwise the dropdown says All while the list is
+  filtered), keyboard Enter on the dashboard card, the local-date rule under a faked 22:30 UTC clock in Asia/Karachi, five roles on a
+  restarted window. Looked at in **real headless Chrome** (desktop 1320px + 390px phone, light + dark), which caught two layout bugs
+  jsdom cannot see: the base `.tbl` forces `min-width:1050px` (tables ran off their cards — `table.sv-tbl{min-width:0}` overrides it)
+  and the base styles a `<b>` inside a `.banner` as a block (a sentence split in two — headline in `<b>`, detail in `<p>`).
+- **Found, not fixed here (unrelated, pre-existing)**: the base app exposes its icon function as `window.I`, **not** `window.icon`, yet
+  modules 28/29/30/32 define `function I(n){ return global.icon ? global.icon(n) : ''; }`, so their icons silently never rendered
+  (Area-wise, Statement of Account, Payroll, Milling). Module 37 uses `global.I`. Another session had these files open when this was
+  written — check `git log` before assuming it is still open.
 - Not built: a value line on each warehouse card of Inventory; valuation as at a past date; per-batch (FIFO) valuation; a "value if sold"
-  margin. Not seen by anyone on the live site or a physical phone.
+  margin. **Not seen by anyone on the live site or a physical phone.**
 
 ## Where to look for more detail
 

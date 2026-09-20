@@ -29,6 +29,8 @@
      STATE
      ════════════════════════════════════════════════════════════════════════ */
   var SOA = { type: 'CUSTOMER', regionId: '', partyId: '', from: '', to: '' };
+  /* an area deleted elsewhere must not stay selected here (the list would silently show nothing) */
+  if (ERP.Areas && ERP.Areas.onDelete) ERP.Areas.onDelete(function (id) { if (SOA.regionId === id) { SOA.regionId = ''; SOA.partyId = ''; } });
 
   function customersInArea() {
     return (global.CUSTOMERS || []).filter(function (c) {
