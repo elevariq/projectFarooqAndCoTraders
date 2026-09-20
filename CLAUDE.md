@@ -316,7 +316,7 @@ run it.
       (bags, kg, and worth at the job's cost per bag). If the client wants "everything we own, including what is in Punjab" on the
       dashboard, add a line for it there (a separate "At mills" figure, not folded into warehouse stock — the bags cannot be sold from a
       warehouse shelf until they arrive).
-   c. **Deploy order (the one thing that can break a first save):** the new store `millingArrivals` needs its table on the live database
+   c. **Deploy order (the one thing that can break a first save):** *(2026-09-20: the table `milling_arrivals` HAS BEEN CREATED on the live database, by Claude with the user's explicit permission, and checked — 7 columns, same shape as `milling_jobs`. **Still to do, in this order:** `scripts/deploy-api.sh`, then `scripts/deploy-erp.sh`, run from a clean clone of `main` because another session's uncommitted files block the script in the main folder.)*  the new store `millingArrivals` needs its table on the live database
       (`milling_arrivals`, generated into `database/schema-mariadb.sql`) and `scripts/deploy-api.sh` run **before** `scripts/deploy-erp.sh`;
       otherwise the first arrival is refused as an unknown store ("NOT saved"). Production commands are handed to the user (`!` prefix).
    d. Nobody has seen the new screens on the live site or a physical phone (real headless Chrome only), and the arrival save has not been
