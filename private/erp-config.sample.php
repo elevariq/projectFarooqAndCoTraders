@@ -11,7 +11,21 @@
  */
 
 return [
+    // LOGINS ONLY — accounts, sessions, roles, audit (schema: database/auth-schema.sql).
     'db' => [
+        'host'    => 'srv1774.hstgr.io',
+        'port'    => 3306,
+        'name'    => 'u943531942_erpauth',
+        'user'    => 'u943531942_erpauth',
+        'pass'    => 'REPLACE_ME',
+        'charset' => 'utf8mb4',
+    ],
+
+    // BUSINESS DATA — invoices, customers, stock, ledgers… the server-side replacement for the
+    // browser's IndexedDB (schema: database/schema-mariadb.sql, 46 tables). A separate database
+    // from 'db' above. The same password is also in the dbhub MCP DSN in ~/.claude.json — see
+    // docs/OPERATIONS.md -> "Business database credentials" before changing it.
+    'biz_db' => [
         'host'    => 'srv1774.hstgr.io',
         'port'    => 3306,
         'name'    => 'u943531942_facotraders',

@@ -310,6 +310,45 @@ still empty), then a second full CRUD round trip (`CREATE TABLE _claude_mcp_test
 `SELECT`, `UPDATE`, `SELECT`, `DELETE`, `DROP TABLE`) as a single multi-statement `execute_sql`
 call — all seven statements succeeded, table cleaned up, database back to 0 tables.
 
+## Business database credentials — where they live and how to change them (2026-09-20)
+
+The business database (`u943531942_facotraders`, MariaDB 11.8, 46 tables — see
+`docs/MYSQL_MIGRATION_PLAN.md`) is separate from the login database (`u943531942_erpauth`). Its
+password exists in **three** places, and all three must agree:
+
+| # | Where | Key | Read by | In git? |
+|---|---|---|---|---|
+| 1 | **Server**: `/home/u943531942/domains/farooqandcotraders.online/private/erp-config.php` | `'biz_db' => [host, port, name, user, pass, charset]` | the PHP business-data API (to be built) | never (outside `public_html`, mode 640) |
+| 2 | **This machine**: `private/erp-config.php` | the same `'biz_db'` block | local scripts/tests | never (gitignored; `private/erp-config.sample.php` is the committed template with `REPLACE_ME`) |
+| 3 | **This machine**: `~/.claude.json` → `mcpServers` → `dbhub-facotraders-theumairzero7@gmail.com` → `env.DSN` (`mysql://user:PASS@srv1774.hstgr.io:3306/db`) | — | the Claude Code `dbhub` MCP tools (`execute_sql`, `search_objects`) | never (machine-level) |
+
+The existing `'db'` block in the same file is the **auth** database — do not confuse the two; login
+code reads `$CFG['db']`, business-data code reads `$CFG['biz_db']`.
+
+**To change the password later:** (1) reset it in hPanel → Databases (or `hosting_changeDatabasePasswordV1`),
+(2) edit only the `'pass'` line in `biz_db` on the server (back the file up first — the convention is
+`erp-config.php.bak-<YYYYMMDDHHMMSS>` next to it — then `php -l` it, or on this host use the parser:
+`token_get_all($src, TOKEN_PARSE)`), (3) the same in the local `private/erp-config.php`, (4) update the
+`DSN` in `~/.claude.json` (URL-encode any special characters) and restart Claude Code so the MCP tool
+reconnects. The API reads the config on every request, so no redeploy is needed for step 2.
+
+**Verified 2026-09-20 from the server itself** (a rolled-back round trip, nothing left behind): connects
+as `biz_db`, sees 46 tables, a 37.5-billion-paisa amount and Urdu text survive, a second and third draft
+invoice (empty number) are accepted, a duplicate invoice number is refused (error 1062).
+
+Things learned doing this — worth knowing before touching the server config again:
+- **`exec()` (and friends) is disabled on this host.** Don't lint with `php -l` from PHP; use
+  `token_get_all($code, TOKEN_PARSE)` inside `try/catch (Throwable)` (a script that called `exec()` died
+  with exit 255 and no output because `display_errors` is off in the CLI — run with
+  `php -d display_errors=1` to see it).
+- **A backup of a secrets file is a secret.** A `.bak` copy of `private/erp-config.php` was briefly not
+  covered by `private/.gitignore`; it is now (`erp-config.php.*`). Server-side backups sit in the same
+  `private/` directory, mode 640, outside the web root.
+- A failed edit can leave `erp-config.php.new` behind (it contains the new block, including the password);
+  the insert script deletes it on refusal, but check `ls private/` after any failed attempt.
+- The `dbhub` MCP DSN is the only place the password is stored in plain text on this machine besides the
+  local config; it is never copied into the repo, an artifact, or a chat.
+
 ## Phase 3 rollout (login gate) — checklist
 
 **STATUS: rolled out and ENFORCING since 2026-09-20.** Order actually run: `migrate` (a first attempt
