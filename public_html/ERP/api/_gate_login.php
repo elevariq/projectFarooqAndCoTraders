@@ -21,8 +21,8 @@ function gate_page_shell(string $title, string $body, string $script = ''): stri
         . 'display:grid;place-items:center;min-height:100vh;padding:20px;-webkit-font-smoothing:antialiased}'
         . '.box{width:min(380px,100%);background:#fff;border:1px solid #E8E8EE;border-radius:20px;padding:28px 24px;'
         . 'box-shadow:0 12px 30px rgba(18,17,26,.08);text-align:center}'
-        . '.mark{width:60px;height:60px;margin:0 auto 14px;border-radius:50%;background:#fff;overflow:hidden}'
-        . '.mark img{width:100%;height:100%;object-fit:contain}'
+        . '.mark{width:60px;height:60px;margin:0 auto 14px;border-radius:50%;background:#fff;overflow:hidden;box-shadow:0 0 0 1px #E8E8EE}'
+        . '.mark img{display:block;width:100%;height:100%;object-fit:cover;transform-origin:50% 31%;transform:translateY(19%) scale(2.15)}'
         . 'h1{font-size:21px;margin:0 0 4px;letter-spacing:-.02em}'
         . 'p.sub{margin:0 0 18px;color:#696D80;font-size:13.5px}'
         . 'label{display:block;text-align:left;font-size:12px;font-weight:700;color:#3C3B4C;margin:12px 0 5px}'
@@ -34,7 +34,7 @@ function gate_page_shell(string $title, string $body, string $script = ''): stri
         . '.err{color:#C0392B;font-size:13px;min-height:18px;margin-top:12px}'
         . '.foot{margin-top:16px;color:#696D80;font-size:11.5px}'
         . '</style></head><body><div class="box">'
-        . '<div class="mark"><img src="logo.png" alt="Farooq &amp; Co Traders"></div>'
+        . '<div class="mark"><img src="logo.png" alt=""></div>'
         . $body . '</div>' . ($script !== '' ? '<script>' . $script . '</script>' : '') . '</body></html>';
 }
 
