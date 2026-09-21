@@ -809,6 +809,7 @@ global.PANELS.bulkprice = {
       '<div class="f2">' +
         '<label class="f"><span>Which price</span><select data-f="field">' +
           '<option value="sell">Selling price</option><option value="buy">Purchase price</option>' +
+          '<option value="extra">Extra cost per bag</option>' +
           '<option value="min">Minimum price</option><option value="wholesale">Wholesale</option>' +
           '<option value="retail">Retail</option></select></label>' +
         '<label class="f"><span>How</span><select data-f="mode">' +

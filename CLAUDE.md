@@ -209,6 +209,9 @@ Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's 
 12. Not done by design/for later: undo for an area delete; bulk "move all shops"; notification "mark all read"; Documents/Audit lists paged;
     persistent PDO connections; base `<title>` still says "Warehouse ERP".
 13. The business-logic of the ERP modules has not had a dedicated audit — scope it separately if the user wants one.
+14. **Extra cost per bag** (Product prices panel, 2026-09-21, module 21, `docs/CLAUDE_HISTORY_2026-09-21.md`): a per-product planning figure (transport/labour WE pay) that drives the panel's
+    cost-to-us / margin / below-cost warning only. Invoices, Profit and Stock value still use actual purchase cost + the Landed costs screen. Ask the owner whether it should also feed sale-time
+    profit (moves every profit figure; would double-count anything also entered as a landed cost). Not yet seen on the live site.
 
 ## Not yet seen by a person on the live site / a physical phone
 

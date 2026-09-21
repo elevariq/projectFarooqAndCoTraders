@@ -1518,6 +1518,29 @@ are now `color-mix()` of the theme tokens (they stayed pale in dark mode). Print
   cleared for `erp.farooqandcotraders.online`. **Not yet seen by anyone on the live site:** a reload on a real screen, the themed Landed-cost boxes, a physical phone.
 - **Noticed, not changed:** the Payroll "Excel" button shows no icon (modules 30/32 still read `window.icon`; the base's is `window.I` — same root cause as the 2026-09-21 UI pass fixed for 27/28/29/34).
 
+## Extra cost per bag on the Product prices panel (2026-09-21)
+
+**Why.** The client, on the Product prices panel: *"The expenses are on us. When we buy from someone the expenses don't fall on them, right? A separate one is needed for this. We bear
+the expenses ourselves, such as transportation and labour; delivering it here is our job."* The panel had one cost box — Purchase price ("what a bag costs from the mill") — so margin, markup
+and the "selling below purchase price" warning ignored what the business itself pays to bring a bag in.
+
+**What.** `21-settings.js`: a new price field **`extra`** ("Extra cost per bag"), stored on the product like the other prices (`extraP` paisa + `extra` rupees, via `Prices.set`, so it has history, the
+reason rule, the approval queue and an audit row for free). `Prices.of` now returns `extra` and `totalCost` (= purchase + extra); `profit`/`margin`/`markup` are worked from the total, through one
+helper `figures()` shared with the panel. With extra = 0 every figure is identical to before (S1–S12 unchanged). The below-cost **warning** compares the selling price with purchase + extra and, when
+there is an extra, says so ("… what a bag costs you (purchase X + extra Y) — every bag would lose Z"). The panel has the box beside Purchase price, a live line under it ("Cost to us per bag …, profit per
+bag …, margin …, markup …") that follows the buy / extra / sell boxes as they are typed (a blank box counts as what the product already holds, as Save does), and rows were re-paired (buy|extra, sell|min,
+wholesale|retail, alert|discount, tax). `23-workbench.js`: "Change many prices" offers "Extra cost per bag".
+
+**Deliberately NOT done (decision for the owner).** It is a *planning* figure on the product. It is **not** read by invoices, the Profit report, `Cost.forSale`, Stock value or the inventory average — those
+still use what was actually bought plus whatever is entered per purchase on the **Landed costs** screen (module 26/27, owner-only), which is the record of *actual* transport/labour paid for a real purchase.
+Wiring the product figure into sale-time profit would move every profit number (same class of change as open item 7) and would double-count anything also entered as a landed cost. It touches no supplier,
+payment, purchase total or stock cost (test E14). No schema change: a product is a JSON `doc`, no new store, so no `deploy-api.sh` step.
+
+**Noticed, not changed.** `num()` in module 21 strips non-digits, so typing letters into ANY price box ("abc") reads as 0 rather than an error; only a malformed figure like "1.2.3" is refused.
+
+Tests: `test-extra-cost.mjs` (33 checks: numbers, warning, history, refusals, no supplier/payment/stock-cost movement, approval flow and rupee/paisa unit, the real panel + live line, bulk change, restart;
+mutation-checked by making the warning ignore the extra).
+
 ## Where to look for more detail
 
 - **`docs/SERVER_DATA.md` — the current guide to the server-side data system (how it works, what users see, everyday operations, backups, how to change it, known limits). Start here for anything about where the data lives.**

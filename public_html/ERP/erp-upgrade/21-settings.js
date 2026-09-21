@@ -32,6 +32,7 @@ function num(v) {
    ══════════════════════════════════════════════════════════════════════════ */
 var FIELDS = [
   { key: 'buy',        label: 'Purchase price',        money: true },
+  { key: 'extra',      label: 'Extra cost per bag',    money: true },
   { key: 'sell',       label: 'Selling price',         money: true },
   { key: 'min',        label: 'Minimum selling price', money: true },
   { key: 'wholesale',  label: 'Wholesale price',       money: true },
@@ -42,6 +43,21 @@ var FIELDS = [
 ];
 var FIELD_BY_KEY = {};
 FIELDS.forEach(function (f) { FIELD_BY_KEY[f.key] = f; });
+
+/* What one bag costs us to have in the godown, and what a sale at `sellP` leaves.
+   The purchase price is what the mill charges; the extra cost is what WE pay to
+   get it here (transport, labour, loading) — it is not on the supplier's bill, so
+   it never touches a supplier balance. Shared by the panel, its live line and
+   Prices.of so they cannot disagree. All figures in paisa. */
+function figures(buyP, extraP, sellP) {
+  var costP = (buyP || 0) + (extraP || 0);
+  var profit = (sellP || 0) - costP;
+  return {
+    cost: costP, profit: profit,
+    margin: sellP ? Math.round(profit / sellP * 1000) / 10 : 0,
+    markup: costP ? Math.round(profit / costP * 1000) / 10 : 0
+  };
+}
 
 var Prices = ERP.Prices = {
   fields: FIELDS,
@@ -73,18 +89,17 @@ var Prices = ERP.Prices = {
     var buyP = p.buyP !== undefined && p.buyP !== null ? p.buyP
       : (p.buy ? M.toP(p.buy) : (ctx.averageCost || 0));
     var sellP = p.sellP !== undefined && p.sellP !== null ? p.sellP : (p.sell ? M.toP(p.sell) : 0);
-    var profit = sellP - buyP;
+    var extraP = p.extraP !== undefined && p.extraP !== null ? p.extraP : (p.extra ? M.toP(p.extra) : 0);
+    var fig = figures(buyP, extraP, sellP);
     return {
-      product: p, buy: buyP, sell: sellP,
+      product: p, buy: buyP, extra: extraP, totalCost: fig.cost, sell: sellP,
       min: p.minSellP || (p.min ? M.toP(p.min) : 0),
       wholesale: p.wholesaleP || 0, retail: p.retailP || 0,
       discountPct: p.discountPct || 0, taxPct: p.taxPct || 0,
       reorder: p.reorder || 0,
       averageCost: ctx.averageCost || 0, lastCost: ctx.lastCost || 0,
       lastSupplier: ctx.lastSupplier || '',
-      profit: profit,
-      margin: sellP ? Math.round(profit / sellP * 1000) / 10 : 0,
-      markup: buyP ? Math.round(profit / buyP * 1000) / 10 : 0
+      profit: fig.profit, margin: fig.margin, markup: fig.markup
     };
   },
 
@@ -109,13 +124,16 @@ var Prices = ERP.Prices = {
     var effSell = v.sell !== undefined ? M.toP(v.sell) : (held.sell || 0);
     var effMin  = v.min  !== undefined ? M.toP(v.min)  : (held.min || 0);
     var effBuy  = v.buy  !== undefined ? M.toP(v.buy)  : (held.buy || 0);
+    var effExtra = v.extra !== undefined ? M.toP(v.extra) : (held.extra || 0);
+    var effCost = effBuy + effExtra;
     if (effSell && effMin && effSell < effMin) {
       errs.push('The selling price ' + M.fmt(effSell) + ' is below the minimum of ' +
         M.fmt(effMin) + ' set for this product.');
     }
-    if (effSell && effBuy && effSell < effBuy) {
-      errs.push('warning:Selling below purchase price — every bag would lose ' +
-        M.fmt(effBuy - effSell) + '.');
+    if (effSell && effCost && effSell < effCost) {
+      errs.push('warning:Selling below ' + (effExtra
+        ? 'what a bag costs you (purchase ' + M.fmt(effBuy) + ' + extra ' + M.fmt(effExtra) + ')'
+        : 'purchase price') + ' — every bag would lose ' + M.fmt(effCost - effSell) + '.');
     }
     return {
       errors: errs.filter(function (e) { return e.indexOf('warning:') !== 0; }),
@@ -156,6 +174,7 @@ var Prices = ERP.Prices = {
     return FDB.tx(stores, function (api) {
       changes.forEach(function (c) {
         if (c.field === 'buy') { p.buyP = c.to; p.buy = M.toR(c.to); }
+        else if (c.field === 'extra') { p.extraP = c.to; p.extra = M.toR(c.to); }
         else if (c.field === 'sell') { p.sellP = c.to; p.sell = M.toR(c.to); }
         else if (c.field === 'min') { p.minSellP = c.to; p.min = M.toR(c.to); }
         else if (c.field === 'wholesale') { p.wholesaleP = c.to; }
@@ -350,6 +369,16 @@ var PRICE_FOR = null;
 var PRICE_WARNED = '';      /* the figures a warning was already shown for; saving them again confirms */
 ERP.openPriceEditor = function (productId) { PRICE_FOR = productId; global.openPanel('prices'); };
 
+/* The line under the cost boxes. Numbers only, so nothing typed can reach the page as markup. */
+function costLine(buyP, extraP, sellP) {
+  var f = figures(buyP, extraP, sellP);
+  if (!f.cost) return 'Enter the purchase price and our extra cost to see what a bag costs us.';
+  return 'Cost to us per bag <b>' + M.fmt(f.cost) + '</b>' +
+    (extraP ? ' (purchase ' + M.fmt(buyP) + ' + extra ' + M.fmt(extraP) + ')' : '') +
+    (sellP ? ' · profit per bag <b>' + M.fmt(f.profit) + '</b> · margin <b>' + f.margin +
+             '%</b>, markup <b>' + f.markup + '%</b>' : '');
+}
+
 global.PANELS.prices = {
   t: 'Product prices', s: 'What it costs, what it sells for, and why it changed', cta: 'Save prices',
   f: function () {
@@ -365,23 +394,27 @@ global.PANELS.prices = {
         (hint ? '<span class="hint">' + hint + '</span>' : '') + '</label>';
     };
     return '<div class="banner info">' + I('tag') + '<div><p><b>' + u(p.ur || '') + ' ' +
-        esc(p.en || '') + '</b></p><p>Average cost <b>' + M.fmt(info.averageCost) + '</b>' +
+        esc(p.en || '') + '</b></p><p class="pz-inline">Average cost <b>' + M.fmt(info.averageCost) + '</b>' +
         (info.lastSupplier ? ' · last bought from ' + esc(info.lastSupplier) + ' at ' + M.fmt(info.lastCost) : '') +
         ' · margin <b>' + info.margin + '%</b>, markup <b>' + info.markup + '%</b></p></div></div>' +
       (pend.length ? '<div class="banner warn">' + I('clock') + '<div><p>' + pend.length +
         ' change is waiting for approval on this product.</p></div></div>' : '') +
-      '<div class="f2">' + money('buy', 'Purchase price', 'What a bag costs from the mill') +
-        money('sell', 'Selling price', 'The default rate on a new invoice') + '</div>' +
-      '<div class="f2">' + money('min', 'Minimum selling price', 'A warning appears below this') +
-        money('wholesale', 'Wholesale price') + '</div>' +
-      '<div class="f2">' + money('retail', 'Retail price') +
-        '<label class="f"><span>Stock alert level (bags)</span><input data-f="reorder" ' +
-          'inputmode="decimal" value="' + esc(info.reorder || '') + '"></label></div>' +
+      '<div class="f2">' + money('buy', 'Purchase price', 'What the mill or supplier charges per bag') +
+        money('extra', 'Extra cost per bag',
+          'Transport, labour, loading and other charges we pay ourselves — not on the supplier’s bill. Type 0 if none.') +
+      '</div>' +
+      '<div class="pz-live" id="pzLive" aria-live="polite">' + costLine(info.buy, info.extra, info.sell) + '</div>' +
+      '<div class="f2">' + money('sell', 'Selling price', 'The default rate on a new invoice') +
+        money('min', 'Minimum selling price', 'A warning appears below this') + '</div>' +
+      '<div class="f2">' + money('wholesale', 'Wholesale price') + money('retail', 'Retail price') + '</div>' +
       '<div class="f2">' +
+        '<label class="f"><span>Stock alert level (bags)</span><input data-f="reorder" ' +
+          'inputmode="decimal" value="' + esc(info.reorder || '') + '"></label>' +
         '<label class="f"><span>Discount %</span><input data-f="discountPct" inputmode="decimal" value="' +
-          esc(info.discountPct || '') + '"></label>' +
+          esc(info.discountPct || '') + '"></label></div>' +
+      '<div class="f2">' +
         '<label class="f"><span>Tax %</span><input data-f="taxPct" inputmode="decimal" value="' +
-          esc(info.taxPct || '') + '"></label></div>' +
+          esc(info.taxPct || '') + '"></label><div></div></div>' +
       '<label class="f"><span>Reason for the change</span><input data-f="reason" ' +
         'placeholder="e.g. Market price increase"></label>' +
       (Prices.approvalRequired()
@@ -403,7 +436,7 @@ global.PANELS.prices = {
   save: function (v) {
     var pid = PRICE_FOR;
     var values = {};
-    ['buy', 'sell', 'min', 'wholesale', 'retail', 'discountPct', 'taxPct', 'reorder']
+    ['buy', 'extra', 'sell', 'min', 'wholesale', 'retail', 'discountPct', 'taxPct', 'reorder']
       .forEach(function (k) { if (v[k] !== undefined && v[k] !== '') values[k] = v[k]; });
     var pre = Prices.validate(pid, values);
     if (pre.errors.length) return pre.errors[0];
@@ -503,6 +536,9 @@ var CSS = `
 .st-chip button:hover{background:var(--clay-50);color:var(--clay)}
 .st-add{display:flex;gap:7px;margin-top:6px}
 .st-add input{flex:1;padding:8px 10px;border:1.5px solid var(--line);border-radius:var(--r-sm)}
+.banner p.pz-inline b{display:inline;margin:0}
+.pz-live{border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface-2);
+  padding:9px 12px;margin:0 0 12px;font-size:13px;line-height:1.5}
 .pz-hist{border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden}
 .pz-h{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:7px 10px;border-bottom:1px solid var(--line-2)}
 .pz-h:last-child{border-bottom:none}
@@ -829,6 +865,18 @@ D.addEventListener('click', function (e) {
 
 D.addEventListener('input', function (e) {
   if (!e.target.dataset) return;
+  /* the price panel's "cost to us" line follows the three boxes as they are typed in;
+     a box left blank counts as what the product already holds, exactly as Save treats it */
+  if (e.target.dataset.f === 'buy' || e.target.dataset.f === 'extra' || e.target.dataset.f === 'sell') {
+    var live = D.getElementById('pzLive'), held = live && Prices.of(PRICE_FOR);
+    if (held) {
+      var box = function (k) {
+        var el = D.querySelector('#panel [data-f="' + k + '"]'), n = el ? num(el.value) : null;
+        return n === null ? held[k] : M.toP(n);
+      };
+      live.innerHTML = costLine(box('buy'), box('extra'), box('sell'));
+    }
+  }
   if (e.target.dataset.stq !== undefined) {
     SET.q = e.target.value;
     clearTimeout(SET._t);
