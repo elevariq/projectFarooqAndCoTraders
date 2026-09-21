@@ -19,7 +19,7 @@
     return String(s === null || s === undefined ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
-  function I(n) { return global.icon ? global.icon(n) : ''; }
+  function I(n) { return global.I ? global.I(n) : ''; }
   function say(m) { try { global.say(m); } catch (e) {} }
   function fmtDate(d) { return global.fmtDate ? global.fmtDate(d) : d; }
   function today() { return new Date().toISOString().slice(0, 10); }

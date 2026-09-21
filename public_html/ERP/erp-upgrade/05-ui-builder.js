@@ -452,10 +452,10 @@ function lineRows() {
         case 'amt': return '<td class="r num fcb-amtcell" data-label="Amount"><b data-fcamt="' + ix + '">' + M.fmtPlain(calc.lineTotal) + '</b></td>';
         default: return '<td class="c fcb-acts" data-label="">' +
           '<button class="icon-btn sm" data-fcmove="up" data-ix="' + ix + '" title="Move up"' +
-            (ix === 0 ? ' disabled' : '') + '>↑</button>' +
+            (ix === 0 ? ' disabled' : '') + '>' + I('up') + '</button>' +
           '<button class="icon-btn sm" data-fcmove="down" data-ix="' + ix + '" title="Move down"' +
-            (ix === B.draft.items.length - 1 ? ' disabled' : '') + '>↓</button>' +
-          '<button class="icon-btn sm danger" data-fcdel="' + ix + '" title="Remove line">✕</button></td>';
+            (ix === B.draft.items.length - 1 ? ' disabled' : '') + '>' + I('dn') + '</button>' +
+          '<button class="icon-btn sm danger" data-fcdel="' + ix + '" title="Remove line">' + I('x') + '</button></td>';
       }
     };
     return '<tr' + (over ? ' class="over"' : '') + '>' +

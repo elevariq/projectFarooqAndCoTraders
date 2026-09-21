@@ -14,7 +14,7 @@
     return String(s === null || s === undefined ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
-  function I(n) { return global.icon ? global.icon(n) : ''; }
+  function I(n) { return global.I ? global.I(n) : ''; }
   function say(m) { try { global.say(m); } catch (e) {} }
   function fmtDate(d) { return global.fmtDate ? global.fmtDate(d) : d; }
   function today() { return new Date().toISOString().slice(0, 10); }
@@ -92,7 +92,7 @@
         '<td data-label="Amount" class="r"><input class="lc-amt" data-lcr="amount" data-i="' + i +
           '" inputmode="decimal" value="' + esc(r.amount) + '" placeholder="0"></td>' +
         '<td class="r">' + (LC.rows.length > 1
-          ? '<button class="ic" data-lcdel="' + i + '" title="Remove">✕</button>' : '') + '</td>' +
+          ? '<button class="ic" data-lcdel="' + i + '" title="Remove">' + I('x') + '</button>' : '') + '</td>' +
       '</tr>';
     }).join('');
   }

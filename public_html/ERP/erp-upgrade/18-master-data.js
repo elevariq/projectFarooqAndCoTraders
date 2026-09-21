@@ -286,7 +286,7 @@ var Areas = ERP.Areas = {
 };
 
 /* ══════════════════════════════════════════════════════════════════════════
-   SUPPLIER ↔ PRODUCT MAPPING
+   SUPPLIER-PRODUCT MAPPING
    ══════════════════════════════════════════════════════════════════════════ */
 var Mapping = ERP.Mapping = {
   all: function () { return S.supplierProducts || (S.supplierProducts = []); },
@@ -597,7 +597,7 @@ global.PAGES.mapping = function () {
             (ctx.lastDate ? ' · ' + global.fmtDate(ctx.lastDate) : '') + '</span></span>' +
             (m.preferred ? '<span class="md-pill pref">Preferred</span>'
               : '<button class="btn sm" data-mappref="' + m.id + '">Prefer</button>') +
-            '<button class="icon-btn sm danger" data-mapdel="' + m.id + '" title="Remove">✕</button></div>';
+            '<button class="icon-btn sm danger" data-mapdel="' + m.id + '" title="Remove">' + I('x') + '</button></div>';
         }).join('') : '<div class="fcb-none" style="padding:20px">Nothing mapped yet. ' +
           'Add from the list on the right, or simply record a purchase — the mill remembers what it sent.</div>') +
         '</div></div>' +

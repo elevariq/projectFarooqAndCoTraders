@@ -39,7 +39,7 @@ function esc(s) {
   return String(s === null || s === undefined ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
-function I(n) { return global.icon ? global.icon(n) : ''; }
+function I(n) { return global.I ? global.I(n) : ''; }
 function say(m) { try { global.say(m); } catch (e) {} }
 function can(p) { return ERP.Can ? ERP.Can(p) : true; }
 function pill(cls, t) { return '<span class="pill ' + cls + '">' + t + '</span>'; }

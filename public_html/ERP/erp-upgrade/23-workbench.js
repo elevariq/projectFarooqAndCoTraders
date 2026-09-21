@@ -647,7 +647,7 @@ global.PAGES.masterdata = function () {
       '<div class="st-chips">' + (Fields.all(W.entity).length
         ? Fields.all(W.entity).map(function (f) {
             return '<span class="st-chip">' + esc(f.l) + '<button data-wbfielddel="' + esc(f.k) +
-              '" title="Remove">✕</button></span>';
+              '" title="Remove">' + I('x') + '</button></span>';
           }).join('')
         : '<span class="hint">None yet.</span>') + '</div>' +
       '<div class="st-add"><input data-wbfieldadd placeholder="Field name…">' +

@@ -161,7 +161,7 @@ async function main() {
   check('T7 Items is the number of lines, not the bag count',
     f7.items === 2, String(f7.items));
   const text7 = ERP.Wa.invoiceText(inv7);
-  check('T7 the message says Items: 2', /📦 Items: 2\n/.test(text7));
+  check('T7 the message says Items: 2', /Items: 2\n/.test(text7));
   check('T7 the message does not say Items: 300', !/Items: 300/.test(text7));
   const row7 = ERP.Ledger.customer(cust.id).rows.find(r => r.id === inv7.id);
   check('T7 the statement qty is the total quantity, 300',
@@ -179,9 +179,9 @@ async function main() {
   check('T12 and the date', t1.includes('11 Sep 2026'));
   check('T12 and the customer', t1.includes(cust.sh));
   check('T12 and Bill Total / Paid / Bill Balance',
-    /💰 Bill Total: /.test(t1) && /✅ Paid: /.test(t1) && /🔴 Bill Balance: /.test(t1));
+    /Bill Total: /.test(t1) && /Paid: /.test(t1) && /Bill Balance: /.test(t1));
   check('T12 and Previous / Total Outstanding',
-    /📊 Previous Outstanding: /.test(t1) && /🔴 Total Outstanding: /.test(t1));
+    /Previous Outstanding: /.test(t1) && /Total Outstanding: /.test(t1));
   const enc = encodeURIComponent(t1);
   check('T12 the message URL-encodes without loss',
     decodeURIComponent(enc) === t1);

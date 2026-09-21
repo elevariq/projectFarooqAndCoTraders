@@ -152,7 +152,7 @@
 
       { h: 'WhatsApp message' },
       { k: 'waThanks', l: 'Closing line', t: 'area', wide: true,
-        d: 'Thank you for doing business with {business}. 🙏',
+        d: 'Thank you for doing business with {business}.',
         n: 'Use {business} for the business name' },
       { k: 'waEnabled', l: 'Show the Send on WhatsApp button', t: 'toggle', d: true }
     ],
@@ -289,7 +289,7 @@
         (s[2] ? '<p class="hint" style="margin:0 0 6px">' + esc(s[2]) + '</p>' : '') +
         '<div class="st-chips">' + (list.length ? list.map(function (x) {
           return '<span class="st-chip">' + esc(x) + '<button data-stlistdel="' + name +
-            '" data-value="' + esc(x) + '" title="Remove">✕</button></span>';
+            '" data-value="' + esc(x) + '" title="Remove">' + (global.I ? global.I('x') : '') + '</button></span>';
         }).join('') : '<span class="hint">Nothing yet.</span>') + '</div>' +
         '<div class="st-add"><input data-stlistadd="' + name + '" placeholder="Add…">' +
         '<button class="btn" data-stlistgo="' + name + '">Add</button></div></div>';
@@ -404,7 +404,7 @@
       var b = ERP.Settings.get();
       var name = b.businessName || 'Farooq & Co';
       var built = origInvoiceText.call(ERP.Wa, inv);
-      var oldTail = 'Thank you for doing business with ' + name + '. 🙏';
+      var oldTail = 'Thank you for doing business with ' + name + '.';
       var tail = text('waThanks', oldTail).replace(/\{business\}/g, name);
       return built.replace(oldTail, tail);
     };

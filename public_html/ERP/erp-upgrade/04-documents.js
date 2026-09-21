@@ -785,7 +785,7 @@ var Viewer = {
         (a.payment ? btn('pay', 'Payment') : '') +
         (a.ret ? btn('return', 'Return') : '') +
         (a.cancel ? btn('cancel', 'Cancel invoice') : '') +
-        '<button class="fcv-btn" data-fcv="close" aria-label="Close">✕ Close</button>' +
+        '<button class="fcv-btn" data-fcv="close" aria-label="Close">' + (global.I ? global.I('x') : '') + 'Close</button>' +
       '</div>' +
       '<div class="fcv-scroll"><div class="fcv-page" id="fcvPage" style="transform:scale(' + Viewer.zoom + ')">' +
         Paper.html(model) + '</div></div>';

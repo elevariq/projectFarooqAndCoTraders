@@ -242,7 +242,7 @@ Collection.print = function () {
       '<button class="fcv-btn pri" data-csprint="1">Print</button>' +
       '<button class="fcv-btn" data-csprint="pdf">Save as PDF</button>' +
       '<button class="fcv-btn" data-csexcel="1">Excel</button>' +
-      '<button class="fcv-btn" data-fcv="close">✕ Close</button></div>' +
+      '<button class="fcv-btn" data-fcv="close">' + I('x') + 'Close</button></div>' +
     '<div class="fcv-scroll"><div class="fcv-page" id="fcvPage" style="transform:scale(' +
       (ERP.isMobile && ERP.isMobile() ? 0.34 : 0.78) + ')">' + Collection.sheetHtml(rows) + '</div></div>';
   host.classList.add('on');

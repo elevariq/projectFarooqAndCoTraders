@@ -536,7 +536,7 @@ function listEditor(name, title, note) {
     (note ? '<p class="hint" style="margin:0 0 6px">' + note + '</p>' : '') +
     '<div class="st-chips">' + (list.length ? list.map(function (x) {
       return '<span class="st-chip">' + u(x) + '<button data-stlistdel="' + name + '" data-value="' +
-        esc(x) + '" title="Remove">✕</button></span>';
+        esc(x) + '" title="Remove">' + I('x') + '</button></span>';
     }).join('') : '<span class="hint">Nothing yet.</span>') + '</div>' +
     '<div class="st-add"><input data-stlistadd="' + name + '" placeholder="Add…">' +
     '<button class="btn" data-stlistgo="' + name + '">' + I('plus') + 'Add</button></div></div>';

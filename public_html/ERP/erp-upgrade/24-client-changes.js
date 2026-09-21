@@ -280,19 +280,19 @@
       var date = fmtDate(inv.invoiceDate);
       var bar = '━━━━━━━━━━━━━━';
       return name + '\n\n' +
-        '🧾 Invoice: ' + (inv.invoiceNumber || '') + '\n' +
-        '📅 Date: ' + date + '\n' +
-        '👤 Customer: ' + (inv.shopNameSnapshot || inv.customerNameSnapshot || '') + '\n\n' +
+        'Invoice: ' + (inv.invoiceNumber || '') + '\n' +
+        'Date: ' + date + '\n' +
+        'Customer: ' + (inv.shopNameSnapshot || inv.customerNameSnapshot || '') + '\n\n' +
         bar + '\n' +
-        '📦 Items: ' + f.items + '\n' +
-        '💰 Bill Total: ' + M.fmt(f.billTotal) + '\n' +
-        '✅ Paid: ' + M.fmt(f.paid) + '\n' +
-        '🔴 Bill Balance: ' + M.fmt(f.billBalance) + '\n\n' +
-        '📊 Previous Outstanding: ' + M.fmt(f.previousOutstanding) + '\n' +
-        '🔴 Total Outstanding: ' + M.fmt(f.totalOutstanding) + '\n' +
+        'Items: ' + f.items + '\n' +
+        'Bill Total: ' + M.fmt(f.billTotal) + '\n' +
+        'Paid: ' + M.fmt(f.paid) + '\n' +
+        'Bill Balance: ' + M.fmt(f.billBalance) + '\n\n' +
+        'Previous Outstanding: ' + M.fmt(f.previousOutstanding) + '\n' +
+        'Total Outstanding: ' + M.fmt(f.totalOutstanding) + '\n' +
         bar + '\n\n' +
         'Thank you for doing business with ' +
-        (b.businessName || b.name || 'Farooq & Co') + '. 🙏';
+        (b.businessName || b.name || 'Farooq & Co') + '.';
     },
 
     /* Normalises for the wa.me URL only. The stored display number is never

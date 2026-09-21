@@ -386,7 +386,7 @@ var Editor = ERP.Editor = {
         '<button class="fcv-btn pri" data-fce="word">Word</button>' +
         '<button class="fcv-btn" data-fce="wa">WhatsApp</button>' +
         '<button class="fcv-btn" data-fce="revert">Undo all edits</button>' +
-        '<button class="fcv-btn" data-fce="close">✕ Close</button>' +
+        '<button class="fcv-btn" data-fce="close">' + I('x') + 'Close</button>' +
       '</div>' +
       '<div class="fce-tabs">' +
         '<button data-fcetab="form" class="' + (D.body.classList.contains('fce-preview') ? '' : 'on') + '">Edit</button>' +
@@ -419,7 +419,7 @@ var Editor = ERP.Editor = {
     };
     var lines = sheet.lines.map(function (l) {
       return '<div class="fce-line' + (l.edited ? ' edited' : '') + '">' +
-        '<button class="rm" data-fceremove="' + esc(l.key) + '" title="Remove this line">✕</button>' +
+        '<button class="rm" data-fceremove="' + esc(l.key) + '" title="Remove this line">' + I('x') + '</button>' +
         '<label class="fce-f"><span>Description</span>' +
           '<input data-fcerow="' + esc(l.key) + '" data-f="description" value="' + esc(l.description) + '"></label>' +
         '<label class="fce-f"><span>Urdu name (printed)</span>' +
@@ -441,7 +441,7 @@ var Editor = ERP.Editor = {
         '<input data-fcecharge="' + ix + '" data-f="label" value="' + esc(c.label) + '" placeholder="Charge or discount">' +
         '<input data-fcecharge="' + ix + '" data-f="amount" inputmode="decimal" value="' +
           esc(M.toR(c.amount)) + '" placeholder="0">' +
-        '<button data-fcechargedel="' + ix + '" title="Remove">✕</button></div>';
+        '<button data-fcechargedel="' + ix + '" title="Remove">' + I('x') + '</button></div>';
     }).join('');
 
     var history = (cfg.noteHistory || []).slice(0, 6).map(function (n) {

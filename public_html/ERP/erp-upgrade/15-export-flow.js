@@ -153,7 +153,7 @@ ERP.Viewer.open = function (model, opts) {
   if (!btn) return;
   /* put it first, ahead of the export buttons, and make it the lead action */
   btn.className = 'fcv-btn pri';
-  btn.textContent = model.edited ? '✎ Edit again' : '✎ Edit before exporting';
+  btn.innerHTML = I('edit') + (model.edited ? 'Edit again' : 'Edit before exporting');
   var first = bar.querySelector('[data-fcv="print"]');
   if (first && btn.nextSibling !== first) bar.insertBefore(btn, first);
   if (model.edited && !bar.querySelector('.fcx-badge')) {
