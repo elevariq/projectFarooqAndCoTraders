@@ -39,5 +39,14 @@ runs a conversion through the server-data driver (CNV document, both movements a
 **Seen in real headless Chrome (2026-09-21):** the Inventory button row, the editor at 1320 px and 390 px, and a real mouse click opening the
 themed "Convert to" popup (searchable, 131 brands). At a narrow desktop width the table scrolls sideways (same as Adjust/Transfer).
 
-**Not yet seen on the live site or a physical phone:** any of the above there, the note viewer/PDF for a conversion, and a real
-conversion against the server data.
+**Deployed 2026-09-21** as commit `124dd78` (together with the Extra-cost-per-bag work, `779dcd4`) by
+`scripts/deploy-erp-from-clean-clone.sh`: every test passed, the three `_app/` files on the server have the same md5 as the build, cache cleared.
+Rollback copy of what was live before: `~/backups/erp-deploy-20260921230732/` (three files + `app/`).
+- The wrapper printed `md5 MISMATCH` / `DEPLOY FAILED (exit 2)` although the hashes were identical: local `md5sum` writes `*index.html` (binary
+  marker on Windows Git Bash), the server writes `index.html`, and the wrapper compares the whole line. Compare the hash column, not the line.
+- Read-only check in the owner's signed-in Chrome afterwards: the app runs on the server backend, has `StockDocs.convert`, the `convert` editor mode and
+  `StockValue.costOf`, and Inventory shows Edit products · Pricing settings · Add Stock · Transfer · **Convert Brand** · Adjust, with no console errors.
+  **No conversion was posted on live data** (deliberately).
+
+**Not yet seen on the live site or a physical phone:** an actual conversion (the editor, the note viewer/PDF, the server write), and phone/desktop layout there.
+Suggested first live use: one small conversion between two brands in a warehouse with stock, then confirm both counts and the CNV note.
