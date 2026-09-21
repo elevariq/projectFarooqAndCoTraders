@@ -1386,6 +1386,57 @@ password is asked again". Full design, decisions and limits: **`docs/SERVER_DATA
   (`absolute_ttl_min`), an account switched off, or signing out elsewhere — the app shows "Your session has ended" without a reload.
   `test-auth-client.mjs` F1/F1b, `test-gate.mjs` O6/O6b/O6c (the gate test needs PHP — it skips on this machine).
 
+## UI/UX pass — one frame for both apps, a sidebar that reads, a real bell, long lists in pages (2026-09-21)
+
+Request: "act as a UI/UX expert" — the company name written twice, the Warehouse app built differently from the office app, its
+menu button in the wrong place, group names blending into the buttons, repeated icons, emojis, the bell answering with a toast, the dark
+purple Warehouse stock box, long lists, uneven margins, responsiveness. **No data, table or API change; the only PHP touched is one CSS
+string in `api/_gate_login.php` (the sign-in page's logo).** App deploy (`deploy-erp.sh`) + `deploy-api.sh` for that string.
+
+- **The name is written once.** `logo.png` already spells "FAROOQ & CO", and the words "Farooq &Co Traders" sat beside it (sidebar, Warehouse
+  rail, launcher, sign-in page, launcher's app bar). Wherever the name is written next to the logo, the logo is now shown as an **emblem**:
+  the same `logo.png`, cropped by CSS to the F-and-wheat monogram (`transform-origin:50% 31%; translateY(19%) scale(2.15)` inside a round
+  `overflow:hidden` box; `alt=""`, the name is the text). No new image file. Places: module 40 (`#markLogo.emblem`), `app/farooq-co-warehouse-pwa.html`
+  (`.logo`), `app/index.html` (`.mark`, `#bar .m`), `api/_gate_login.php` (`.mark`).
+- **Sidebar (module `40-nav.js`).** Every one of the 24 screens has its OWN icon (`ERP.Nav.ICONS`; 15 used to share — three wallets, three people,
+  three charts, three mills…); new icons are added to the base icon set `P`, which the bridge now exposes (`window.P`). Each group is a caps label +
+  hairline + chevron **button** that folds it (remembered per device in `farooqco_nav_closed`; the group holding the open screen cannot be folded
+  and a link to a screen in a folded group re-opens it); in the narrow icon rail the headers give way to a divider per group (nothing hidden);
+  a group whose links are all hidden for the role is hidden. It wraps `paintNav` (does not replace it), so module 19's per-role hiding still applies.
+  The phone tab bar's Sales icon follows (`receipt`).
+- **Bell (module `41-notifications.js`).** A popover under the bell (bottom sheet + scrim on a phone) built from the books each time: no saving / no
+  stock / low stock / orders waiting / shops owe / we owe / goods lying at mills; each row goes to the screen that fixes it (Inventory opens already
+  filtered — `go()` resets `FIL`, so the filter is set after it and `paint()` again). Counts use the same definition as the Inventory badge and the
+  dashboard card. The red dot follows what was SEEN (`farooqco_notif_seen`, a signature of the listed items). Replaces the toast; the Warehouse app
+  has its own panel with the same look.
+- **Warehouse app = the office frame.** Fixed flush rail, one 60px top bar, the page — same tokens, nav item size, group headers, avatar row, icon-rail
+  collapse, tab bar on phones. The menu button is at the LEFT of the top bar (as in the office; the old "Hide menu" at the foot of the rail is gone);
+  above 1100px it folds to icons (`body.mini`), between 1025 and 1100px it opens the labels (`body.wide`), below that the tab bar takes over. The dark
+  purple stock card, product hero and dispatch "maths" panel are light cards now (dark ones were inconsistent with every other card, made the
+  bars near-invisible at 0 and vanished in dark mode); the dark "Dispatch stock" button on the product page is a normal button. **The rail no longer
+  shows a fixed "Kashif Raza / Inventory Access"** — it shows whoever is signed in (`FcWH.user`), else "Warehouse". Found and fixed on the way:
+  the `shop` icon did not exist (shop rows had an empty box), the search box's icon sat on a line of its own (`.field>label` beat `.srch`), the Urdu
+  part of a product name was a full-width block at the far side of its cell, dark-mode icon tiles were dark-on-dark, tab bar labels wrapped.
+- **Long lists.** ERP (module `42-layout.js`): any list of `[data-row]` items (tables and card grids) over 48 shows the first 48 and a "Show 48 more /
+  Show all N" bar; search and filters still work over the WHOLE list (rows past the limit are hidden by class `fc-lim`, never by inline `display`, so
+  CSV export — which skips only inline-hidden rows — still exports everything; `beforeprint` expands the list). The dashboard "needing attention"
+  table (136 rows), Inventory (408), Customers (409) were the long ones. Lists with their own paging (invoice list, Payments) do not use `data-row`.
+  Warehouse: `pageOf`/`moreBar` (40 per page) on the stock list, by-warehouse, history, Find, the Receive picker, the Dispatch shop/product pickers;
+  the stock list also gained All / Low stock / No stock chips (the bell's destination).
+- **Spacing / responsiveness (module 42).** Buttons-only rows under a page title ("Edit products", "Pricing settings", "Add stock/Transfer/Adjust" were three
+  separate right-aligned strips) are folded into the title row; stacked blocks (`.ledger/.card/.banner/.bar`) are 16px apart (they touched, 0–2px, on most
+  screens); a labelled field in a filter bar is inline (`Amount from [ ]`); `.sec-t` with buttons wraps (Inventory overflowed a phone); bare tables get a
+  scroll wrapper (Landed costs / Expenses overflowed a phone by 120px); the profit table fits; search placeholder no longer cut mid-word; dark-mode
+  notices (`.banner.info/warn/err` had fixed dark text colours) are readable.
+- **No emoji.** The WhatsApp invoice text and the closing-line option lost their emoji (plain labels: "Invoice:", "Bill Total:", "Paid:"…; a closing line the owner
+  already customised is kept as typed); the text-glyph buttons (✕ ✎ ↑ ↓) are SVG icons. Arrows used as prose ("before → after") are typography and stay.
+  `test-shell.mjs` E1–E5 fail if an emoji comes back. Also fixed: modules 27/28/29/34 read `window.icon` (does not exist), so their icons were blank.
+- **Tests:** `test-shell.mjs` (80 checks: unique icons, groups/fold/remember/active-group rule, the bell — panel not toast, names, filter link, seen-dot, Esc,
+  phone sheet, empty state — action row, paging + search over the whole list + print, bare tables, emoji scan, and the Warehouse frame/paging/filter/bell).
+  Looked at in real headless Chrome: 1320/1100/1080/820/390px, light + dark, both apps. **Not seen by anyone on the live site or a physical phone.**
+- **Not done:** the ERP has no "mark all read"/snooze on notifications (derived, not stored); the `.tbl` of Inventory is still a wide table that scrolls
+  inside its card; the Documents/Audit lists are capped by their own `slice`, not paged; the base `<title>` still says "Warehouse ERP".
+
 ## Where to look for more detail
 
 - **`docs/SERVER_DATA.md` — the current guide to the server-side data system (how it works, what users see, everyday operations, backups, how to change it, known limits). Start here for anything about where the data lives.**
