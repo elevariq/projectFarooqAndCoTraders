@@ -17,9 +17,10 @@
 #   scripts/deploy-erp-from-clean-clone.sh --check   # pre-flight only; changes nothing; exit 0 = ready
 #   scripts/deploy-erp-from-clean-clone.sh           # the deploy (10-15 min: run it detached, watch the log)
 #
-# Detached from a Windows shell (so a tool timeout cannot kill it mid-upload):
-#   powershell -NoProfile -Command "Start-Process -WindowStyle Hidden -FilePath 'C:\Program Files\Git\bin\bash.exe' \
-#     -ArgumentList '-c','cd /d/projectFarooqAndCoTraders && scripts/deploy-erp-from-clean-clone.sh'"
+# Detached from a Windows shell (so a tool timeout cannot kill it mid-upload). NOTE the embedded \" around the whole
+# bash command: without them PowerShell splits '-c' and the command into two arguments, bash runs just "cd" and the
+# launch silently does nothing (hit on 2026-09-21; this exact form was tested with --check):
+#   powershell -NoProfile -Command "Start-Process -WindowStyle Hidden -FilePath 'C:\Program Files\Git\bin\bash.exe' -ArgumentList '-c','\"cd /d/projectFarooqAndCoTraders && bash scripts/deploy-erp-from-clean-clone.sh\"'"
 # Log: .git/deploy-logs/erp-latest.log (tail it; the last line says DEPLOY FINISHED or DEPLOY FAILED).
 set -euo pipefail
 
@@ -87,8 +88,11 @@ cp -r "$REPO_ROOT/public_html/ERP/erp-upgrade/node_modules" "$TMP/c/public_html/
 
 echo "==> Comparing the served files with this build (md5)"
 cd "$TMP/c/public_html/ERP/erp-upgrade/dist"
-LOCAL="$(md5sum index.html farooq-co-erp.html farooq-erp-data.js | awk '{print $1"  "$2}')"
-REMOTE="$(ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_HOST" "cd '$REMOTE_APP' && md5sum index.html farooq-co-erp.html farooq-erp-data.js" | awk '{print $1"  "$2}')"
+# md5sum on Windows Git Bash prints "hash *file" (binary-mode marker), the server prints "hash file": drop a leading '*'
+# from the file name on BOTH sides, or a good deploy is reported as MISMATCH (seen 2026-09-21).
+norm() { awk '{sub(/^\*/, "", $2); print $1"  "$2}'; }
+LOCAL="$(md5sum index.html farooq-co-erp.html farooq-erp-data.js | norm)"
+REMOTE="$(ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_HOST" "cd '$REMOTE_APP' && md5sum index.html farooq-co-erp.html farooq-erp-data.js" | norm)"
 echo "build : "; echo "$LOCAL" | sed 's/^/   /'
 echo "server: "; echo "$REMOTE" | sed 's/^/   /'
 if [ "$LOCAL" = "$REMOTE" ]; then echo "  md5 MATCH — the server is serving exactly commit $COMMIT."; else echo "  md5 MISMATCH — do not assume the deploy is good; compare above." >&2; exit 2; fi
