@@ -58,7 +58,11 @@ function core(store, obj) {
   var d = DERIVED[store]; if (!d || !obj || typeof obj !== 'object') return obj;
   var c = {}; Object.keys(obj).forEach(function (k) { if (d.indexOf(k) < 0) c[k] = obj[k]; }); return c;
 }
-var POLL_MS = 15000;
+/* How often an open, visible window asks "did someone else save?". Every ask is a database connection on the server, and Hostinger caps
+   the auth database user at 500 connections an HOUR: at 15 s each open tab used 240 an hour on its own and two tabs took the whole site down
+   (2026-09-21, "Can't check your sign-in"). The check is only a courtesy banner — a stale window's save is refused by the revision check
+   whatever this says — so it can be slow. */
+var POLL_MS = 90000;
 var REQUEST_MS = 20000;
 
 var SD = FDB.server = {

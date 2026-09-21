@@ -613,7 +613,7 @@ are done and live:
     2026-09-20 from a text link in the top bar); the staff list below it is **owner only**
     (`ACCOUNTS_MANAGE`, and a non-owner's browser never even requests it). Owner: add someone with a temporary
     password (the server forces a change at first sign-in), change a role, reset a password, switch an
-    account off/on (a switched-off person is signed out within a minute). All rules stay server-side
+    account off/on (a switched-off person is signed out within about three minutes — heartbeat, see the 2026-09-21 outage note). All rules stay server-side
     (`api/auth/users.php`: owner only, CSRF, the last owner can't be demoted or switched off, audit-
     logged). Screens are tied to permissions: Payroll `PAYROLL_MANAGE` and the Company accounts
     staff list `ACCOUNTS_MANAGE` (given to no role ⇒ owner only, like `LANDED_COST_*`; no server table change),
@@ -1462,6 +1462,23 @@ Client: "at Receive payment there is *Amount Paid* written, change it to *Amount
   "Choose the shop first", and changing the Area keeps an already-chosen shop when it is still in that area (else back to the blank line).
   Opening from a shop's own page/khata still pre-selects that shop. `test-pay-a-shop.mjs` N1–N8 (mutation-checked); U3/U4/S9/S10 and
   `test-statement-of-account.mjs` F3–F7 updated for the extra blank option.
+
+## Outage 2026-09-21: "Can't check your sign-in" — Hostinger's 500-connections-an-hour cap
+
+About 10:25–10:34 local the ERP answered **503** to everyone (the gate's fail-closed page, then the app's "Can't check your sign-in"). Cause, read off the
+server (`php` + the live `private/erp-config.php`, which sits at `domains/farooqandcotraders.online/private/`, NOT under `public_html`):
+`SQLSTATE[HY000] [1226] User 'u943531942_erpauth' has exceeded the 'max_connections_per_hour' resource (current value: 500)`. Every request opens a
+new connection (`api/_bootstrap.php`, `api/_data.php`), and the browser made a lot of them: the stale-window check `version.php` every **15 s**
+per visible tab (240/h) plus the sign-in heartbeat every **60 s** (60/h) — two open tabs alone exceed 500/h. It cleared by itself within the hour; nothing
+was lost. It was NOT caused by that day's deploys (they only replace static files).
+- **Fix (app only):** `POLL_MS` 15 s → **90 s** (`01b-server-db.js`; a courtesy banner only — a stale window's save is refused by the revision check
+  regardless) and `HEARTBEAT_MS` 60 s → **180 s** (`31-auth.js`; a switched-off / signed-out session is noticed within ~3 min). ≈ 60 connections an hour per
+  open tab instead of 300. `test-auth-client.mjs` H11b fails if the heartbeat goes back under 2 minutes.
+- **If it happens again:** the site heals itself within the hour (the counter is a rolling hour); do NOT use `enforce-off` (it would expose the app files and
+  the data API would still fail). Diagnose with the `php -r` connect test above. **Not done, and worth considering:** persistent PDO connections
+  (`PDO::ATTR_PERSISTENT`) in `_bootstrap.php`/`_data.php` so requests reuse connections — a production API change, needs care with per-request state
+  and `deploy-api.sh`'s probes (they need the database up); and asking Hostinger whether the limit can be raised for these two database users.
+- `deploy-erp.sh`'s final probe printed `503` for the ERP — the first sign of this; a `503` there means "the gate cannot reach its database", not a bad upload.
 
 ## Where to look for more detail
 

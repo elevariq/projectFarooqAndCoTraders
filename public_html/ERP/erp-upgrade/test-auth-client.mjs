@@ -368,11 +368,14 @@ async function main() {
     check('H11 a hidden tab sends no heartbeat', meCalls === before);
     Object.defineProperty(w.document, 'visibilityState', { configurable: true, get: () => 'visible' });
 
+    /* the server allows the auth database user only 500 connections an hour: a heartbeat every minute per tab helped take the site down */
+    check('H11b the default heartbeat is no more often than every 2 minutes', ERP.Auth.HEARTBEAT_MS >= 120000, String(ERP.Auth.HEARTBEAT_MS));
+
     /* the timer really drives beat() */
     ERP.Auth._internal.stopHeartbeat(); ERP.Auth.HEARTBEAT_MS = 40;
     const b2 = meCalls; ERP.Auth._internal.startHeartbeat(); await sleep(220);
     check('H12 the interval calls the server on its own', meCalls > b2, 'calls ' + b2 + ' -> ' + meCalls);
-    ERP.Auth._internal.stopHeartbeat(); ERP.Auth.HEARTBEAT_MS = 60000; ERP.Auth._internal.startHeartbeat();
+    ERP.Auth._internal.stopHeartbeat(); ERP.Auth.HEARTBEAT_MS = 180000; ERP.Auth._internal.startHeartbeat();
 
     /* the session dies mid-use */
     meMode = '401'; await ERP.Auth._internal.beat();

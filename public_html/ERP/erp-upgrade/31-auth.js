@@ -51,7 +51,10 @@ if (!D) return;
 var AUTH_MODE = 'observe';           /* starting value only; the server's `enforce` flag sets it — see header */
 var API_BASE = 'api/auth/';
 var TICKET_KEY = 'farooqco_auth_ticket';
-var HEARTBEAT_MS_DEFAULT = 60 * 1000;
+/* Every heartbeat is a database connection on the server, and Hostinger caps the auth database user at 500 connections an hour (the site
+   went down on 2026-09-21 when open tabs used them all up) — so this is every 3 minutes, not every minute. A session that ends (account
+   switched off, signed out elsewhere, 12 h cap) is noticed within this time. */
+var HEARTBEAT_MS_DEFAULT = 180 * 1000;
 
 function esc(s) {
   return String(s === null || s === undefined ? '' : s)
@@ -367,7 +370,7 @@ Auth.refresh = function () {
    switching the account off, signing out from another device). Without it an
    open tab would keep running as if nothing happened — and, worse, fall back
    to the local "Owner" role, which is precisely what enforcing is meant to end.
-   Asks the server once a minute, only while the screen is unlocked and the tab
+   Asks the server every three minutes, only while the screen is unlocked and the tab
    is visible, so an abandoned tab neither keeps the server session alive nor
    hammers the API. There is deliberately NO idle lock: an unattended screen stays as it is
    (removed 2026-09-21 at the owner's request — nobody is asked for the password again just
