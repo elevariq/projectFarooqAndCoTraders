@@ -1512,6 +1512,10 @@ are now `color-mix()` of the theme tokens (they stayed pale in dark mode). Print
 - **How it was checked:** a script in a real headless Chrome listed every `input/select/textarea/button/table/td/th/.card/.pill` whose border is not a theme colour, on **all 30 screens, every side panel and both
   invoice builders, in light and dark, plus the Warehouse screens** — 5 controls before (Landed rows, Payroll month, Collection min), **0 after**. Screenshots at 1320px and 390px looked at.
 - Tests: `test-theme-borders.mjs` (17 checks — the block is in both apps, every field rule is `:where()`, no fixed colour in it, what it reaches / leaves alone, the screens that used to show plain boxes; mutation-checked).
+- **Deployed live 2026-09-21 ~11:06** (`main` = `81cb5d6`, which also carries the other session's connection-cap timer change `aba7442`) with `scripts/deploy-erp.sh` run detached from a Claude session (full 44-harness gate green
+  inside it, ~15 min; note `pgrep` cannot see it from Git Bash — watch the log instead). Backup `/home/u943531942/backups/erp-deploy-20260921110632` (rollback = copy its three files back into `ERP/_app/`, clear cache).
+  Verified: `_app/index.html` md5 `4fbf4d4a…`, `_app/farooq-co-erp.html` `7994c8cc…`, `_app/farooq-erp-data.js` `bf0bf077…` equal the build; no `*.uploading` leftovers; ERP `401` (gated), homepage `200`; Hostinger cache
+  cleared for `erp.farooqandcotraders.online`. **Not yet seen by anyone on the live site:** a reload on a real screen, the themed Landed-cost boxes, a physical phone.
 - **Noticed, not changed:** the Payroll "Excel" button shows no icon (modules 30/32 still read `window.icon`; the base's is `window.I` — same root cause as the 2026-09-21 UI pass fixed for 27/28/29/34).
 
 ## Where to look for more detail
