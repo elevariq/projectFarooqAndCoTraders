@@ -77,22 +77,25 @@ async function main() {
   check('F1 the payment panel opens with an Area selector', !!$('#fcPayArea'));
   check('F2 with no shop pre-chosen, Area defaults to "All areas"', $('#fcPayArea').value === '');
   const allShopCount = $('#fcPayCust').options.length;
-  check('F3 the Shop list starts with every shop', allShopCount === w.CUSTOMERS.length, String(allShopCount));
+  check('F3 the Shop list starts with every shop, after a blank "Choose a shop" line',
+    allShopCount === w.CUSTOMERS.length + 1 && $('#fcPayCust').options[0].value === '' && $('#fcPayCust').value === '', String(allShopCount));
 
   change($('#fcPayArea'), c1.region); await sleep(60);
   const expectAreaCount = w.CUSTOMERS.filter(c => (c.region || '') === c1.region).length;
   const gotAreaCount = $('#fcPayCust').options.length;
   check('F4 choosing an Area narrows the Shop list to that area only',
-    gotAreaCount === expectAreaCount, `${gotAreaCount} vs ${expectAreaCount}`);
+    gotAreaCount === expectAreaCount + 1, `${gotAreaCount} vs ${expectAreaCount} + the blank line`);
   check('F5 every option left is actually in that area',
-    $$('#fcPayCust option').every(o => (w.custBy(o.value).region || '') === c1.region));
+    $$('#fcPayCust option').filter(o => o.value).every(o => (w.custBy(o.value).region || '') === c1.region));
+  check('F6a until a shop is picked the banner asks for one, not a balance', /Choose the shop/.test($('#fcPayBal').textContent), $('#fcPayBal').textContent);
+  change($('#fcPayCust'), $$('#fcPayCust option').filter(o => o.value)[0].value); await sleep(40);
   check('F6 the outstanding-balance banner matches the newly selected shop',
     $('#fcPayBal').textContent.includes(M.fmt(ERP.Ledger.customerBalance($('#fcPayCust').value))),
     $('#fcPayBal').textContent);
 
   change($('#fcPayArea'), ''); await sleep(60);
   check('F7 clearing the Area filter shows every shop again',
-    $('#fcPayCust').options.length === w.CUSTOMERS.length);
+    $('#fcPayCust').options.length === w.CUSTOMERS.length + 1);
 
   const cb1 = $('#panel .x') || $('[data-close]') || $('#scrim'); if (cb1) click(cb1);
   await sleep(80);

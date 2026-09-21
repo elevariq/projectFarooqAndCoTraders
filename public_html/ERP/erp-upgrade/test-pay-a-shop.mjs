@@ -141,13 +141,14 @@ async function main() {
   w.openPanel('refund'); await sleep(120);
   check('U1 the "Pay a shop" panel opens with an Area selector', !!$('#fcRefundArea'));
   check('U2 and a Shop selector', !!$('#fcRefundCust'));
-  check('U3 the Shop list starts with every shop', $('#fcRefundCust').options.length === w.CUSTOMERS.length);
+  check('U3 the Shop list starts with every shop, after a blank "Choose a shop" line',
+    $('#fcRefundCust').options.length === w.CUSTOMERS.length + 1 && $('#fcRefundCust').options[0].value === '');
 
   change($('#fcRefundArea'), c1.region); await sleep(60);
   const expectAreaCount = w.CUSTOMERS.filter(c => (c.region || '') === c1.region).length;
   check('U4 choosing an Area narrows the Shop list here too',
-    $('#fcRefundCust').options.length === expectAreaCount,
-    `${$('#fcRefundCust').options.length} vs ${expectAreaCount}`);
+    $('#fcRefundCust').options.length === expectAreaCount + 1,
+    `${$('#fcRefundCust').options.length} vs ${expectAreaCount} + the blank line`);
 
   const cb1 = $('#panel .x') || $('[data-close]') || $('#scrim'); if (cb1) click(cb1);
   await sleep(80);
@@ -271,12 +272,12 @@ async function main() {
   ERP.setRefundFor(c2.id); ERP.setPayFor(c2.id);
   click($('[data-fcpayopen="refund"]')); await sleep(150);
   check('S9 "Pay a shop" from this screen does not inherit an earlier shop',
-    $('#fcRefundCust') && $('#fcRefundCust').value !== c2.id && $('#fcRefundArea').value === '',
+    $('#fcRefundCust') && $('#fcRefundCust').value === '' && $('#fcRefundArea').value === '',
     $('#fcRefundCust') ? $('#fcRefundCust').value : 'panel did not open');
   await closePanel();
   click($('[data-fcpayopen="payment"]')); await sleep(150);
   check('S10 nor does "Receive payment" from this screen',
-    $('#fcPayCust') && $('#fcPayCust').value !== c2.id && $('#fcPayArea').value === '',
+    $('#fcPayCust') && $('#fcPayCust').value === '' && $('#fcPayArea').value === '',
     $('#fcPayCust') ? $('#fcPayCust').value : 'panel did not open');
   await closePanel();
 
@@ -358,6 +359,44 @@ async function main() {
   const supPay2 = await ERP.Payments.pay({ supplierId: sup.id, amount: 200, method: 'Cash', reference: 'S-SETUP' });
   check('B9 a supplier payment still lowers it too', supPay2.balanceAfter === supPay2.balanceBefore - supPay2.amount,
     JSON.stringify([supPay2.balanceBefore, supPay2.amount, supPay2.balanceAfter]));
+
+  /* ── no shop is ever chosen for you on a money screen (2026-09-21): the panels start on a blank choice and Save refuses until a
+     shop is picked. Before, the first shop in the list was silently selected and a receipt could go to the wrong one. */
+  ERP.setPayFor && ERP.setPayFor(null); ERP.setRefundFor && ERP.setRefundFor(null);
+  const receiptsBefore = ERP.Payments.incoming().length, refundsBefore = ERP.Payments.refunds().length;
+  w.openPanel('payment'); await sleep(200);
+  check('N1 Receive payment opens with no shop chosen, and says so', $('#fcPayCust').value === '' && /Choose the shop/.test($('#fcPayBal').textContent), $('#fcPayBal').textContent);
+  $('[data-f="amt"]').value = '1234'; click($('[data-save="1"]')); await sleep(250);
+  check('N2 Save without a shop is refused and nothing is recorded', ERP.Payments.incoming().length === receiptsBefore && /Choose the shop/.test($('#panel').textContent));
+  change($('#fcPayMode'), 'pick'); await sleep(60);
+  check('N3 "Choose invoices" with no shop says to choose the shop first, not "this shop has no unpaid invoices"',
+    /Choose the shop first/.test($('#fcPayList').textContent) && !/no unpaid invoices/.test($('#fcPayList').textContent), $('#fcPayList').textContent);
+  change($('#fcPayCust'), c2.id); await sleep(60);
+  check('N4 choosing a shop shows its balance', $('#fcPayBal').textContent.includes(M.fmt(ERP.Ledger.customerBalance(c2.id))));
+  change($('#fcPayArea'), ''); await sleep(60);
+  check('N5 changing the area keeps the shop already chosen when it is still in the list', $('#fcPayCust').value === c2.id);
+  change($('#fcPayArea'), c2.region === c1.region ? '' : c1.region); await sleep(60);
+  if (c2.region !== c1.region) check('N6 ...and drops back to the blank choice when it is not', $('#fcPayCust').value === '' && /Choose the shop/.test($('#fcPayBal').textContent));
+  await closePanel();
+
+  w.openPanel('refund'); await sleep(200);
+  check('N7 Pay a shop opens with no shop chosen, and says so', $('#fcRefundCust').value === '' && /Choose the shop/.test($('#fcRefundBal').textContent), $('#fcRefundBal').textContent);
+  $('[data-f="amt"]').value = '500'; click($('[data-save="1"]')); await sleep(250);
+  check('N8 Save without a shop is refused and nothing is paid out', ERP.Payments.refunds().length === refundsBefore && /Choose the shop/.test($('#panel').textContent));
+  await closePanel();
+
+  /* ── the amount field's wording (client, 2026-09-21): "Receive payment" says Amount Received; the panels that pay money OUT say
+     Amount Paid. Module 24's relabeller once rewrote "Amount received" to "Amount Paid" on every repaint, so this is checked after it ran. */
+  const amtLabel = () => { const s = $('#panel .fc-amtpaid label.f span'); return s ? s.textContent.trim() : '(no field)'; };
+  w.openPanel('payment'); await sleep(200);
+  check('L1 Receive payment labels the amount "Amount Received"', amtLabel() === 'Amount Received', amtLabel());
+  await closePanel();
+  w.openPanel('refund'); await sleep(200);
+  check('L2 Pay a shop still labels it "Amount Paid"', amtLabel() === 'Amount Paid', amtLabel());
+  await closePanel();
+  w.openPanel('paysup'); await sleep(200);
+  check('L3 Pay supplier still labels it "Amount Paid"', amtLabel() === 'Amount Paid', amtLabel());
+  await closePanel();
 
   console.log('\n' + out.join('\n') + `\n\n${pass} passed, ${fail} failed\n`);
   w.close();

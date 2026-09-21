@@ -138,11 +138,8 @@ body.mini .nav-grp+.nav-grp{margin-top:8px;padding-top:8px}
 .nav a .lbl{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .nav a.on{font-weight:700}
 
-/* the logo is a MARK where the company name is written beside it: the F-and-wheat monogram,
-   cropped from the same logo.png (which spells the name in its lower half) */
-.mark.emblem{overflow:hidden;box-shadow:0 0 0 1px var(--line)}
-.mark.emblem img{width:100%;height:100%;border-radius:0;object-fit:cover;
-  transform-origin:50% 31%;transform:translateY(19%) scale(2.15)}
+/* the logo is shown whole (the base .mark img is object-fit:contain) — a crop to the monogram was tried and reverted */
+.mark{box-shadow:0 0 0 1px var(--line)}
 
 /* small buttons that used to hold a text glyph (a cross, an arrow, a pencil) now hold an icon */
 .fcv-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px}
@@ -235,16 +232,6 @@ D.addEventListener('click', function (e) {
 }, true);
 
 /* ══════════════════════════════════════════════════════════════════════════
-   BRAND — the emblem, and the name written once
-   ══════════════════════════════════════════════════════════════════════════ */
-function brand() {
-  var m = D.getElementById('markLogo');
-  if (m && !m.classList.contains('emblem')) m.classList.add('emblem');
-  var img = m && m.querySelector('img');
-  if (img) img.setAttribute('alt', '');                 /* decorative: the name is the text beside it */
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
    HOOKS
    ══════════════════════════════════════════════════════════════════════════ */
 var origPaintNav = global.paintNav;
@@ -252,7 +239,7 @@ if (typeof origPaintNav === 'function') {
   global.paintNav = function () {
     applyIcons();
     origPaintNav.apply(global, arguments);
-    try { regroup(); brand(); } catch (e) {}
+    try { regroup(); } catch (e) {}
   };
 }
 applyIcons();

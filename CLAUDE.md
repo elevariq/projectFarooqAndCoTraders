@@ -1393,11 +1393,12 @@ menu button in the wrong place, group names blending into the buttons, repeated 
 purple Warehouse stock box, long lists, uneven margins, responsiveness. **No data, table or API change; the only PHP touched is one CSS
 string in `api/_gate_login.php` (the sign-in page's logo).** App deploy (`deploy-erp.sh`) + `deploy-api.sh` for that string.
 
-- **The name is written once.** `logo.png` already spells "FAROOQ & CO", and the words "Farooq &Co Traders" sat beside it (sidebar, Warehouse
-  rail, launcher, sign-in page, launcher's app bar). Wherever the name is written next to the logo, the logo is now shown as an **emblem**:
-  the same `logo.png`, cropped by CSS to the F-and-wheat monogram (`transform-origin:50% 31%; translateY(19%) scale(2.15)` inside a round
-  `overflow:hidden` box; `alt=""`, the name is the text). No new image file. Places: module 40 (`#markLogo.emblem`), `app/farooq-co-warehouse-pwa.html`
-  (`.logo`), `app/index.html` (`.mark`, `#bar .m`), `api/_gate_login.php` (`.mark`).
+- **The logo is shown WHOLE (revised 2026-09-21).** The first version of this pass cropped `logo.png` to its F-and-wheat monogram (an "emblem":
+  `scale(2.15)` inside a round `overflow:hidden` box, `alt=""`) so the company name was not written twice. **The client said it looked zoomed and
+  "the full logo isn't visible", so the crop is gone**: every place uses `object-fit:contain`, no transform, `alt="Farooq & Co Traders logo"` —
+  module 40 (the base `.mark img` already did this; the `.emblem` class and `brand()` are removed), `app/farooq-co-warehouse-pwa.html` (`.logo`),
+  `app/index.html` (`.mark`, `#bar .m`, now 32px), `api/_gate_login.php` (`.mark`; **needs `deploy-api.sh` / a one-file upload**). The name is
+  again written beside the logo; that is accepted. `test-shell.mjs` B15/F5 fail if a crop (`scale(2.15)`, `.mark.emblem`) comes back.
 - **Sidebar (module `40-nav.js`).** Every one of the 24 screens has its OWN icon (`ERP.Nav.ICONS`; 15 used to share — three wallets, three people,
   three charts, three mills…); new icons are added to the base icon set `P`, which the bridge now exposes (`window.P`). Each group is a caps label +
   hairline + chevron **button** that folds it (remembered per device in `farooqco_nav_closed`; the group holding the open screen cannot be folded
@@ -1447,6 +1448,20 @@ string in `api/_gate_login.php` (the sign-in page's logo).** App deploy (`deploy
   previous `_gate_login.php` is in `~/backups/api-20260921094019/api/`.
 - **Not done:** the ERP has no "mark all read"/snooze on notifications (derived, not stored); the `.tbl` of Inventory is still a wide table that scrolls
   inside its card; the Documents/Audit lists are capped by their own `slice`, not paged; the base `<title>` still says "Warehouse ERP".
+
+## Receive payment: "Amount Received", and no shop chosen for you (2026-09-21)
+
+Client: "at Receive payment there is *Amount Paid* written, change it to *Amount Received*."
+- **The label** is in `PANELS.payment` (`06-wiring.js`). **Module 24's relabeller was rewriting `Amount received` / `Amount Received` back to
+  `Amount Paid` on every repaint** (a 2026-09-14 client change), so those two mappings were removed from `LABELS` in `24-client-changes.js`; changing
+  the panel alone would not have stuck. "Pay a shop", "Pay supplier" and the invoice/purchase builders still say **Amount Paid** (money going out, or
+  the invoice's own paid figure). `test-pay-a-shop.mjs` L1–L3 read the label after the relabeller has run.
+- **Edge case fixed in the same pass:** with no shop pre-selected, "Receive payment" and "Pay a shop" silently selected the FIRST shop in the list
+  (the banner showed its balance), so a receipt or payout could go to the wrong shop. Same rule as Pay supplier and Change shop: the Shop list now
+  starts on **"— Choose a shop —"**, the banner says "Choose the shop to see what it owes", Save refuses ("Choose the shop."), "Choose invoices" says
+  "Choose the shop first", and changing the Area keeps an already-chosen shop when it is still in that area (else back to the blank line).
+  Opening from a shop's own page/khata still pre-selects that shop. `test-pay-a-shop.mjs` N1–N8 (mutation-checked); U3/U4/S9/S10 and
+  `test-statement-of-account.mjs` F3–F7 updated for the extra blank option.
 
 ## Where to look for more detail
 

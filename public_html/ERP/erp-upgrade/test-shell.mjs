@@ -88,7 +88,9 @@ async function main() {
     check('B14 the links other modules hide by id are still found by id', !!$(w, '#nav [data-go="dashboard"]'));
     /* the logo */
     const mk = $(w, '#markLogo');
-    check('B15 the logo is shown as an emblem (the name is written once, beside it)', mk.classList.contains('emblem') && mk.querySelector('img').getAttribute('alt') === '');
+    const navCss = [...w.document.querySelectorAll('style')].map(s => s.textContent).join('\n');
+    check('B15 the logo is shown whole, never cropped or zoomed (client, 2026-09-21: "full logo isn\'t visible")',
+      !mk.classList.contains('emblem') && !!mk.querySelector('img') && !/scale\(2\.15\)/.test(navCss) && !/\.mark\.emblem/.test(navCss));
   }
 
   /* fresh window with a folded group in storage */
@@ -232,7 +234,8 @@ async function main() {
     check('F2 the old "Hide menu" button at the foot of the rail is gone', !$(ww, '.rail button.collapse') && !/Hide menu/.test(shown($(ww, '.rail'))));
     check('F3 the frame has a rail, a top bar and a page (no floating island)', !!$(ww, '.shell > .rail') && !!$(ww, '.shell > .canvas > #tbar') && !!$(ww, '.canvas > #view'));
     check('F4 there is no fixed person\'s name in the rail', !/Kashif/.test(ww.document.body.innerHTML) && !!$(ww, '#whName'));
-    check('F5 the logo is a mark (emblem) beside the name, not a second name', !!$(ww, '#logo img') && !/Farooq/i.test($(ww, '#logo img').getAttribute('alt') || 'x'.repeat(0)));
+    const whCss = [...ww.document.querySelectorAll('style')].map(s => s.textContent).join('\n');
+    check('F5 the whole logo is shown (contained, not cropped or zoomed)', !!$(ww, '#logo img') && !/scale\(2\.15\)/.test(whCss) && /\.logo img\{[^}]*object-fit:contain/.test(whCss));
     /* collapse */
     $(ww, '#collapse').click(); await sleep(20);
     check('F6 the menu button folds the menu to icons and says "Expand menu"', ww.document.body.classList.contains('mini') && $(ww, '#collapse').getAttribute('aria-label') === 'Expand menu');

@@ -188,16 +188,23 @@ function refundCustomersInArea() { return customersInAreaFor(REFUND_AREA); }
    the Area dropdown and the Shop list would contradict each other. */
 function payShopOptionsHtml(custs, preId) {
   if (!custs.length) return '<option value="" disabled selected>No shops in this area</option>';
-  return custs.map(function (c) {
-    return '<option value="' + c.id + '"' + (c.id === preId ? ' selected' : '') + '>' + esc(c.sh) + '</option>';
+  /* On a money screen the shop must be picked, never silently defaulted to whichever one sorts first (the Pay supplier and
+     Change shop panels do the same): with nothing pre-selected the list starts on a blank choice and Save refuses until one is
+     picked. */
+  var has = !!preId && custs.some(function (c) { return c.id === preId; });
+  return '<option value=""' + (has ? '' : ' selected') + '>— Choose a shop —</option>' + custs.map(function (c) {
+    return '<option value="' + c.id + '"' + (has && c.id === preId ? ' selected' : '') + '>' + esc(c.sh) + '</option>';
   }).join('');
+}
+function payChooseShopHtml() {
+  return I('wallet') + '<div><p>Choose the shop to see what it owes.</p></div>';
 }
 function payBalanceHtml(custs, preId) {
   if (!custs.length) {
     return I('alert') + '<div><b>No shops in this area</b><p>Pick a different area, or choose "All areas".</p></div>';
   }
-  var id = (preId && custs.some(function (c) { return c.id === preId; })) ? preId : custs[0].id;
-  return I('wallet') + '<div><p>Outstanding balance: <b>' + M.fmt(ERP.Ledger.customerBalance(id)) + '</b></p></div>';
+  if (!(preId && custs.some(function (c) { return c.id === preId; }))) return payChooseShopHtml();
+  return I('wallet') + '<div><p>Outstanding balance: <b>' + M.fmt(ERP.Ledger.customerBalance(preId)) + '</b></p></div>';
 }
 /* "Pay a shop" version: once an amount is typed, also show where the shop's
    account lands. Paying a shop moves its balance UP (towards "owes us"), so
@@ -240,7 +247,7 @@ PANELS.payment = {
       '<label class="f"><span>Shop</span><select data-f="cust" id="fcPayCust"' + (custs.length ? '' : ' disabled') + '>' +
         payShopOptionsHtml(custs, pre) + '</select></label>' +
       '<div class="banner ' + (custs.length ? 'info' : 'warn') + '" id="fcPayBal">' + payBalanceHtml(custs, pre) + '</div>' +
-      '<div class="f2 fc-amtpaid"><label class="f"><span>Amount Paid</span>' +
+      '<div class="f2 fc-amtpaid"><label class="f"><span>Amount Received</span>' +
         '<input data-f="amt" inputmode="decimal" placeholder="e.g. 100000"></label>' +
         '<label class="f"><span>Method</span><select data-f="method">' +
           ERP.ENUM.methods.map(function (m) { return '<option>' + m + '</option>'; }).join('') + '</select></label></div>' +
@@ -258,6 +265,7 @@ PANELS.payment = {
   },
   save: function (v) {
     var amount = String(v.amt || '').replace(/[^\d.]/g, '');
+    if (!v.cust) return 'Choose the shop.';
     if (!amount || Number(amount) <= 0) return 'Enter the amount received.';
     var allocations = [];
     if (v.mode === 'pick') {
@@ -367,6 +375,7 @@ PANELS.refund = {
   },
   save: function (v) {
     var amount = String(v.amt || '').replace(/[^\d.]/g, '');
+    if (!v.cust) return 'Choose the shop.';
     if (!amount || Number(amount) <= 0) return 'Enter the amount to pay.';
     ERP.Payments.refund({
       customerId: v.cust, amount: amount, method: v.method, reference: v.ref,
@@ -957,8 +966,8 @@ D.addEventListener('change', function (e) {
   }
   if (el.id === 'fcPayCust') {
     var box = D.getElementById('fcPayBal');
-    if (box) box.innerHTML = I('wallet') + '<div><p>Outstanding balance: <b>' +
-      M.fmt(ERP.Ledger.customerBalance(el.value)) + '</b></p></div>';
+    if (box) box.innerHTML = el.value ? I('wallet') + '<div><p>Outstanding balance: <b>' +
+      M.fmt(ERP.Ledger.customerBalance(el.value)) + '</b></p></div>' : payChooseShopHtml();
     renderAllocList(); return;
   }
   if (el.id === 'fcPayArea') {
@@ -966,12 +975,13 @@ D.addEventListener('change', function (e) {
     var custSel = D.getElementById('fcPayCust');
     if (custSel) {
       var opts = payCustomersInArea();
+      var keepPay = custSel.value;               /* a shop already chosen stays chosen if it is in the new area's list */
       custSel.disabled = !opts.length;
-      custSel.innerHTML = payShopOptionsHtml(opts);
+      custSel.innerHTML = payShopOptionsHtml(opts, keepPay);
       var bbox = D.getElementById('fcPayBal');
       if (bbox) {
         bbox.className = 'banner ' + (opts.length ? 'info' : 'warn');
-        bbox.innerHTML = payBalanceHtml(opts);
+        bbox.innerHTML = payBalanceHtml(opts, keepPay);
       }
       if (opts.length) {
         renderAllocList();
@@ -986,7 +996,7 @@ D.addEventListener('change', function (e) {
   }
   if (el.id === 'fcRefundCust') {
     var rbox = D.getElementById('fcRefundBal');
-    if (rbox) rbox.innerHTML = refundBalanceHtml(el.value, refundAmountNow());
+    if (rbox) rbox.innerHTML = el.value ? refundBalanceHtml(el.value, refundAmountNow()) : payChooseShopHtml();
     return;
   }
   if (el.id === 'fcRefundArea') {
@@ -994,8 +1004,9 @@ D.addEventListener('change', function (e) {
     var refundSel = D.getElementById('fcRefundCust');
     if (refundSel) {
       var ropts = refundCustomersInArea();
+      var keepRefund = refundSel.value;
       refundSel.disabled = !ropts.length;
-      refundSel.innerHTML = payShopOptionsHtml(ropts);
+      refundSel.innerHTML = payShopOptionsHtml(ropts, keepRefund);
       var rbbox = D.getElementById('fcRefundBal');
       if (rbbox) {
         rbbox.className = 'banner ' + (ropts.length ? 'info' : 'warn');
@@ -1096,6 +1107,7 @@ function renderAllocList() {
   var mode = (D.getElementById('fcPayMode') || {}).value;
   var cid = (D.getElementById('fcPayCust') || {}).value;
   if (mode !== 'pick') { host.innerHTML = ''; return; }
+  if (!cid) { host.innerHTML = '<p class="hint">Choose the shop first.</p>'; return; }
   var invs = openInvoicesForCustomer(cid);
   host.innerHTML = invs.length ? '<div class="f"><span>Apply to these invoices</span>' + invs.map(function (i) {
     return '<div class="fcalloc"><b>' + esc(i.invoiceNumber) + '</b>' +

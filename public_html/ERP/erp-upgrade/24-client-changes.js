@@ -406,8 +406,6 @@
   var LABELS = {
     'Amount paid now': 'Amount Paid',
     'Amount paid to supplier': 'Amount Paid',
-    'Amount received': 'Amount Paid',
-    'Amount Received': 'Amount Paid',
     'Paid now': 'Amount Paid'
   };
 

@@ -84,9 +84,9 @@ html[data-theme="dark"] .warn{border-color:#5A2A25}
 .rail{width:var(--rail);background:var(--surface);border-right:1px solid var(--line);position:fixed;inset:0 auto 0 0;
   height:100vh;z-index:60;display:flex;flex-direction:column;transition:width .18s ease}
 .brand{display:flex;align-items:center;gap:11px;padding:18px 16px 16px;border-bottom:1px solid var(--line-soft)}
-/* the logo is a MARK here: the F-and-wheat monogram cropped from logo.png, because the name is written beside it */
+/* the whole logo is shown (a crop to the monogram was tried and reverted: "full logo isn't visible") */
 .logo{width:38px;height:38px;flex:0 0 38px;border-radius:50%;overflow:hidden;background:#fff;box-shadow:0 0 0 1px var(--line);position:relative}
-.logo img{display:block;width:100%;height:100%;object-fit:cover;transform-origin:50% 31%;transform:translateY(19%) scale(2.15)}
+.logo img{display:block;width:100%;height:100%;object-fit:contain}
 .brand .bt{min-width:0;overflow:hidden}
 .brand b{display:block;font-size:15px;font-weight:800;color:var(--ink);white-space:nowrap;letter-spacing:-.032em}
 .brand b em::before{content:'\2009'}.brand b em::after{content:'\2009'}
@@ -1159,13 +1159,33 @@ function countUp(){
   });
 }
 function skeleton(){return '<div class="body"><div class="sk" style="width:160px;height:20px;margin:18px 0"></div><div class="sk" style="height:110px;margin-bottom:14px"></div><div class="sk" style="height:110px"></div></div>';}
+/* ══ Stay on this screen after a reload (kept per browser tab; a new tab opens on Home) ══ */
+const PG_KEY='farooqco_wh_page', PG_SCREENS=['stock','product','add','send','find'];
+let pgFirst=true;                                   /* the first real paint (data is loaded by then) decides where to start */
+function pgRestore(){
+  try{
+    const r=JSON.parse(window.sessionStorage.getItem(PG_KEY)||'null');
+    if(!r||PG_SCREENS.indexOf(r.s)<0||!SC[r.s])return;
+    if(r.s==='product'){if(!prodOf(r.p))return;S.prod=r.p;}       /* the product must still exist */
+    S.screen=r.s;
+    if(r.s==='add'){S.step=1;S.add.q='';}
+  }catch(e){}
+}
+function pgSave(){
+  try{
+    const s=S.screen==='done'?'home':S.screen;                    /* "Done" is a result, not a place to come back to */
+    window.sessionStorage.setItem(PG_KEY,JSON.stringify(s==='product'?{s,p:S.prod}:{s}));
+  }catch(e){}
+}
 function paint(loading){
+  if(!loading&&pgFirst){pgFirst=false;pgRestore();}
   paintNav();
   if(!loading){try{wnDot();}catch(_){}}
   view.innerHTML=loading?skeleton():(SC[S.screen]||SC.home)();
-  if(!loading)countUp();
+  if(!loading){countUp();pgSave();}
 }
 function go(s){
+  pgFirst=false;                                    /* the person chose a screen: never override it with the remembered one */
   S.screen=s;
   if(s==='add'){S.step=1;S.add.q='';}
   if(s==='stock'||s==='home'){S.q='';S.lvl='all';}
@@ -1261,7 +1281,7 @@ function openCmdk(){S.cq='';S.ci=0;document.getElementById('cq').value='';paintC
 function closeCmdk(){cmdk.classList.remove('on');scrim.classList.remove('on');}
 
 /* ══ Events ══════════════════════════════════════ */
-document.getElementById('logo').innerHTML='<img src="logo.png" alt="">';    /* a mark: the name is the text beside it */
+document.getElementById('logo').innerHTML='<img src="logo.png" alt="Farooq &amp; Co Traders logo">';
 document.getElementById('kIcon').innerHTML=I('search',2);
 document.getElementById('cIcon').innerHTML=I('search',2);
 document.getElementById('collapse').innerHTML=I('panel',2);

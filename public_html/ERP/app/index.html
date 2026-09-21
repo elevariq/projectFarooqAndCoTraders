@@ -30,8 +30,8 @@ svg{display:block}
 #pick{height:100%;display:grid;place-items:center;padding:24px;overflow:auto}
 .box{width:min(760px,100%);text-align:center}
 .mark{width:64px;height:64px;margin:0 auto 20px;position:relative;background:#fff;border-radius:50%;overflow:hidden;box-shadow:0 0 0 1px var(--line)}
-/* the logo is a MARK here (the F-and-wheat monogram cropped from logo.png): the name is the heading, so it is written once */
-.mark img,#bar .m img{display:block;width:100%;height:100%;object-fit:cover;border-radius:0;transform-origin:50% 31%;transform:translateY(19%) scale(2.15)}
+/* the whole logo is shown (a crop to the monogram was tried and reverted: "full logo isn't visible") */
+.mark img,#bar .m img{display:block;width:100%;height:100%;object-fit:contain;border-radius:0}
 h1{font-size:30px;font-weight:800;letter-spacing:-.034em;margin:0 0 6px}
 h1 em{font-style:normal;color:var(--violet)}
 .sub{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);margin:0 0 6px}
@@ -54,7 +54,7 @@ h1 em{font-style:normal;color:var(--violet)}
 #app{display:none;height:100%;flex-direction:column}
 #bar{height:42px;flex:0 0 42px;background:var(--surface);border-bottom:1px solid var(--line);
   display:flex;align-items:center;gap:12px;padding:0 14px}
-#bar .m{width:26px;height:26px;position:relative;background:#fff;border-radius:50%;overflow:hidden;box-shadow:0 0 0 1px var(--line)}
+#bar .m{width:32px;height:32px;flex:0 0 32px;position:relative;background:#fff;border-radius:50%;overflow:hidden;box-shadow:0 0 0 1px var(--line)}
 #bar .nm{font-size:13.5px;font-weight:700}
 #bar .role-tag{font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--violet-600);
   background:var(--violet-50);border-radius:20px;padding:3px 10px}
@@ -74,7 +74,7 @@ iframe{flex:1;width:100%;border:0;display:block}
 
 <div id="pick">
   <div class="box">
-    <div class="mark"><img src="logo.png" alt=""></div>
+    <div class="mark"><img src="logo.png" alt="Farooq &amp; Co Traders logo"></div>
     <h1>Farooq <em>&amp;Co</em> Traders</h1>
     <p class="sub">Rice &amp; Flour Distribution</p>
     <p class="lead">Who is using this device?</p>
@@ -99,7 +99,7 @@ iframe{flex:1;width:100%;border:0;display:block}
 
 <div id="app">
   <div id="bar">
-    <div class="m"><img src="logo.png" alt=""></div>
+    <div class="m"><img src="logo.png" alt="Farooq &amp; Co Traders logo"></div>
     <span class="nm">Farooq &amp; Co Traders</span>
     <span class="role-tag" id="roleTag">Office</span>
     <span class="sp"></span>
