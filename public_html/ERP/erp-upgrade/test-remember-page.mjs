@@ -18,11 +18,15 @@ const errors = [];
 const mapStore = m => ({ getItem: k => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); }, removeItem: k => { delete m[k]; } });
 const newTab = () => ({ idb: new FDBFactory(), ls: {}, ss: {} });
 
-function boot(html, tab, { identity = null, ssBlocked = false } = {}) {
+function boot(html, tab, { identity = null, ssBlocked = false, giveUpMs = 0 } = {}) {
+  tab.y = 0; tab.scrolls = [];
   const vc = new VirtualConsole(); vc.on('jsdomError', e => errors.push(e.message));
   const dom = new JSDOM(html, { runScripts: 'dangerously', pretendToBeVisual: true, virtualConsole: vc, url: 'https://erp.farooqandcotraders.online/e',
     beforeParse(w) {
-      w.indexedDB = tab.idb; w.IDBKeyRange = FDBKeyRange; w.print = () => {}; w.confirm = () => true; w.prompt = () => 'r'; w.scrollTo = () => {}; w.open = () => null;
+      w.indexedDB = tab.idb; w.IDBKeyRange = FDBKeyRange; w.print = () => {}; w.confirm = () => true; w.prompt = () => 'r'; w.scrollTo = (x, y) => { tab.y = typeof y === 'number' ? y : 0; tab.scrolls.push(tab.y); }; w.open = () => null;
+      if (giveUpMs) w.FC_REMEMBER_GIVE_UP_MS = giveUpMs;
+      Object.defineProperty(w, 'pageYOffset', { configurable: true, get: () => tab.y || 0 });
+      { const stv = new WeakMap(); Object.defineProperty(w.Element.prototype, 'scrollTop', { configurable: true, get() { return stv.get(this) || 0; }, set(v) { stv.set(this, +v || 0); } }); }
       w.URL.createObjectURL = () => 'b'; w.URL.revokeObjectURL = () => {}; w.HTMLElement.prototype.scrollIntoView = function () {};
       w.matchMedia = q => ({ media: q, matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
       w.crypto.subtle = webcrypto.subtle; if (!w.crypto.getRandomValues) w.crypto.getRandomValues = a => webcrypto.getRandomValues(a);
@@ -52,7 +56,7 @@ async function main() {
     check('A1 a new tab opens on the Dashboard', w.cur === 'dashboard' && /Business overview/.test(shown($(w, '#view'))));
     check('A2 the module is loaded and exposes its key', !!w.ERP.RememberPage && w.ERP.RememberPage.KEY === 'farooqco_erp_page');
     w.go('inventory'); await sleep(50);
-    check('A3 opening Inventory remembers it for this tab', JSON.stringify(stored(tab)) === '{"id":"inventory"}', JSON.stringify(stored(tab)));
+    check('A3 opening Inventory remembers it for this tab', stored(tab).id === 'inventory', JSON.stringify(stored(tab)));
     w.close();
   }
   {
@@ -147,6 +151,62 @@ async function main() {
     w2.close();
   }
 
+  /* ═══ F. WHO IT BELONGS TO, AND A SLOW BOOT ═══ */
+  {
+    const A = { user: { id: 'usr_A', username: 'a', displayName: 'A' }, role: 'OWNER', permissions: ['*'], csrf: 'c', enforce: true };
+    const tb = newTab(); tb.ss['farooqco_erp_page'] = JSON.stringify({ id: 'inventory', u: 'usr_B' });
+    const w = boot(ERP_HTML, tb, { identity: A }); await ready(w); await sleep(300);
+    check('F1 another person signing in on the same tab does not inherit the last screen', w.cur === 'dashboard', w.cur);
+    check('F2 …and the record now belongs to the new person', stored(tb).u === 'usr_A', JSON.stringify(stored(tb)));
+    w.close();
+    const ta = newTab(); ta.ss['farooqco_erp_page'] = JSON.stringify({ id: 'inventory', u: 'usr_A' });
+    const w2 = boot(ERP_HTML, ta, { identity: A }); await ready(w2); await sleep(300);
+    check('F3 the same person gets their screen back', w2.cur === 'inventory');
+    w2.close();
+
+    /* a restricted screen must never flash open before the lock notice */
+    const SALES = { user: { id: 'u2', username: 'ali', displayName: 'Ali' }, role: 'SALES', permissions: ['SALE_CREATE'], csrf: 'c', enforce: true };
+    const tp = newTab(); tp.ss['farooqco_erp_page'] = JSON.stringify({ id: 'payroll', u: 'u2' });
+    const w3 = boot(ERP_HTML, tp, { identity: SALES });
+    let sawOpen = false;
+    const poll = setInterval(() => { try { if (/Pay salary/.test(w3.document.getElementById('view').textContent)) sawOpen = true; } catch (e) {} }, 2);
+    await ready(w3); await sleep(300); clearInterval(poll);
+    check('F4 a screen the person may not open is never drawn open, not even for a moment', !sawOpen && /is not open to you/.test(shown($(w3, '#view'))));
+    w3.close();
+
+    /* boot slower than the give-up time (forced to 1 ms here) */
+    const tg = newTab(); tg.ss['farooqco_erp_page'] = JSON.stringify({ id: 'inventory' });
+    const w4 = boot(ERP_HTML, tg, { giveUpMs: 1 });
+    let sawDash = false, overwritten = false;
+    const poll2 = setInterval(() => { try { if (/Business overview/.test(w4.document.getElementById('view').textContent)) sawDash = true; if (stored(tg) && stored(tg).id === 'dashboard') overwritten = true; } catch (e) {} }, 2);
+    await ready(w4); clearInterval(poll2);
+    check('F5 slow boot: the app showed something usable meanwhile (the give-up path really ran)', sawDash);
+    check('F6 …that fallback never overwrote the remembered screen (not even for a moment), and the person still lands on it', w4.cur === 'inventory' && stored(tg).id === 'inventory' && !overwritten, w4.cur + ' ' + JSON.stringify(stored(tg)));
+    w4.close();
+    /* …but someone who already moved on is not pulled back */
+    const tg2 = newTab(); tg2.ss['farooqco_erp_page'] = JSON.stringify({ id: 'inventory' });
+    const w5 = boot(ERP_HTML, tg2, { giveUpMs: 1 }); await sleep(60); w5.go('payments');
+    await ready(w5);
+    check('F7 slow boot: a person who already chose another screen stays on it', w5.cur === 'payments', w5.cur);
+    w5.close();
+  }
+
+  /* ═══ G. THE SCROLL PLACE ═══ */
+  {
+    const t = newTab(); const w = boot(ERP_HTML, t); await ready(w);
+    w.go('inventory'); await sleep(60);
+    t.y = 640; w.dispatchEvent(new w.Event('scroll')); await sleep(320);
+    check('G1 scrolling down a screen is remembered', stored(t).id === 'inventory' && stored(t).y === 640, JSON.stringify(stored(t)));
+    w.go('payments'); await sleep(60);
+    check('G2 a different screen starts at the top', stored(t).id === 'payments' && stored(t).y === 0, JSON.stringify(stored(t)));
+    w.go('inventory'); await sleep(60); t.y = 640; w.dispatchEvent(new w.Event('scroll')); await sleep(320);
+    w.close();
+    const w2 = boot(ERP_HTML, t); await ready(w2);
+    check('G3 after a reload the page is scrolled back to the same place', t.scrolls.includes(640), JSON.stringify(t.scrolls));
+    check('G4 …and that place survives a second reload too', stored(t).id === 'inventory' && stored(t).y === 640, JSON.stringify(stored(t)));
+    w2.close();
+  }
+
   /* ═══ E. THE WAREHOUSE APP ═══ */
   {
     const wt = newTab();
@@ -183,6 +243,22 @@ async function main() {
     /* the person clicks Home while the page is still loading: their choice wins over the remembered screen */
     check('E10 a fresh tab, blocked storage: Warehouse still opens', (() => { const x = boot(WH_HTML, newTab(), { ssBlocked: true }); const ok = x.eval('S.screen') === 'home'; x.close(); return ok; })());
     w7.close();
+  }
+
+  {
+    /* scroll place */
+    const ws = newTab();
+    const x1 = boot(WH_HTML, ws); await sleep(1600);
+    x1.eval("go('stock')"); await sleep(60);
+    const cv = $(x1, '.canvas'); cv.scrollTop = 420; cv.dispatchEvent(new x1.Event('scroll')); await sleep(320);
+    check('E11 the Warehouse remembers how far the list was scrolled', JSON.parse(ws.ss['farooqco_wh_page']).y === 420, ws.ss['farooqco_wh_page']);
+    x1.eval("go('home')"); await sleep(60);
+    check('E12 a different screen starts at the top', JSON.parse(ws.ss['farooqco_wh_page']).y === 0);
+    x1.eval("go('stock')"); await sleep(60); cv.scrollTop = 420; cv.dispatchEvent(new x1.Event('scroll')); await sleep(320);
+    x1.close();
+    const x2 = boot(WH_HTML, ws); await sleep(1600);
+    check('E13 after a reload the Warehouse list is scrolled back', $(x2, '.canvas').scrollTop === 420 && JSON.parse(ws.ss['farooqco_wh_page']).y === 420, String($(x2, '.canvas').scrollTop));
+    x2.close();
   }
 
   check('Z no script errors were raised in any window', errors.length === 0, errors.slice(0, 3).join(' | '));

@@ -1480,6 +1480,40 @@ was lost. It was NOT caused by that day's deploys (they only replace static file
   and `deploy-api.sh`'s probes (they need the database up); and asking Hostinger whether the limit can be raised for these two database users.
 - `deploy-erp.sh`'s final probe printed `503` for the ERP — the first sign of this; a `503` there means "the gate cannot reach its database", not a bad upload.
 
+## A reload stays on the screen; every box wears the theme (2026-09-21)
+
+Two requests, both **app deploy only** (no table, no API change).
+
+**1. A reload no longer goes back to the Dashboard** ("when we reload because somewhere else data is updated we land on the dashboard, not the
+section — whole system"). New module **`43-remember-page.js`** (`ERP.RememberPage`) + a few lines in `app/farooq-co-warehouse-pwa.html` (`pgRestore`/`pgSave`).
+- Kept **per browser tab** in `sessionStorage` (`farooqco_erp_page`, `farooqco_wh_page`) — two tabs on two screens don't disturb each other, a new tab opens on
+  the Dashboard. Works through the launcher's `srcdoc` iframe (same origin) — verified with a real reload in Chrome. It records from `paint()`, so every way of
+  navigating is covered (menu, search, links, back buttons).
+- Shop / supplier / khata pages come back **on the same record** (`custBy`/`supOf` must still find it, else Dashboard). **The invoice/purchase builder is never
+  reopened** (its lines lived in memory) — the person lands on the list they came from. Warehouse: stock, product (must still exist), receive, dispatch, find; "Done" counts as Home.
+- **Permissions still apply** (the restored screen goes through the same guarded `PAGES[id]`, so a role without access gets the lock notice), and the screen is drawn
+  only **after `Auth.refresh()` has answered** (module 43 keeps that promise by wrapping `Auth.refresh`), so a restricted screen never flashes open first. The record carries the
+  server account id (`u`): **another person signing in on the same tab does not inherit it**; sign-out forgets it (office + warehouse keys) and pauses remembering until the next sign-in.
+- While the data loads, real paints are shown as the **skeleton** (no Dashboard flash). If boot takes longer than 20 s (`FC_REMEMBER_GIVE_UP_MS` overrides, for tests) the
+  hold is lifted, the fallback Dashboard is **not** written over the remembered screen, and when boot finally finishes the person is taken to their screen unless they already moved.
+- **Scroll place is restored** too (throttled `scroll` + `pagehide`; a repaint of the same screen keeps it, a different screen starts at 0; the Warehouse uses `.canvas.scrollTop`).
+  Lists paged by module 42 ("Show more") clamp to what is drawn.
+- Tests: `test-remember-page.mjs` (49 checks: office, warehouse, records that are gone, builder, permissions, sign-out, other person, slow boot, scroll) — mutation-checked
+  (no hold, no record check, no identity check, no give-up guard, no scroll restore each turn it red; a first version of the give-up test could not see a *temporary* overwrite and was strengthened).
+  Also in a real Chrome (launcher → app iframe → `Page.reload`): Inventory → Inventory, Customers → Customers, scroll 700 → 700.
+- **Not remembered (by design):** an open side panel / dialog / document viewer, half-typed form values, the invoice/purchase builder, filters typed into a screen.
+
+**2. Every box wears the theme** ("landed cost category box isn't according to the theme, also the other boxes — every element border according to theme in the system").
+Cause: only `label.f` fields were styled by the base CSS; any input/select outside it (Landed-cost rows, Payroll month, Collection "Min balance"…) showed the browser's black/grey frame.
+Fix in **`36-ui-kit.js`** (shared with the Warehouse app): a fallback block — `:where(input…, select, textarea)` gets the theme border/corners/background/focus ring/disabled/placeholder. **`:where()` adds no
+specificity**, so every screen's own field rule still wins; checkboxes, radios, files, colours, ranges, buttons, hidden and `select multiple` are excluded. Also: `.fld input` is frameless inside its pill (the pill
+draws the frame and takes the focus ring — otherwise Min balance was a box inside a box), and the fixed pale colours the base app wrote for `.fld:hover`, `.wh-pick:hover`, `.rchip:hover`, `.banner.err/warn/info`
+are now `color-mix()` of the theme tokens (they stayed pale in dark mode). Print documents (invoice, receipt, statement, collection sheet) keep their fixed colours on purpose — they are paper.
+- **How it was checked:** a script in a real headless Chrome listed every `input/select/textarea/button/table/td/th/.card/.pill` whose border is not a theme colour, on **all 30 screens, every side panel and both
+  invoice builders, in light and dark, plus the Warehouse screens** — 5 controls before (Landed rows, Payroll month, Collection min), **0 after**. Screenshots at 1320px and 390px looked at.
+- Tests: `test-theme-borders.mjs` (17 checks — the block is in both apps, every field rule is `:where()`, no fixed colour in it, what it reaches / leaves alone, the screens that used to show plain boxes; mutation-checked).
+- **Noticed, not changed:** the Payroll "Excel" button shows no icon (modules 30/32 still read `window.icon`; the base's is `window.I` — same root cause as the 2026-09-21 UI pass fixed for 27/28/29/34).
+
 ## Where to look for more detail
 
 - **`docs/SERVER_DATA.md` — the current guide to the server-side data system (how it works, what users see, everyday operations, backups, how to change it, known limits). Start here for anything about where the data lives.**

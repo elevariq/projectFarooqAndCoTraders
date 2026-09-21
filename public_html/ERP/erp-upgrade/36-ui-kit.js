@@ -194,6 +194,31 @@ html select:disabled{cursor:not-allowed}
 select option,select optgroup{background:var(--fc-surface);color:var(--fc-ink)}
 select[aria-expanded="true"]{border-color:var(--fc-accent);box-shadow:var(--fc-ring)}
 
+/* ── a box no screen styled is still a themed box ──
+   Text boxes, drop-downs and note boxes that sit outside the app's own field wrappers (a row of a table, a filter
+   line, a small form) used to show the browser's plain black/grey frame. This gives them the theme's border,
+   corners, background and focus ring. :where() adds NO specificity, so every rule the app already has for a field
+   (label.f, .fld, .srch, table cells, the phone layout…) still wins and only the unstyled ones change. */
+:where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=color]):not([type=hidden]):not([type=button]):not([type=submit]):not([type=reset]):not([type=image]),select:not([multiple]):not([size])){
+  box-sizing:border-box;min-height:38px;padding-left:11px;padding-right:11px;
+  border:1px solid var(--fc-line);border-radius:8px;background-color:var(--fc-surface);outline:none}
+:where(textarea){box-sizing:border-box;padding:9px 11px;border:1px solid var(--fc-line);border-radius:8px;background-color:var(--fc-surface);outline:none}
+:where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=color]):not([type=hidden]):not([type=button]):not([type=submit]):not([type=reset]):not([type=image]),select,textarea):focus{
+  border-color:var(--fc-accent);box-shadow:var(--fc-ring);outline:none}
+:where(input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file]):not([type=color]):not([type=hidden]):not([type=button]):not([type=submit]):not([type=reset]):not([type=image]),select,textarea):disabled{
+  background-color:var(--fc-surface2);cursor:not-allowed;opacity:.7}
+:where(input,textarea)::placeholder{color:var(--fc-faint);opacity:1}
+/* a filter pill (.fld) draws the frame itself — a text box inside it is frameless, and the pill lights up on focus */
+.fld input{border:0;background:none;outline:none;box-shadow:none;min-height:0;padding:0;font-weight:600;font-size:13.5px}
+.fld input:focus{border:0;box-shadow:none}
+.fld:focus-within{border-color:var(--fc-accent);box-shadow:var(--fc-ring)}
+/* borders the base app wrote as fixed light-theme colours (they stayed pale in dark mode) */
+.fld:hover,.wh-pick:hover{border-color:color-mix(in srgb,var(--fc-line) 62%,var(--fc-ink))}
+.rchip:hover{border-color:color-mix(in srgb,var(--fc-accent) 34%,var(--fc-surface))}
+.banner.err{border-color:color-mix(in srgb,var(--clay,#A32E2E) 26%,var(--fc-surface))}
+.banner.warn,body.off .sync{border-color:color-mix(in srgb,var(--ochre,#8A5A0C) 28%,var(--fc-surface))}
+.banner.info{border-color:color-mix(in srgb,var(--steel,#2B5677) 26%,var(--fc-surface))}
+
 /* ── date and month fields: the segments stay typeable, the calendar is ours ── */
 input[type=date],input[type=month]{font-variant-numeric:tabular-nums lining-nums;min-width:0}
 input[type=date]::-webkit-datetime-edit,input[type=month]::-webkit-datetime-edit{padding:0}
