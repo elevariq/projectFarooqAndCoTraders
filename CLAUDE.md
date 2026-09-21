@@ -139,6 +139,8 @@ SSH), then `scp -P 65002 public_html/index.html u943531942@31.97.219.57:/home/u9
 Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's `dist/`.
 - Takes 10–15 min → run it **detached** (a wrapper started with `Start-Process`) so the tool's 10-min timeout can't kill it mid-upload;
   watch its log (`pgrep` can't see it from Git Bash). Never start a second run (the lock refuses it, correctly).
+- **Usual way:** `scripts/deploy-erp-from-clean-clone.sh` (`--check` = read-only pre-flight) does the clean clone + `node_modules` copy + deploy + md5 check in one go; the detached `Start-Process`
+  line is in its header. Trap: `-ArgumentList '-c','"cmd && cmd"'` needs the embedded double quotes or bash silently runs nothing. Windows `md5sum` prints `hash *file` — strip the `*` before comparing.
 - The script's last "Verifying" curl can fail on a dropped handshake AFTER a good upload — check md5s before assuming a bad deploy.
 - **Rollback (app):** copy the three files from the newest `~/backups/erp-deploy-<ts>/` back into `ERP/_app/`, clear cache.
   **Rollback (API):** `scripts/deploy-api.sh rollback`.
