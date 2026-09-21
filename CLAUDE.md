@@ -181,6 +181,8 @@ Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's 
 - **Stock value** (`37-stock-value.js`) needs `FINANCIAL_REPORT_VIEW`; reads cost from the movement, not just the row average.
 - **Warehouse app** (`app/farooq-co-warehouse-pwa.html` + `39-warehouse-server.js`): a warehouse receipt adds bags — if the office also enters the supplier
   bill with bags received they are counted twice; enter the bill with **Received = 0**. `test-warehouse-server.mjs` is the drift guard vs the office `StockDocs`.
+- **Brand conversion** (Inventory → Convert Brand; stock doc type `CONVERT`, `CNV-…`; `docs/BRAND_CONVERSION.md`): bags out of one product, same bags into another, one atomic save, 1:1, cost carried from the
+  source (`CONVERT_IN` is in `CARRIED` in module 37). No DB change (free-text `type`/`kind`) → `deploy-erp.sh` only. Raising/lowering stock already exists as **Adjust**; not built: editing a posted receipt.
 - **Sidebar collapse** (`10-mobile.js`): 901–1200 px expands/collapses the rail via `body.fc-wide`; >1200 px is base behaviour; ≤900 px hidden.
 - **Top bar** owns `#fcUserChip`, `#fcDbChip`, `#fcCompanyLink`, `#fcSignOutLink`: **never wrap the text of the Company/Sign-out links in child
   elements** (module 31 recognises the click by `e.target.id`).

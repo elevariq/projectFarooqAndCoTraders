@@ -81,13 +81,13 @@ DocModel.order = function (orderId) {
 /* ── transfer / receipt / adjustment / dispatch notes ──────────────────── */
 var DOC_TITLE = {
   TRANSFER: 'WAREHOUSE TRANSFER NOTE', RECEIVE: 'STOCK RECEIPT NOTE',
-  ADJUST: 'STOCK ADJUSTMENT NOTE', DISPATCH: 'DISPATCH NOTE'
+  ADJUST: 'STOCK ADJUSTMENT NOTE', DISPATCH: 'DISPATCH NOTE', CONVERT: 'BRAND CONVERSION NOTE'
 };
 DocModel.stockDoc = function (docId) {
   var d = ERP.StockDocs.byId(docId);
   if (!d) return null;
   var items = ERP.StockDocs.items(docId);
-  var isTransfer = d.type === 'TRANSFER', isAdjust = d.type === 'ADJUST';
+  var isTransfer = d.type === 'TRANSFER', isAdjust = d.type === 'ADJUST', isConvert = d.type === 'CONVERT';
   return {
     kind: 'STOCK_' + d.type, entityId: d.id, template: 'modern',
     title: DOC_TITLE[d.type] || 'STOCK NOTE', number: d.docNumber,
@@ -110,9 +110,9 @@ DocModel.stockDoc = function (docId) {
             ['Prepared by', d.createdBy || '—']],
     columns: [
       { key: 'sr', label: 'SR', align: 'center', width: 0.06 },
-      { key: 'description', label: 'Description', width: 0.40 },
+      { key: 'description', label: isConvert ? 'Converted from' : 'Description', width: isConvert ? 0.30 : 0.40 },
       { key: 'pack', label: 'Package', align: 'center', width: 0.14 },
-      { key: 'brand', label: isAdjust ? 'In / out' : 'Warehouse', width: 0.20 },
+      { key: 'brand', label: isAdjust ? 'In / out' : isConvert ? 'Converted to' : 'Warehouse', width: isConvert ? 0.30 : 0.20 },
       { key: 'qty', label: 'Qty', align: 'right', width: 0.20 }
     ],
     rows: items.map(function (it, i) {
@@ -120,6 +120,7 @@ DocModel.stockDoc = function (docId) {
         sr: i + 1, description: it.descriptionEnSnapshot, descriptionUr: it.descriptionSnapshot,
         pack: it.packageSnapshot,
         brand: isAdjust ? (it.direction === 'OUT' ? 'Decrease' : 'Increase')
+             : isConvert ? (it.toDescriptionEnSnapshot || '')
                         : (global.whName ? global.whName(it.warehouseId) : ''),
         qty: qtyFmt(it.quantity) + (it.fromDamaged ? ' (damaged)' : '')
       };
@@ -245,6 +246,14 @@ global.PAGES.orders = function () {
 };
 
 /* ── dispatch and stock-document lists ─────────────────────────────────── */
+/* "Taj Mahal Sella → Al Mamu Sella × 40" for a brand conversion (first line, then "+N more") */
+function convertSummary(d) {
+  var items = ERP.StockDocs.items(d.id);
+  if (!items.length) return '';
+  var f = items[0];
+  return f.descriptionEnSnapshot + ' → ' + f.toDescriptionEnSnapshot + ' × ' + qtyFmt(f.quantity) +
+    (items.length > 1 ? ' +' + (items.length - 1) + ' more' : '');
+}
 function docTable(type, title, empty) {
   var list = ERP.StockDocs.byType(type);
   if (!list.length) return '<div class="empty"><div class="ei">' + I('box') + '</div><b>' + empty + '</b></div>';
@@ -259,7 +268,7 @@ function docTable(type, title, empty) {
         '<td>' + esc(d.warehouseSnapshot) + '</td>' +
         '<td class="c num">' + d.lineCount + '</td>' +
         '<td class="r num">' + qtyFmt(d.totalQty) + '</td>' +
-        '<td>' + esc(d.toWarehouseSnapshot || d.customerSnapshot || d.reason || '—') + '</td>' +
+        '<td>' + esc(d.toWarehouseSnapshot || d.customerSnapshot || (d.type === 'CONVERT' ? convertSummary(d) : '') || d.reason || '—') + '</td>' +
         '<td class="c"><button class="btn sm" data-fcdoc="stock" data-id="' + d.id + '">Open</button></td></tr>';
     }).join('') + '</tbody></table></div></div></div>';
 }
@@ -275,8 +284,10 @@ global.PAGES.inventory = function () {
   return '<div class="bar"><div class="grow"></div>' +
     '<button class="btn" data-fcnew="receive">' + I('plus') + 'Add Stock</button>' +
     '<button class="btn" data-fcnew="transfer">' + I('box') + 'Transfer</button>' +
+    '<button class="btn" data-fcnew="convert">' + I('box') + 'Convert Brand</button>' +
     '<button class="btn" data-fcnew="adjust">' + I('edit') + 'Adjust</button></div>' + html +
     docTable('TRANSFER', 'Warehouse transfers', 'No transfers yet') +
+    docTable('CONVERT', 'Brand conversions', 'No brand conversions yet') +
     docTable('RECEIVE', 'Stock receipts', 'No manual stock receipts yet') +
     docTable('ADJUST', 'Stock adjustments', 'No adjustments yet');
 };

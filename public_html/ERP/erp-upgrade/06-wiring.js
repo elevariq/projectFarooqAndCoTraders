@@ -62,6 +62,7 @@ table.fcb-table tr.over td{background:var(--clay-50)}
   border-radius:var(--r-sm);background:var(--surface);font-size:15px}
 .fcb-in:focus{outline:none;border-color:var(--violet);box-shadow:0 0 0 3px var(--violet-50)}
 .fcb-mini{padding:5px 7px;border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface);font-size:12.5px;max-width:150px}
+.fcb-mini.fcb-to{max-width:230px}
 .fcb-avail{font-size:11.5px;color:var(--muted);margin-top:2px}
 .fcb-avail.bad{color:var(--clay);font-weight:600}
 .fcb-chk{display:block;font-size:11.5px;color:var(--muted);margin-top:3px}
@@ -946,6 +947,10 @@ D.addEventListener('change', function (e) {
     B.draft.items[+el.dataset.ix].warehouseId = el.value; B.dirty = true;
     ERP.BuilderRender.lines(); return;
   }
+  if (el.dataset.fcline === 'to' && B.draft) {
+    B.draft.items[+el.dataset.ix].toProductId = el.value; B.dirty = true;
+    ERP.BuilderRender.lines(); return;
+  }
   if (el.dataset.fcline === 'dir' && B.draft) {
     B.draft.items[+el.dataset.ix].direction = el.value; B.dirty = true;
     ERP.BuilderRender.lines(); return;
@@ -1218,7 +1223,7 @@ if (global.NAV) {
 /* 2. The old panels open the new screens instead */
 var BUILDER_PANELS = {
   sale: 'sale', purchase: 'purchase', order: 'order', quotation: 'quotation',
-  dispatch: 'dispatch', transfer: 'transfer', adjust: 'adjust', receive: 'receive',
+  dispatch: 'dispatch', transfer: 'transfer', adjust: 'adjust', receive: 'receive', convert: 'convert',
   supreturn: 'supreturn'
 };
 var origOpenPanel = global.openPanel;

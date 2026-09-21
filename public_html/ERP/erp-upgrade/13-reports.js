@@ -271,7 +271,7 @@ A.inventory = function (from, to, f) {
         brand: p ? (p.brandEn || p.brand || '') : '', pack: p && p.kg ? p.kg + ' KG' : 'Bag',
         warehouse: global.whName ? global.whName(wid) : wid,
         opening: 0, received: 0, sold: 0, returnedIn: 0, damagedIn: 0, returnedOut: 0,
-        transferIn: 0, transferOut: 0, adjusted: 0, writtenOff: 0, closing: 0 };
+        transferIn: 0, transferOut: 0, converted: 0, adjusted: 0, writtenOff: 0, closing: 0 };
     }
     return rows[k];
   }
@@ -293,6 +293,8 @@ A.inventory = function (from, to, f) {
     if (from && d < from) { if (m.bucket !== 'damaged') r.opening += delta; return; }
     if (to && d > to) return;
     if (m.bucket === 'damaged') { r.damagedIn += Math.abs(delta); return; }
+    /* a brand conversion takes bags out of one product and puts them into another: kept as a signed net so the closing figure is right */
+    if (m.kind === 'CONVERT_IN' || m.kind === 'CONVERT_OUT') { r.converted += delta; return; }
     var bucket = delta >= 0 ? IN_KINDS[m.kind] : OUT_KINDS[m.kind];
     if (!bucket) bucket = 'adjusted';
     if (bucket === 'opening') r.opening += delta;
@@ -300,7 +302,7 @@ A.inventory = function (from, to, f) {
   });
   var list = Object.keys(rows).map(function (k) {
     var r = rows[k];
-    r.closing = r.opening + r.received + r.returnedIn + r.transferIn + r.adjusted
+    r.closing = r.opening + r.received + r.returnedIn + r.transferIn + r.converted + r.adjusted
               - r.sold - r.returnedOut - r.transferOut - r.writtenOff;
     /* the adjusted bucket holds both directions, so trust the live figure
        when the whole history is in view */
@@ -308,7 +310,7 @@ A.inventory = function (from, to, f) {
     return r;
   }).filter(function (r) {
     return r.opening || r.received || r.sold || r.closing || r.returnedIn || r.transferIn ||
-           r.transferOut || r.returnedOut || r.adjusted || r.damagedIn;
+           r.transferOut || r.returnedOut || r.converted || r.adjusted || r.damagedIn;
   }).sort(function (a, b) { return b.sold - a.sold; });
   return {
     from: from, to: to, rows: list,

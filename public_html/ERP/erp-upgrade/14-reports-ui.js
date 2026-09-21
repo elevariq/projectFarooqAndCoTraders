@@ -326,10 +326,10 @@ function build(tab, from, to, label) {
                        text: qty(r.closing) + ' bags' }; })) }
         ],
         columns: [['Product', 'l'], ['Warehouse', 'l'], ['Opening', 'r'], ['Received', 'r'],
-                  ['Sold', 'r'], ['Returned', 'r'], ['Transfers', 'r'], ['Adjusted', 'r'], ['Closing', 'r']],
+                  ['Sold', 'r'], ['Returned', 'r'], ['Transfers / conversions', 'r'], ['Adjusted', 'r'], ['Closing', 'r']],
         rows: inv.rows.map(function (r) {
           return [r.nameEn || r.name, r.warehouse, qty(r.opening), qty(r.received), qty(r.sold),
-                  qty(r.returnedIn), qty(r.transferIn - r.transferOut), qty(r.adjusted), qty(r.closing)];
+                  qty(r.returnedIn), qty(r.transferIn - r.transferOut + r.converted), qty(r.adjusted), qty(r.closing)];
         }),
         footer: ['Total', '', qty(inv.opening), qty(inv.received), qty(inv.sold),
                  qty(inv.returnedIn), '', '', qty(inv.closing)],

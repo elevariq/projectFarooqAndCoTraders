@@ -34,7 +34,8 @@ var ENUM = ERP.ENUM = {
              'SUPPLIER_RETURN_OUT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUSTMENT_IN', 'ADJUSTMENT_OUT',
              'SALE_REVERSAL_IN', 'PURCHASE_REVERSAL_OUT', 'REPLACEMENT_OUT', 'SUPPLIER_REPLACEMENT_IN',
              'STOCK_WRITE_OFF', 'DISPATCH_OUT',
-             'MILL_ISSUE_OUT', 'MILL_RECEIPT_IN', 'MILL_ISSUE_REVERSAL_IN', 'MILL_RECEIPT_REVERSAL_OUT'],
+             'MILL_ISSUE_OUT', 'MILL_RECEIPT_IN', 'MILL_ISSUE_REVERSAL_IN', 'MILL_RECEIPT_REVERSAL_OUT',
+             'CONVERT_OUT', 'CONVERT_IN'],
   /* what physically happens to a returned bag */
   returnCondition: ['SELLABLE', 'DAMAGED', 'DEFECTIVE', 'WRONG_ITEM', 'EXPIRED', 'OTHER'],
   /* what happens to the money */
@@ -192,7 +193,8 @@ var Movements = ERP.Movements = {
       REPLACEMENT_OUT: 'Replacement issued', SUPPLIER_REPLACEMENT_IN: 'Replacement from supplier',
       DISPATCH_OUT: 'Dispatch', OPENING_STOCK: 'Opening stock', OPENING: 'Opening stock',
       MILL_ISSUE_OUT: 'Issued for milling', MILL_RECEIPT_IN: 'Received from mill',
-      MILL_ISSUE_REVERSAL_IN: 'Milling issue reversed', MILL_RECEIPT_REVERSAL_OUT: 'Milling receipt reversed'
+      MILL_ISSUE_REVERSAL_IN: 'Milling issue reversed', MILL_RECEIPT_REVERSAL_OUT: 'Milling receipt reversed',
+      CONVERT_OUT: 'Converted to another brand', CONVERT_IN: 'Converted from another brand'
     })[k] || k;
   }
 };

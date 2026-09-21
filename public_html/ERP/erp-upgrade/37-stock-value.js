@@ -91,7 +91,7 @@
   /* the cost written on the movements that brought stock into a row without
      touching its average: weighted by bags. Only those kinds — a purchase's
      cost is already in the row, and sales/returns carry no cost of their own. */
-  var CARRIED = { OPENING_STOCK: 1, ADJUSTMENT_IN: 1, TRANSFER_IN: 1 };
+  var CARRIED = { OPENING_STOCK: 1, ADJUSTMENT_IN: 1, TRANSFER_IN: 1, CONVERT_IN: 1 };
   function carriedMap() {
     var m = {};
     (S.movements || []).forEach(function (mv) {

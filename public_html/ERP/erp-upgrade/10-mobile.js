@@ -126,6 +126,7 @@ body.fc-mobile:not(.fc-hidechrome) .fc-tabbar{display:grid}
     font-size:11px;color:var(--muted)}
   body.fc-mobile table.fcb-table td[data-label="Line"]::before{display:none}
   body.fc-mobile table.fcb-table td[data-label="Package"]{display:none}
+  body.fc-mobile table.fcb-table td[data-label="Convert to"]{grid-column:1/-1}
   body.fc-mobile .fcb-in{max-width:none;width:100%;min-height:46px;text-align:right;font-size:17px}
   body.fc-mobile .fcb-mini{max-width:none;width:100%;min-height:44px;font-size:15px}
   body.fc-mobile .fcb-amtcell{grid-column:1/-1;border-top:1px dashed var(--line);padding-top:8px !important;

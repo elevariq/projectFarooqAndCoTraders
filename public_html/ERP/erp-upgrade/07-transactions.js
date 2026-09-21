@@ -212,7 +212,10 @@ var TYPES = {
   TRANSFER: { seq: 'TRF', title: 'Warehouse transfer', out: true },
   RECEIVE:  { seq: 'RCV', title: 'Stock received',     out: false },
   ADJUST:   { seq: 'ADJ', title: 'Stock adjustment',   out: true },
-  DISPATCH: { seq: 'DSP', title: 'Dispatch',           out: true }
+  DISPATCH: { seq: 'DSP', title: 'Dispatch',           out: true },
+  /* bags re-printed as another brand: each line takes bags out of one product and puts the same
+     number into another, in the same warehouse, in one atomic save */
+  CONVERT:  { seq: 'CNV', title: 'Brand conversion',   out: true }
 };
 
 var StockDocs = ERP.StockDocs = {
@@ -238,6 +241,17 @@ var StockDocs = ERP.StockDocs = {
     if (type === 'DISPATCH' && !draft.customerId) errs.push('Choose the shop the load is going to.');
     if (type === 'ADJUST' && !draft.reason) errs.push('Give a reason — every manual stock change is audited.');
     if (type === 'RECEIVE' && !draft.reason) errs.push('Give a reason for adding this stock.');
+    if (type === 'CONVERT') {
+      (draft.items || []).forEach(function (l, n) {
+        if (!l || !l.productId) return;
+        var label = 'Line ' + (n + 1);
+        var to = l.toProductId ? prodOf(l.toProductId) : null;
+        if (!l.toProductId) errs.push(label + ': choose the brand these bags are being converted to.');
+        else if (l.toProductId === l.productId) errs.push(label + ': the two brands are the same — there is nothing to convert.');
+        else if (!to) errs.push(label + ': the brand you are converting to no longer exists.');
+        else if (to.active === false) errs.push(label + ': ' + (to.en || to.ur) + ' is switched off — pick another brand.');
+      });
+    }
 
     /* An adjustment can go either way, so only the decreasing lines are
        checked against stock. */
@@ -289,13 +303,22 @@ var StockDocs = ERP.StockDocs = {
           v.lines.forEach(function (l, ix) {
             var q = M.qty(l.quantity);
             var direction = type === 'ADJUST' ? (l.direction || 'IN') : (def.out ? 'OUT' : 'IN');
+            var toProd = type === 'CONVERT' ? prodOf(l.toProductId) : null;
             var r = snapshot(l, {
               id: FDB.uid('sdi'), docId: rec.id, sortOrder: ix, direction: direction,
               warehouseId: l.warehouseId || rec.warehouseId,
               toWarehouseId: rec.toWarehouseId, reason: l.reason || rec.reason,
               fromDamaged: !!l.fromDamaged,
-              unitCostP: l.unitPrice ? M.toP(l.unitPrice) : Inventory.costOf(l.productId, rec.warehouseId)
+              unitCostP: l.unitPrice ? M.toP(l.unitPrice)
+                       : Inventory.costOf(l.productId, type === 'CONVERT' ? (l.warehouseId || rec.warehouseId) : rec.warehouseId)
             });
+            if (toProd) {
+              r.toProductId = toProd.id;
+              r.toDescriptionSnapshot = toProd.ur || toProd.en || '';
+              r.toDescriptionEnSnapshot = toProd.en || '';
+              r.toBrandSnapshot = toProd.brandEn || toProd.brand || '';
+              r.toPackageSnapshot = toProd.kg ? toProd.kg + ' KG' : 'Bag';
+            }
             api.put('stockDocItems', r); S.stockDocItems.push(r);
             qty += q;
 
@@ -318,6 +341,17 @@ var StockDocs = ERP.StockDocs = {
                 bucket: r.fromDamaged ? 'damaged' : 'stock',
                 kind: direction === 'OUT' ? 'ADJUSTMENT_OUT' : 'ADJUSTMENT_IN',
                 ref: number, refType: 'ADJUSTMENT', note: r.reason, date: rec.docDate });
+            } else if (type === 'CONVERT') {
+              /* both sides commit together, or neither does; the new brand is carried at the old brand's cost
+                 so the stock value does not jump just because the bag was re-printed */
+              Inventory.apply(api, { productId: r.productId, warehouseId: r.warehouseId, qtyDelta: -q,
+                kind: 'CONVERT_OUT', ref: number, refType: 'CONVERSION',
+                note: 'Converted to ' + (r.toDescriptionEnSnapshot || r.toProductId), date: rec.docDate,
+                unitCostP: r.unitCostP });
+              Inventory.apply(api, { productId: r.toProductId, warehouseId: r.warehouseId, qtyDelta: q,
+                kind: 'CONVERT_IN', ref: number, refType: 'CONVERSION',
+                note: 'Converted from ' + (r.descriptionEnSnapshot || r.productId), date: rec.docDate,
+                unitCostP: r.unitCostP });
             } else if (type === 'DISPATCH' && deduct) {
               Inventory.apply(api, { productId: r.productId, warehouseId: r.warehouseId, qtyDelta: -q,
                 kind: 'DISPATCH_OUT', ref: number, refType: 'DISPATCH',
@@ -334,8 +368,10 @@ var StockDocs = ERP.StockDocs = {
           }
           Audit.write(api, {
             action: def.title + ' posted', entity: 'StockDoc', entityId: rec.id, ref: number,
-            newValues: { type: type, lines: rec.lineCount, qty: qty,
+            newValues: Object.assign({ type: type, lines: rec.lineCount, qty: qty,
                          stockMoved: type === 'DISPATCH' ? deduct : true },
+              type === 'CONVERT' ? { conversions: S.stockDocItems.filter(function (i) { return i.docId === rec.id; })
+                .map(function (i) { return i.descriptionEnSnapshot + ' → ' + i.toDescriptionEnSnapshot + ' × ' + i.quantity; }) } : {}),
             reason: rec.reason
           });
           return rec;
@@ -355,6 +391,7 @@ var StockDocs = ERP.StockDocs = {
   transfer: function (d) { return StockDocs.save(Object.assign({}, d, { type: 'TRANSFER' })); },
   receive:  function (d) { return StockDocs.save(Object.assign({}, d, { type: 'RECEIVE' })); },
   adjust:   function (d) { return StockDocs.save(Object.assign({}, d, { type: 'ADJUST' })); },
+  convert:  function (d) { return StockDocs.save(Object.assign({}, d, { type: 'CONVERT' })); },
   dispatch: function (d) { return StockDocs.save(Object.assign({}, d, { type: 'DISPATCH' })); }
 };
 

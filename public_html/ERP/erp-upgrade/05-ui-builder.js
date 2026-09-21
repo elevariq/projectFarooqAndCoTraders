@@ -94,6 +94,12 @@ var MODES = {
     save: function (d) { return ERP.StockDocs.adjust(d); },
     after: function (rec) { return ERP.DocModel.stockDoc(rec.id); }
   },
+  convert: {
+    title: 'Convert brand', reason: true, convertTo: true, stockOut: true,
+    cta: 'Convert Stock', back: 'inventory', noun: 'conversion',
+    save: function (d) { return ERP.StockDocs.convert(d); },
+    after: function (rec) { return ERP.DocModel.stockDoc(rec.id); }
+  },
   supreturn: {
     title: 'Return to supplier', party: 'supplier', stockOut: true, rates: true, reason: true,
     cta: 'Post Supplier Return', back: 'suppliers', noun: 'supplier return',
@@ -194,7 +200,7 @@ function addLine(pid) {
   B.draft.items.push({
     lineId: FDB.uid('ln'), productId: pid, quantity: '',
     unitPrice: r === null ? '' : M.toR(r), discount: '', receivedQty: '',
-    direction: 'IN', warehouseId: B.draft.warehouseId, fromDamaged: false,
+    direction: 'IN', warehouseId: B.draft.warehouseId, fromDamaged: false, toProductId: '',
     batchNo: '', notes: '', unit: 'Bag'
   });
   B.dirty = true; B.pickerQuery = '';
@@ -320,10 +326,16 @@ function headerBody(withCard) {
         '<label class="f"><span>Salesperson</span><input data-fcb="salesperson" value="' +
           esc(d.salesperson || '') + '"></label></div>';
   }
+  if (cfg.convertTo) {
+    extra += '<div class="banner info">' + I('box') + '<div><p>Each line takes bags out of one brand and puts the ' +
+      '<b>same number of bags</b> into the brand you choose under <b>Convert to</b>, in the same warehouse. ' +
+      'Both sides are saved together or not at all.</p></div></div>';
+  }
   if (cfg.reason) {
-    extra += '<label class="f"><span>Reason' + (B.mode === 'adjust' ? ' (required — it is audited)' : '') + '</span>' +
+    extra += '<label class="f"><span>' + (B.mode === 'convert' ? 'Note (optional)' : 'Reason' + (B.mode === 'adjust' ? ' (required — it is audited)' : '')) + '</span>' +
       '<input data-fcb="reason" value="' + esc(d.reason || '') + '" placeholder="' +
       (B.mode === 'receive' ? 'e.g. opening stock count, own production'
+        : B.mode === 'convert' ? 'e.g. bags re-printed for the new brand'
         : B.mode === 'supreturn' ? 'e.g. torn bags' : 'e.g. physical count correction') + '"></label>';
   }
   var nextNo = '';
@@ -331,7 +343,7 @@ function headerBody(withCard) {
     var seqKey = { sale: ERP.Settings.get().invoicePrefix || 'INV',
                    purchase: ERP.Settings.get().purchasePrefix || 'PUR',
                    order: ERP.Settings.get().orderPrefix || 'SO', quotation: 'QT', dispatch: 'DSP',
-                   transfer: 'TRF', receive: 'RCV', adjust: 'ADJ', supreturn: 'SR' }[B.mode];
+                   transfer: 'TRF', receive: 'RCV', adjust: 'ADJ', convert: 'CNV', supreturn: 'SR' }[B.mode];
     nextNo = FDB.peekNumber(seqKey, new Date().getFullYear(), ERP.S.sequences);
   } catch (e) {}
 
@@ -398,8 +410,10 @@ function pickerBlock() {
 
 function columns() {
   var cfg = B.cfg;
-  var c = [{ k: 'sr', l: '#', cls: 'c' }, { k: 'prod', l: 'Product' },
-           { k: 'pack', l: 'Package', cls: 'c' }, { k: 'wh', l: 'Warehouse' }];
+  var c = [{ k: 'sr', l: '#', cls: 'c' }, { k: 'prod', l: cfg.convertTo ? 'Convert from' : 'Product' }];
+  if (!cfg.convertTo) c.push({ k: 'pack', l: 'Package', cls: 'c' });     /* a conversion names the kg in both brand names */
+  c.push({ k: 'wh', l: 'Warehouse' });
+  if (cfg.convertTo) c.push({ k: 'to', l: 'Convert to' });
   if (cfg.direction) c.push({ k: 'dir', l: 'In / out' });
   c.push({ k: 'qty', l: cfg.received ? 'Ordered' : 'Qty', cls: 'r' });
   if (cfg.received) c.push({ k: 'recv', l: 'Received', cls: 'r' });
@@ -438,6 +452,17 @@ function lineRows() {
           Number(have).toLocaleString('en-US') + (it.fromDamaged ? ' damaged' : ' available') + '</div>' +
           (B.mode === 'supreturn' ? '<label class="fcb-chk"><input type="checkbox" data-fcline="damaged" data-ix="' +
             ix + '"' + (it.fromDamaged ? ' checked' : '') + '> from damaged stock</label>' : '') + '</td>';
+        case 'to': return '<td data-label="Convert to"><select data-fcline="to" data-ix="' + ix + '" class="fcb-mini fcb-to">' +
+          '<option value="">— choose brand —</option>' +
+          PRODS().filter(function (x) { return x.active !== false && x.id !== it.productId; })
+            .sort(function (a, b) { return (a.en || '').localeCompare(b.en || ''); })
+            .map(function (x) {
+              return '<option value="' + esc(x.id) + '"' + (it.toProductId === x.id ? ' selected' : '') + '>' +
+                esc(x.en || x.ur || x.id) + (x.brandEn || x.brand ? ' · ' + esc(x.brandEn || x.brand) : '') +
+                (x.kg ? ' — ' + x.kg + ' KG' : '') + '</option>';
+            }).join('') + '</select>' +
+          (it.toProductId ? '<div class="fcb-avail">Has ' + Number(ERP.Inventory.available(it.toProductId, lw)).toLocaleString('en-US') +
+            ' now</div>' : '') + '</td>';
         case 'dir': return '<td data-label="In / out"><select data-fcline="dir" data-ix="' + ix + '" class="fcb-mini">' +
           '<option value="IN"' + (it.direction === 'IN' ? ' selected' : '') + '>Increase</option>' +
           '<option value="OUT"' + (it.direction === 'OUT' ? ' selected' : '') + '>Decrease</option></select></td>';
