@@ -134,7 +134,7 @@ SSH), then `scp -P 65002 public_html/index.html u943531942@31.97.219.57:/home/u9
 
 **ERP app** — `./scripts/deploy-erp.sh` (from the repo root or a clean clone):
 1. refuses if the tree is dirty; 2. rebuilds; 3. runs every `test-*.mjs` (aborts on any failure — nothing broken is uploaded);
-4. backs up live files to `~/backups/erp-deploy-<ts>/`; 5. uploads atomically (`*.uploading` → rename) to `ERP/_app/` only
+4. backs up live files to `~/backups/erp-deploy-<ts>/`; 5. uploads atomically (`*.uploading` → rename) to `ERP/_app/` only (why, and the guards against deploying to an unserved folder: `docs/OPERATIONS.md` → "Why deploys go to `_app/` only")
    (refuses if `_app/` is missing; takes a lock in `.git/deploy-erp.lock`); 6. curls the live URLs.
 Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's `dist/`.
 - Takes 10–15 min → run it **detached** (a wrapper started with `Start-Process`) so the tool's 10-min timeout can't kill it mid-upload;

@@ -224,8 +224,8 @@ changed on either site; only non-executed dev tooling was updated.
   not just a script error). Triggers on push/PR touching `erp-upgrade/` or `app/`.
 - **`scripts/deploy-erp.sh`** — implements the recommended deploy flow end-to-end for the ERP
   subdomain: refuses to run with uncommitted changes, rebuilds, runs the full test suite and
-  aborts on any failure, backs up the live `app/` folder with a timestamp, uploads the new build,
-  reminds you to clear the CDN cache (can't call the MCP tool from bash, so this step is manual or
+  aborts on any failure, backs up the three live `_app/` files with a timestamp, uploads the new build
+  to `ERP/_app/` only (see "Why deploys go to `_app/` only" below), reminds you to clear the CDN cache (can't call the MCP tool from bash, so this step is manual or
   done by whichever Claude session runs the script), then curls both live URLs to confirm `200`.
   The homepage has no build step, so it isn't included — see the one-line `scp` command in
   `CLAUDE.md` instead.
@@ -237,6 +237,30 @@ changed on either site; only non-executed dev tooling was updated.
   the build's and prints `md5 MATCH`. Log: `.git/deploy-logs/erp-latest.log` (ends `DEPLOY FINISHED` or
   `DEPLOY FAILED`). Run it detached (10–15 min) — the `Start-Process` line is in the script header. It does
   not clear the Hostinger cache (do that afterwards), deploy PHP (`deploy-api.sh`), commit or push.
+
+### Why deploys go to `_app/` only (decided 2026-09-21)
+
+- **The accident (2026-09-16):** deploys were landing in `ERP/app/` while the site served the files sitting
+  directly in `ERP/`, so "deployed" features never appeared. The fix then was to also upload to the real
+  served location; the `app/` upload stayed on as a "parity" leftover.
+- **Why it was dropped:** since the login gate (2026-09-20) the only served files are `ERP/_app/*`, read by
+  `api/gate.php`. The server's `ERP/app/` is denied by its own `.htaccess` and nothing reads it. Uploading to
+  it and backing it up doubled the upload (5 more files, ~6.5 MB) and the SSH logins the host throttles,
+  and it never protected against the accident above (a copy nobody can load proves nothing).
+  `deploy-erp.sh` no longer touches it. The repo's `public_html/ERP/app/` is different — it is the build
+  input and stays. The old server-side `ERP/app/` was left in place (deleting it needs the owner's OK).
+- **What guards against a repeat** (a deploy that lands somewhere the site doesn't serve):
+  1. `deploy-erp.sh` uploads only to `ERP/_app/`, the folder `api/gate.php`'s `GATE_FILES` reads, and
+     refuses to run if `_app/` or `api/gate.php` is missing on the server.
+  2. `deploy-erp-from-clean-clone.sh` compares the md5 of the three served `_app/` files with the build's
+     and prints `md5 MATCH` / `md5 MISMATCH`. Always check it — it is the real proof of what is live.
+     (Plain `deploy-erp.sh` has no md5 check of its own.)
+  3. `.htaccess` denies `_app/` to direct requests, so no second copy can silently be the served one.
+- **Traps that remain:** if the served location ever changes again (new rewrite target / `GATE_FILES` entry),
+  update `deploy-erp.sh` in the same change. `gate-rollout.sh rollback` copies the files back to the ERP
+  root; `deploy-erp.sh` then refuses (no `_app/`) instead of deploying — re-run `migrate` first.
+- The backup of each deploy (`~/backups/erp-deploy-<ts>/`) now holds only the three `_app/` files (it used
+  to include a copy of `app/`). Rollback is unchanged: copy them back into `ERP/_app/`, clear the cache.
 
 ## Scope explicitly not covered this session
 
