@@ -420,6 +420,49 @@ async function main() {
     wJ3.ERP.Milling.atMillBalance(millJ, prJ[1].id).qty === 0 && !/More has arrived/.test((() => { const c = wJ3.document.body.cloneNode(true); c.querySelectorAll('script,style').forEach(n => n.remove()); return c.textContent; })()) && wJ3.ERP.Milling.arrivals().length === 1);
   for (const b of [J1, J2, J2b, J2c, J3]) b.w.close();
 
+  /* ══ K. payroll on the server (2026-09-21) ═══════════════════════════════════════
+     Entries (salary / advance / bonus / deduction), a person added with their first payment, and a reversal are plain
+     records in the existing employees / salary_payments stores. Two people paying the same month from two windows
+     must not both succeed — every entry and reversal also rewrites one small per-person guard row (meta `salguard:<id>`),
+     so the second, stale save is refused instead of paying the month twice. */
+  const S10 = new Mock(SEED);
+  const K1 = await boot(S10), EK = K1.w.ERP;
+  const empK = await EK.Employees.save({ name: 'Kamran Ali', role: 'Driver', monthlySalary: 30000, startMonth: '2026-08' });
+  const K2 = await boot(S10), K2b = await boot(S10);            /* loaded before the payments below — their copies will go stale */
+  const advK = await EK.Payroll.pay({ employeeId: empK.id, kind: 'ADVANCE', amount: 5000, date: '2026-08-10', periodMonth: '2026-08' });
+  const bonK = await EK.Payroll.pay({ employeeId: empK.id, kind: 'BONUS', amount: 1000, date: '2026-08-11', periodMonth: '2026-08' });
+  check('K1 an advance and a bonus reach the server with their kind, month and number; the person has a start month and salary history',
+    S10.rows('salaryPayments').some(r => r.id === advK.id && r.kind === 'ADVANCE' && r.periodMonth === '2026-08' && /^SAL-\d{4}-\d{6}$/.test(r.salaryNumber)) &&
+    S10.rows('salaryPayments').some(r => r.id === bonK.id && r.kind === 'BONUS') &&
+    S10.rows('employees').some(r => r.id === empK.id && r.startMonth === '2026-08' && r.rates.length === 1));
+  const firstK = await EK.Payroll.pay({ newEmployee: { name: 'Nadeem Shah', role: 'Loader', monthlySalary: 20000 }, amount: 20000, date: '2026-08-20', periodMonth: '2026-08' });
+  check('K2 a person added with their first payment: both rows are on the server, and the audit log has both',
+    S10.rows('employees').some(r => r.id === firstK.employeeId && r.name === 'Nadeem Shah' && r.startMonth === '2026-08') &&
+    S10.rows('salaryPayments').some(r => r.id === firstK.id) &&
+    S10.rows('auditLog').some(a => a.entityId === firstK.employeeId && /added/i.test(a.action)) && S10.rows('auditLog').some(a => a.entityId === firstK.id));
+  check('K3 the guard is one small shared row per person in the existing meta store', S10.rows('meta').filter(m => m.k === 'salguard:' + empK.id).length === 1 && S10.rows('meta').find(m => m.k === 'salguard:' + empK.id).v >= 2);
+  const remK = K1.w.ERP.Payroll.sheet(K1.w.ERP.Employees.byId(empK.id), '2026-08').balanceP;
+  const nBefore = S10.rows('salaryPayments').length;
+  const stale1 = await K2.w.ERP.Payroll.pay({ employeeId: empK.id, amount: 26000, date: '2026-09-01', periodMonth: '2026-08' }).then(() => null, e => e);
+  check('K4 a window loaded before the advance, paying the month from its OLD copy, is refused — nothing extra on the server',
+    !!stale1 && S10.rows('salaryPayments').length === nBefore, stale1 && (stale1.message || JSON.stringify(stale1)));
+  check('K5 …and the person is told it was NOT saved', /NOT saved/.test(overlayText(K2.w, 'fcsd-failed') || ''), overlayText(K2.w, 'fcsd-failed'));
+  const stale2 = await K2b.w.ERP.Payroll.reverse(advK.id, 'from a stale window').then(() => null, e => e);
+  check('K6 a stale window reversing an entry is refused too (the person\'s figures moved since it loaded) — the entry stands',
+    !!stale2 && S10.rows('salaryPayments').find(r => r.id === advK.id).status === 'POSTED', stale2 && (stale2.message || JSON.stringify(stale2)));
+  await EK.Payroll.reverse(advK.id, 'given twice');
+  check('K7 a reversal from an up-to-date window lands: kept, marked reversed, with its reason; the audit row is there',
+    S10.rows('salaryPayments').find(r => r.id === advK.id).status === 'REVERSED' && S10.rows('salaryPayments').find(r => r.id === advK.id).reverseReason === 'given twice' &&
+    S10.rows('auditLog').some(a => a.entityId === advK.id && /reversed/i.test(a.action)));
+  const opK = await EK.Payroll.pay({ employeeId: empK.id, kind: 'ADVANCE', amount: 100, date: '2026-08-25', periodMonth: '2026-08', clientOpId: 'k-op' });
+  const opK2 = await EK.Payroll.pay({ employeeId: empK.id, kind: 'ADVANCE', amount: 100, date: '2026-08-25', periodMonth: '2026-08', clientOpId: 'k-op' }).then(() => null, e => e);
+  check('K8 a double-clicked Save (same operation id) is one entry on the server', !!opK.id && !!opK2 && S10.rows('salaryPayments').filter(r => r.clientOpId === 'k-op').length === 1);
+  const nowK = EK.S.salaryPayments.length; S10.fail['commit.php'] = { times: 1, kind: 'network' };
+  const failK = await EK.Payroll.pay({ employeeId: empK.id, kind: 'ADVANCE', amount: 50, date: '2026-08-26', periodMonth: '2026-08' }).then(() => null, e => e);
+  check('K9 a payment whose save fails is reported, the server is unchanged, and the screen does not show it as recorded',
+    !!failK && S10.rows('salaryPayments').length === nowK && EK.S.salaryPayments.length === nowK && /NOT saved/.test(overlayText(K1.w, 'fcsd-failed') || ''), failK && failK.message);
+  for (const b of [K1, K2, K2b]) b.w.close();
+
   /* ══ F. failures are never hidden ═════════════════════════════════════ */
   const S3 = new Mock(SEED); const F1 = await boot(S3), wF = F1.w;
   const whF = wF.WAREHOUSES[1].id, pf = wF.PRODUCTS.filter(x => x.active !== false);

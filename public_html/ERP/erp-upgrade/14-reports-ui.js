@@ -770,7 +770,7 @@ ERP.Reporting = {
    EXPENSES PANEL
    ══════════════════════════════════════════════════════════════════════════ */
 global.PANELS.expense = {
-  t: 'Record an expense', s: 'Freight, labour, fuel, salaries — anything paid out',
+  t: 'Record an expense', s: 'Freight, labour, fuel, rent — anything paid out. Staff pay goes through Payroll, not here.',
   cta: 'Save expense',
   f: function () {
     return '<div class="f2">' +

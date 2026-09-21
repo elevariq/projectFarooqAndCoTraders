@@ -66,7 +66,7 @@ them.
 | `27-landed-ui.js` | Finance UI for landed costs, expenses and profit analysis |
 | `28-areawise.js` | Area-wise collection: sales, collection and balance per shop, grouped by area |
 | `29-statement-of-account.js` | One Finance screen for either party's full ledger |
-| `30-payroll.js` | Employee list, monthly salary rate, and salary payments (MVP) |
+| `30-payroll.js` | Payroll: people (start month, salary history), the monthly salary sheet (due / paid / remaining), salary payments, advances, bonuses, deductions, reversal, slips, print / Excel; a person can be added at their first payment |
 | `31-auth.js` | Server-checked accounts, sessions and permissions; the change-password box (opened from Company accounts → My account) |
 | `32-milling.js` | Milling jobs — toll milling: wheat out, flour + chokar back, net settled into the mill's khata; finished goods can stay at the mill (Punjab) and arrive in loads — the "Stock at mills" screen |
 | `33-invoice-search.js` | Invoice search — find an old invoice by number, customer, product, date or amount; paged list |

@@ -334,7 +334,10 @@ var Profit = ERP.Profit = {
       return (!from || e.expenseDate >= from) && (!to || e.expenseDate <= to);
     });
     totals.expenses = M.sum(expenses.map(function (e) { return e.amount; }));
-    totals.netAfterExpenses = totals.netProfit - totals.expenses;
+    /* salaries handed out through Payroll (30) are a business cost too; counted on the day they were paid, like expenses.
+       Staff are paid from Payroll, NOT entered again as an expense — that would count them twice. */
+    totals.salaries = ERP.Payroll && ERP.Payroll.paidInRange ? ERP.Payroll.paidInRange(from, to) : 0;
+    totals.netAfterExpenses = totals.netProfit - totals.expenses - totals.salaries;
 
     var purchases = S.purchases.filter(function (p) {
       return (!from || p.purchaseDate >= from) && (!to || p.purchaseDate <= to) &&

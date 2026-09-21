@@ -456,7 +456,51 @@ minimal MVP rather than guessing at a real HR/accrual model:
 - **Explicitly not built** — flagged for the client to specify before any of it is attempted:
   attendance, deductions/advances, tax, printable payslips, pay-period accrual.
 
-Covered by `test-payroll.mjs` (48 checks, including a full restart/persistence check).
+Covered by `test-payroll.mjs` (48 checks, including a full restart/persistence check). *(Superseded 2026-09-21 — see "Payroll — a real monthly salary system" below; the "no balance owed" decision no longer holds.)*
+
+## Payroll — a real monthly salary system (2026-09-21)
+
+**The 2026-09-16 MVP below was a payment log only ("no balance owed, by design").** The client asked again on 2026-09-21 by voice note
+("the employees who take their salary from here… whoever takes it the first time, we write them down afterwards, and the salary is also
+managed in this"), so `30-payroll.js` was rewritten as a monthly system. **No new store, no schema change, no API change → app deploy
+only** (`deploy-erp.sh`). The live database held 0 employees / 0 salary payments / 0 expenses when this was built, so nothing was migrated
+(older records still read correctly: an entry with no `kind` is a SALARY for the month of its date; a person with no start month starts in
+the month of their first entry, else the local month they were added).
+
+- **Per person, per month:** DUE = salary + bonus − deduction · PAID = salary payments + advances *for that month* · REMAINING = DUE − PAID
+  (negative = "paid ahead"). The month is the month the money is FOR (`periodMonth`), not the day it was handed over. Salary accrues from the
+  person's **start month** to their **last month** (set when archived — the current month is still owed) and only up to the current
+  month; a future month shows "Not due yet" (planned salary shown, due 0). The statement's "Still owed" = Σ of every month's remaining,
+  so an advance beyond a month simply carries forward.
+- **Four kinds of entry**, all in `salaryPayments` (`kind`): SALARY and ADVANCE move cash; BONUS adds to what is owed, DEDUCTION takes from
+  it (no cash, no method). The salary **keeps history** (`rates:[{from:'YYYY-MM', salaryP}]`; a raise "counts from" a chosen month and never
+  rewrites earlier ones; `monthlySalaryP` = today's rate).
+- **First payment adds the person** (the "we write them down afterwards" part): Pay salary → "＋ New person" → name/role/phone/salary; the
+  employee and the entry are saved in ONE transaction; "Pay salary" starts on a blank employee choice (nobody pre-selected on a money screen).
+- **Refused, so the screen cannot quietly go wrong:** a SALARY payment above what is left for its month (says "record the extra as an
+  Advance"; a month that has not started says the same), a deduction above the month's pay, a second person with the same name (any case/
+  spacing), `< > "` in a name, non-numeric/zero/absurd amounts, impossible dates, months outside 2000–2100, unknown methods. Errors show
+  **inside the still-open panel** (`Payroll.check` is the pure, synchronous half of `pay`).
+- **Reverse** (never delete): struck through, kept, reason in the audit log; not counted anywhere. Documents: salary sheet and per-person
+  statement (Print/PDF via `ERP.Viewer`, Excel), and a **slip** per entry with the employee's signature line.
+- **Server safety** (same pattern as the mill guard): every entry claims its client operation id (double-click = one entry) and touches
+  `meta` row `salguard:<employeeId>`, so a second window working from an old copy is refused ("NOT saved — reload") instead of paying a
+  month twice. Reversal touches it too. New people are written after commit, so a failed save never shows on screen.
+- **Profit report changed (shared core, 17-profit.js):** `totals.salaries` = cash salary + advances paid in the period (by payment date, like
+  expenses; bonus/deduction/reversed excluded) and **"After expenses" now subtracts it** — otherwise net profit was overstated once payroll is
+  used. Cards/Excel say so. **Staff pay goes through Payroll, not the Expenses screen** (the expense panel says so; a "Salaries" expense
+  *plus* a payroll payment would count twice — the category itself was left in the list because old data may use it).
+- **Gate:** `PAYROLL_MANAGE` (owner only unless given to a role) on the screen (module 34) and now also inside `Payroll.pay/reverse` and the
+  employee panel — browser-side, like every role here.
+- **Tests:** `test-payroll.mjs` (124 checks, pinned clock: math, refusals, history, leaving/restoring, first-payment person, legacy records,
+  reversal, roles, profit, documents, the screen and both panels driven through the DOM, restart) and `test-server-db.mjs` section K (9
+  checks: server rows, the guard, a stale window refused for a payment and for a reversal, double-click, failed commit). Mutation-checked
+  with 12 deliberate breakages (no guard row, no overpay rule, no role gate, no operation claim, history ignored, reversed counted as live,
+  bonus counted as cash, no deduction limit, no duplicate check, new person not created…) — each turns a check red. Looked at in real headless
+  Chrome, desktop 1320px + 390px phone.
+- **Not built:** tax, attendance, hourly overtime, loans in instalments (give each advance, deduct in the month you want), pro-rating a part
+  month (use a Deduction), payslips by e-mail/WhatsApp, a "pay everyone" bulk action, per-role limits on amounts. **Not seen by anyone on
+  the live site or a physical phone.** Open question for the client: do they want "pay everyone for the month" in one go?
 
 ## Edge-case review of "Pay a shop" and Payroll, plus a live mobile bug (2026-09-16)
 

@@ -386,7 +386,7 @@ global.PAGES.profit = function () {
       card('Purchases', M.fmt(t.purchases), 'Received in the period') +
       card('After returns', M.fmt(t.netProfit), 'Returns took back ' + M.fmt(t.returnedRevenue)) +
       card('After expenses', M.fmt(t.netAfterExpenses),
-        'Expenses ' + M.fmt(t.expenses) + ' — this is net, not gross',
+        'Expenses ' + M.fmt(t.expenses) + (t.salaries ? ' · salaries ' + M.fmt(t.salaries) : '') + ' — this is net, not gross',
         t.netAfterExpenses >= 0 ? 'profit' : 'loss') +
     '</div>' +
     '<div class="bar">' +
@@ -518,6 +518,7 @@ D.addEventListener('click', function (e) {
                       Math.round(rep.totals.markup * 10) / 10],
                  ['Returns', rep.totals.returnedQty, M.toR(rep.totals.returnedRevenue), M.toR(rep.totals.returnedCost)],
                  ['Expenses', '', M.toR(rep.totals.expenses)],
+                 ['Salaries (Payroll)', '', M.toR(rep.totals.salaries || 0)],
                  ['Net after expenses', '', M.toR(rep.totals.netAfterExpenses)]]);
       var bytes = ERP.XLSX.build([{ name: 'Profit', rows: rows }],
         { title: 'Profit report', author: b.businessName });
