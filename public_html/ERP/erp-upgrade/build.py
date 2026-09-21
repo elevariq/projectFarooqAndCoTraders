@@ -56,6 +56,7 @@ MODULES = [
     ("40-nav.js",           "SIDEBAR — one icon per screen, collapsible groups, the logo as a mark (the name is written once)"),
     ("41-notifications.js", "NOTIFICATIONS — the bell opens a real panel (what needs attention, one tap to the screen that fixes it)"),
     ("42-layout.js",        "PAGE LAYOUT — the action buttons in one row beside the title; long lists in pages with Show more"),
+    ("43-remember-page.js", "STAY ON THIS SCREEN — a reload returns to the screen you were on, not the Dashboard"),
 ]
 
 MARKER = "<!-- FAROOQ & CO ERP — INVOICE, RECEIPT & DATABASE UPGRADE -->"
