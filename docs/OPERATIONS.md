@@ -229,6 +229,14 @@ changed on either site; only non-executed dev tooling was updated.
   done by whichever Claude session runs the script), then curls both live URLs to confirm `200`.
   The homepage has no build step, so it isn't included — see the one-line `scp` command in
   `CLAUDE.md` instead.
+- **`scripts/deploy-erp-from-clean-clone.sh`** (added 2026-09-21) — the usual way to run the above from a shared
+  working tree. `--check` is a read-only pre-flight (clean tree, on `main`, nothing unpushed/behind, test
+  dependencies present; exit 0 = ready). Without `--check` it clones the committed `main` to a temp folder,
+  copies `node_modules` in, runs that clone's `deploy-erp.sh` (so uncommitted edits by another session can
+  neither block nor leak into a deploy), then compares the md5 of the three `_app/` files on the server with
+  the build's and prints `md5 MATCH`. Log: `.git/deploy-logs/erp-latest.log` (ends `DEPLOY FINISHED` or
+  `DEPLOY FAILED`). Run it detached (10–15 min) — the `Start-Process` line is in the script header. It does
+  not clear the Hostinger cache (do that afterwards), deploy PHP (`deploy-api.sh`), commit or push.
 
 ## Scope explicitly not covered this session
 
