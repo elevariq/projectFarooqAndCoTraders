@@ -64,6 +64,14 @@ try {
     $raw = data_hydrate_json($db, ['meta']);
     check('1.4 {} and [] survive untouched in the raw text', strpos($raw, '"empty":{}') !== false && strpos($raw, '"arr":[]') !== false);
 
+    /* 1b ── recent=N: only the newest N rows, newest first (the Warehouse app's history list must not download years of movements) */
+    foreach (['zz_dc_r1', 'zz_dc_r2', 'zz_dc_r3'] as $i => $k) { commit($db, [put('meta', $k, ['k' => $k, 'v' => "r$i"], 0)]); usleep(40000); }
+    $rc = json_decode(data_hydrate_json($db, ['meta'], 2), true, 512);
+    check('1.5 recent=2 returns exactly the two newest rows, newest first', count($rc['stores']['meta']) === 2 && $rc['stores']['meta'][0][0] === 'zz_dc_r3' && $rc['stores']['meta'][1][0] === 'zz_dc_r2',
+        json_encode(array_map(fn($r) => $r[0], $rc['stores']['meta'])));
+    check('1.6 each row still carries its revision and document', $rc['stores']['meta'][0][1] === 1 && $rc['stores']['meta'][0][2]['v'] === 'r2');
+    check('1.7 without recent everything comes back (unchanged behaviour)', count(json_decode(data_hydrate_json($db, ['meta']), true, 512)['stores']['meta']) >= 4);
+
     /* 2 ── optimistic concurrency */
     [$st, $b] = commit($db, [put('meta', 'zz_dc_a', ['k' => 'zz_dc_a', 'v' => 'two'], 1)]);
     check('2.1 update with the right revision', $st === 200 && $b['revs'][0][2] === 2);

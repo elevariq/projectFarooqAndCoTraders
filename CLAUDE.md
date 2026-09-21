@@ -523,8 +523,11 @@ are done and live:
   sits next to the existing account chip. Includes an offline grace-period ticket (HMAC-signed
   server-side, but the signature can't be verified client-side since the secret never reaches
   the browser — only the ticket's own claimed expiry is enforced; documented in the module header
-  as the same category of limit as `22-users.js`'s own PIN comment) and a 15-minute idle lock
-  (re-verifies against the server if online, or a cached PBKDF2 password verifier if offline).
+  as the same category of limit as `22-users.js`'s own PIN comment). There WAS a 15-minute idle lock
+  here; **it was removed 2026-09-21 at the owner's request** (no idle lock on the screen, no idle
+  sign-out on the server — `docs/SERVER_DATA.md` §9). The sign-in screen that still comes back when a
+  session really ends (12 h cap, account switched off, signed out elsewhere) re-verifies against the
+  server if online, or a cached PBKDF2 password verifier if offline.
 - **Phase 3 — the login gate: LIVE and ENFORCING since 2026-09-20.** Sign-in is mandatory: the app
   and the customer/supplier master data embedded in it are no longer downloadable by anyone.
   (Correction to what this file and `31-auth.js` used to say: Phase 3 was **not** "flip `AUTH_MODE`
@@ -624,7 +627,8 @@ are done and live:
     `enforce-off` is the escape hatch; a real fix (per-IP+user throttling instead of a hard account
     lock) changes the login semantics and wants its own decision.
     (c) *The Warehouse app inside the launcher has no heartbeat/lock* — protected at load by the gate,
-    but it keeps running if the session ends mid-use (only the ERP watches the session).
+    but it keeps running if the session ends mid-use (only the ERP watches the session); its next save
+    says "sign in again". (It is on the company database since 2026-09-21 — see below.)
     (d) *Reloading a gated page with no signal fails* (a signed-in-only page can't be cached); an app
     that is already open keeps working offline within the grace ticket.
     (e) A page restored from the browser's back/forward cache after signing out shows its old screen
@@ -642,7 +646,7 @@ owner has since changed it (checked 2026-09-20).
 
 **Verified this session**: full existing test suite (24 harnesses, 1,196 checks) unaffected;
 new `test-auth-client.mjs` (25 checks) covers observe-mode fallback, login/logout, fail-closed
-permissions, a valid vs. an expired offline ticket, and both idle-lock unlock paths — all via a
+permissions, a valid vs. an expired offline ticket, and both unlock paths of the sign-in screen (the idle lock itself was removed 2026-09-21) — all via a
 mocked `fetch`, never depending on the live server. All 8 PHP files linted against the live
 server's actual PHP 8.3 binary before upload. Live smoke test via a real browser: public data
 now `403`, `_bootstrap.php`/`_session.php` return `403` on direct request, a full login round

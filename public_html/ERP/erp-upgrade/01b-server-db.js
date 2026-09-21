@@ -70,7 +70,10 @@ var SD = FDB.server = {
   failed: null,         /* the error of a commit that did not go through (blocks further saves) */
   cache: {},            /* store -> key -> { r: revision, t: JSON text, own: bool } */
   loaded: false,
-  requests: 0
+  requests: 0,
+  user: null,           /* who the server says is signed in: { id, role, name, username } */
+  hot: HOT_STORES,      /* stores re-read from the server at the start of every save that touches them (the Warehouse app adds `inventory`) */
+  onStale: null         /* optional: called INSTEAD of showing the "Someone else has saved" banner (the Warehouse app refreshes itself) */
 };
 
 /* ── small helpers ─────────────────────────────────────────────────────── */
@@ -164,6 +167,7 @@ function blockBoot(title, msg) {
 }
 function showStale() {
   if (!SD.stale) return;
+  if (typeof SD.onStale === 'function') { try { SD.onStale(); } catch (e) {} return; }
   overlay('fcsd-stale', 'Someone else has saved changes.', 'Refresh to see them before you continue.',
     [{ label: 'Refresh now', run: reload }], false);
 }
@@ -194,7 +198,7 @@ function decide() {
     if (res.status === 200 && d.backend === 'server') {
       if (d.available === false) return blockBoot('The server database is not reachable', 'Nothing was loaded, so nothing can be lost. Check the connection and try again.');
       if (d.empty) return blockBoot('The server database is empty', 'Start-up was stopped so nothing is created by mistake. The administrator must import the company data first.');
-      SD.csrf = d.csrf || null; SD.version = SD.seenVersion = d.version || 0;
+      SD.csrf = d.csrf || null; SD.version = SD.seenVersion = d.version || 0; SD.user = d.user || null;
       return 'server';
     }
     if (res.status === 200) { lsDel(STICKY_KEY); return 'browser'; }            /* the switch is off: data stays in this browser */
@@ -249,6 +253,30 @@ FDB.open = function () {
     startPolling();
     return FDB;
   });
+};
+
+/* Read only some stores (optionally only the newest N rows of them) and put them in the cache. The whole business
+   is NOT downloaded — the Warehouse app needs a handful of stores, not 46. Everything read this way carries its
+   revision, so a save based on it is checked exactly like one made by the office screens. */
+SD.loadPartial = function (stores, opts) {
+  opts = opts || {};
+  return request('read.php?stores=' + stores.join(',') + (opts.recent ? '&recent=' + opts.recent : ''), { timeout: 30000 }).then(function (res) {
+    if (res.status !== 200 || !res.data || !res.data.stores) throw Object.assign(new Error('The server returned status ' + res.status + ' while loading the data.'), { status: res.status });
+    stores.forEach(function (s) {
+      var fresh = {}; ((res.data.stores || {})[s] || []).forEach(function (row) { fresh[row[0]] = { r: row[1], t: J(row[2]), own: false }; });
+      SD.cache[s] = fresh;
+    });
+    if (opts.aux) { noteVersion(res.data.version); return res.data.version; }     /* a side read (e.g. one shop's invoices): it does not bring the rest up to date, so it must not clear "stale" */
+    SD.loaded = true; SD.stale = false;
+    if (typeof res.data.version === 'number') SD.version = SD.seenVersion = res.data.version;
+    var st = global.document && global.document.getElementById('fcsd-stale'); if (st) st.parentNode.removeChild(st);
+    return res.data.version;
+  });
+};
+/* the records of one store as the app sees them (parsed, each tagged with its revision) */
+SD.rows = function (store) {
+  var m = SD.cache[store] || {};
+  return Object.keys(m).map(function (k) { return tag(JSON.parse(m[k].t), m[k].r); });
 };
 
 var loading = null;

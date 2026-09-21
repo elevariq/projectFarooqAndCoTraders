@@ -58,6 +58,12 @@ MODULES = [
 MARKER = "<!-- FAROOQ & CO ERP — INVOICE, RECEIPT & DATABASE UPGRADE -->"
 KIT_MARKER = "<!-- FAROOQ & CO — UI KIT (shared with the Warehouse app) -->"
 KIT = "36-ui-kit.js"
+# The Warehouse app reads and writes the company database through the SAME driver the office app uses
+# (module 1 = the FDB interface, 1b = the server driver) plus its own small module (39). They must run BEFORE the
+# page's own script, which decides at start-up which backend to use.
+WH_MARKER = "<!-- FAROOQ & CO — WAREHOUSE DATA LAYER (server database, shared driver) -->"
+WH_MODULES = ["01-db.js", "01b-server-db.js", "39-warehouse-server.js"]
+WH_ANCHOR = "<script>\n/* ══ Icons"
 HEAD_MARKER = "<!-- FAROOQ & CO ERP — PRE-BOOT GUARD -->"
 PREBOOT = "00a-preboot.js"
 
@@ -109,6 +115,24 @@ def inject_kit(html: str) -> str:
     return html[:idx] + KIT_MARKER + "<script>\n" + kit + "\n</script>\n" + html[idx:]
 
 
+def inject_warehouse_data(html: str) -> str:
+    """Put the shared database driver in front of the Warehouse app's own script. Repeatable: an earlier copy is stripped first."""
+    if WH_MARKER in html:
+        start = html.index(WH_MARKER)
+        end = html.index("</script>", start) + len("</script>")
+        html = html[:start] + html[end:].lstrip("\r\n")
+    parts = []
+    for name in WH_MODULES:
+        src = (MODDIR / name).read_text(encoding="utf-8")
+        if "</script" in src.lower():
+            sys.exit(f"{name} contains a literal </script> and would break the page")
+        parts.append(f"/* ── {name} ── */\n{src}")
+    if html.count(WH_ANCHOR) != 1:
+        sys.exit("could not find the start of the Warehouse app's own script")
+    idx = html.index(WH_ANCHOR)
+    return html[:idx] + WH_MARKER + "<script>\n" + "\n".join(parts) + "\n</script>\n" + html[idx:]
+
+
 def embed(launcher: str, key: str, title: str, page: str) -> str:
     b64 = base64.b64encode(page.encode("utf-8")).decode("ascii")
     out, n = re.subn(
@@ -136,7 +160,7 @@ def main() -> None:
 
     # rebuild the launcher with the upgraded ERP and the Warehouse app embedded
     launcher = (BUILD / "index.html").read_text(encoding="utf-8")
-    pwa = inject_kit((BUILD / "farooq-co-warehouse-pwa.html").read_text(encoding="utf-8"))
+    pwa = inject_kit(inject_warehouse_data((BUILD / "farooq-co-warehouse-pwa.html").read_text(encoding="utf-8")))
     new_launcher = embed(embed(launcher, "erp", "Office", upgraded), "pwa", "Warehouse", pwa)
     (OUT / "index.html").write_text(new_launcher, encoding="utf-8")
 

@@ -9,7 +9,8 @@ $session = data_guard(false, true);
 $backend = data_backend($CFG);
 $out = ['backend' => $backend, 'available' => true, 'version' => 0, 'empty' => false,
         'csrf' => csrf_token_for($CFG, hash('sha256', $_COOKIE[auth_cookie_name($CFG)] ?? '')),
-        'user' => ['id' => $session['uid'], 'role' => $session['role']]];
+        'user' => ['id' => $session['uid'], 'role' => $session['role'],
+                   'name' => (string)($session['display_name'] ?: $session['username']), 'username' => (string)$session['username']]];
 if ($backend === 'server') {
     try { $db = data_pdo($CFG); $out['version'] = data_version($db); $out['empty'] = data_is_empty($db); }
     catch (Throwable $e) { error_log('[erp-data] status: ' . $e->getMessage()); $out['available'] = false; }

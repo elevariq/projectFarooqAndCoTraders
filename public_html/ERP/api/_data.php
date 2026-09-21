@@ -65,15 +65,18 @@ function data_is_empty(PDO $db): bool {
  * re-encoded), so what the browser receives is byte-for-byte what was saved.
  *   {"version":N,"stores":{"invoices":[["pk",rev,{doc}],...],...}}
  * $only limits it to some stores (the browser refreshes just the counters before a save).
+ * $recent (only with $only) keeps just the newest N rows of each store asked for, newest first — the Warehouse
+ * app shows the last few stock movements and must not download years of them.
  */
-function data_hydrate_json(PDO $db, ?array $only = null): string {
+function data_hydrate_json(PDO $db, ?array $only = null, ?int $recent = null): string {
     $manifest = data_manifest();
     $version = data_version($db);          // read BEFORE the data: a commit racing us only makes the client refresh once more
     $parts = [];
     foreach ($manifest as $store => $def) {
         if ($only !== null && !in_array($store, $only, true)) continue;
         $rows = [];
-        $st = $db->query('SELECT pk, rev, doc FROM `' . $def['table'] . '`');
+        $st = $db->query('SELECT pk, rev, doc FROM `' . $def['table'] . '`' .
+            ($only !== null && $recent !== null && $recent > 0 ? ' ORDER BY row_updated_at DESC, pk DESC LIMIT ' . (int)$recent : ''));
         while ($r = $st->fetch()) {
             $rows[] = '[' . json_encode((string)$r['pk'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . ',' . (int)$r['rev'] . ',' . $r['doc'] . ']';
         }

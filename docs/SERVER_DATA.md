@@ -1,4 +1,4 @@
-# Server data — how the ERP keeps its data now (current as of 2026-09-20)
+# Server data — how the ERP keeps its data now (current as of 2026-09-21)
 
 This is the one document to read to understand, operate, or change the way the ERP stores its business data.
 Older notes in `CLAUDE.md`, `docs/OPERATIONS.md` and `docs/MYSQL_MIGRATION_PLAN.md` give the history and the
@@ -10,6 +10,7 @@ exact commands used; **where they disagree with this file, this file wins.**
 |---|---|
 | **Business data** (invoices, purchases, payments, returns, stock, shops, products, suppliers, payroll, milling, audit…) | The MySQL/MariaDB database `u943531942_facotraders` on Hostinger (`srv1774.hstgr.io`) — **the only copy that counts.** |
 | **Logins** (accounts, sessions, roles) | A different database, `u943531942_erpauth`. Never mixed with business data. |
+| **The Warehouse app** (the launcher's *Warehouse* tile: receive, dispatch, stock) | The same database, through the same driver plus module 39 — nothing about stock is kept on the device any more. Section 8. |
 | **The app code** | `public_html/ERP/_app/` on the server, served through the login gate (`api/gate.php`). |
 | **Per-browser leftovers** | Each browser still has an old local copy (IndexedDB `farooqco_erp_ledger`) frozen at the moment it switched. **It is no longer used** and is not a backup to rely on. A few per-browser values (`sessionUserId`, `lastSaveAt`, `appVersion`, `adoptedFrom`) stay in that browser on purpose. |
 
@@ -142,11 +143,9 @@ before deleting — `--rehearse` proves the delete works and rolls it back), the
 * **Whole-data download on every page load** (~1 MB now). Fine for years at this volume; revisit (delta loads) if it grows ~50×.
 * **The `legacy` scratch lists** (activity feed, log, devices, WhatsApp, old sequence counters) are last-writer-wins: a person's recent
   activity-feed entries can be replaced by another's. They are display state, not accounts.
-* **"Everything is on the database" is true for the ERP** (every screen's business data goes through `FDB` → the API; the only module that
-  talks to the data API is the driver). **The Warehouse app** inside the launcher is the exception: it keeps its own data in that browser's
-  `localStorage` (`DB_KEY` in `farooq-co-warehouse-pwa.html`) and was deliberately not changed — it is not on the database, not shared
-  between devices, and has no session watch. The per-browser values listed in section 1 and a few UI keys (sidebar width, sign-in ticket) are
-  also browser-only by design.
+* **Everything is on the database** — the ERP (every screen's business data goes through `FDB` → the API) **and, since 2026-09-21, the
+  Warehouse app** (section 8). What stays in a browser, by design: the per-browser values listed in section 1, a few UI keys (sidebar
+  width, sign-in ticket, "this device runs on the server"), and the frozen old local copies. The Warehouse page has no session watch.
 * **Backups are automatic and on-account only** (section 4): no off-site copy is made for you.
 * **Not verified live yet:** a real invoice/receipt/purchase entered by a person through the server path, and two people using it at once
   on the real site. The save mechanism itself was exercised live (create → update → delete of a throwaway record, counters read).
@@ -160,3 +159,66 @@ switch, empty and import tools; cutover with live verification. Full suite: 0 fa
 failures seen earlier were load flakes, confirmed by re-running alone). Two real multi-user problems were found by the new tests and fixed
 before any user hit them (the app's routine full re-save and stored roll-ups; see section 5). Commits: `c438d70`, `b6e2f94`, `221e053`,
 `1d50f68`, `8dedac7`, `2f01a49`.
+
+## 8. The Warehouse app is on the database too (2026-09-21)
+
+**What it was.** The launcher's *Warehouse* tile kept its own stock map in the browser (`localStorage` key `farooqco_erp_v1`). The office app
+rebuilt that record from its own tables, so a bag "received" or "dispatched" in the warehouse app never reached the real stock. Its "works
+without internet, uploads by itself" text was also untrue: the upload queue lived in memory only, so an entry made without signal was lost.
+
+**What it is now** (switch = `server`). The Warehouse page reads the company database and saves to it through **the same driver** the office
+uses (`01b-server-db.js`: atomic, revision-checked commits, append-only audit log), plus one small module of its own,
+`erp-upgrade/39-warehouse-server.js`. `build.py` puts modules 1, 1b and 39 in front of the page's own script; the page then asks the
+server which backend to use (`FcWH.start()`), exactly as the office app does. With the switch **off** (or no server API) the page behaves as it
+always did — the rollback is the same one line.
+
+* **What it downloads.** Not the whole business: `products, warehouses, regions, customers, suppliers, inventory, business, sequences` in one
+  `read.php` call and the newest 40 stock movements in another (`read.php?stores=stockMovements&recent=40` — new optional parameter, 1–1000,
+  newest first). About 340 KB today before compression (the server compresses it) — against ~1 MB for the office app. It refreshes itself when somebody else saves (version poll, silently, never while the person is typing
+  or saving); on the entry screens it waits until they leave.
+* **What an entry becomes** — the same records the office screens make (`ERP.StockDocs.save`, `07-transactions.js`); `test-warehouse-server.mjs`
+  runs both and compares every row, so they cannot drift apart unnoticed:
+  * *Receive stock* → a **RECEIVE** stock document `RCV-YYYY-nnnnnn`: its line, one `ADJUSTMENT_IN` movement, the stock row, an audit row
+    ("Stock received posted", with the signed-in person and `source: Warehouse app`). **It adds bags only** — the supplier's bill is money and is
+    entered in the office.
+  * *Dispatch stock* → a **DISPATCH** stock document `DSP-YYYY-nnnnnn` naming the shop (the shop is required, as in the office). New step
+    **"Is this load for an invoice?"**: pick the shop's invoice if it was already made — its bags were taken out of stock when it was made, so
+    the dispatch is only *linked* (no second deduction; the invoice gets its dispatch number, `CONFIRMED → DISPATCHED`). With "No invoice yet"
+    the dispatch takes the bags out itself and refuses more than the shelf holds (unless the owner switched on *allow negative stock*).
+* **Made safe the same way as the office.** The stock rows and the number counters are re-read from the server at the start of *every* save
+  (`FDB.server.hot`), so the "only N bags available" check is against the truth and two people cannot take the same number or sell the same
+  last bag; if a race is still lost inside the commit, the whole save is refused and the same blocking "NOT saved — Reload" notice appears.
+  A business refusal (not enough bags, no shop) is shown on the page and is *not* a broken save. Tapping Save twice makes one document.
+* **No offline entry** (decision, same as the office): with no signal nothing is "saved for later" — the page says so and sends nothing; it
+  never falls back to the old browser copy (a device that has run on the server remembers that: `farooqco_backend`).
+* **Small fixes made on the way:** shop names / warehouse names / product names typed by staff are HTML-escaped before they are drawn; a
+  movement of a product that was later switched off no longer breaks the history list; a shop without a region no longer crashes the
+  dispatch screen; the shop list (409 buttons) now has a search box and shows the first 40; "Movements today" counts today's; the launcher's
+  "works without internet" wording is corrected.
+
+**Decisions taken (recommended answers — change them only with the owner's word):**
+
+| Question | Chosen | Why |
+|---|---|---|
+| Second API for the warehouse? | No — same driver, same commit rules | One set of rules to trust; the driver is already tested for races. |
+| Receive = a purchase? | No — a `RECEIVE` stock document, bags only | The warehouse person has no prices; a purchase needs a bill, a price and a payable. |
+| Offline entry? | No | A dispatch made offline could not be checked against the shelf; the old queue was never real. |
+| Dispatch double-deduction? | Offer the shop's invoice; if linked, do not deduct again | The office's own rule; otherwise a sale would take the same bags out twice. |
+| Staff identity on entries | The signed-in account's display name | Audit rows say who, not "Owner". |
+
+**Office-side rule to remember (double counting):** a warehouse *receipt* adds bags. If the office then also enters the supplier's purchase
+with the bags received, they are counted twice. Enter the bill with **Received = 0** (bill only) — or leave the warehouse receipt out and let
+the purchase add the stock. The reverse is the invoice case above, which the dispatch step already guards.
+
+**Not done / follow-ups:** the warehouse cannot receive *against a purchase* (`Purchases.receiveMore`) — that would remove the double-counting
+caution; one product per entry (as before); no per-role rule for who may dispatch (roles are enforced only in the office app — section 6);
+the warehouse page has no session watch (a session that ends mid-use shows "sign in again" at the next save); the history list is the last 40
+movements.
+
+## 9. Signing in: no idle lock (2026-09-21)
+
+At the owner's request nobody is asked for the password again just because they stopped working. Removed: the 15-minute screen lock in
+`31-auth.js` and the server's 2-hour idle sign-out (`_session.php`: no idle timeout unless `'idle_ttl_min' => N` (N > 0) is set in the
+server config; the live config was set to `0`). What still asks again: the session's **12-hour cap** (`absolute_ttl_min`), an owner
+switching the account off, or signing out on another device — the app then shows "Your session has ended. Sign in again" without a reload.
+To bring an idle limit back: set `'idle_ttl_min' => 120` (minutes) in `private/erp-config.php` — no redeploy needed.

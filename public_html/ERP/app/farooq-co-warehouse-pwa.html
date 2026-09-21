@@ -652,10 +652,13 @@ const stockTotal=pid=>WAREHOUSES.reduce((a,w)=>a+stockAt(pid,w.id),0);
 const whTotal=wid=>PRODUCTS.reduce((a,p)=>a+stockAt(p.id,wid),0);
 const allStock=()=>PRODUCTS.reduce((a,p)=>a+stockTotal(p.id),0);
 const catTotal=c=>PRODUCTS.filter(p=>p.cat===c).reduce((a,p)=>a+stockTotal(p.id),0);
+const otherBags=()=>allStock()-catTotal('چاول')-catTotal('آٹا');      /* wheat, chokar and the like: in the total, in neither card */
 const level=p=>{const q=stockTotal(p.id);return q===0?'out':(p.min&&q<=p.min)?'low':'ok';};
 const capPct=p=>{const q=stockTotal(p.id);return q?Math.min(100,Math.max(6,Math.round(q/(p.min?p.min*2:Math.max(q,1))*100))):0;};
 
-const SUPPLIERS=['Mia Hadir Flour Mill','Itifaq Flour Mill','Zam Zam Flour Mill','Sahiwal Flour Mill'];
+let SUPPLIERS=['Mia Hadir Flour Mill','Itifaq Flour Mill','Zam Zam Flour Mill','Sahiwal Flour Mill'].map(n=>({id:n,name:n}));
+const supName=id=>(SUPPLIERS.find(s=>s.id===id)||{}).name||id||'';
+let SERVER=false;                       /* true when the company server database is in use (module 39) */
 /* Shops come from the office system; none invented here */
 let SHOPS=[];
 let HISTORY=[];
@@ -665,8 +668,8 @@ const needAttention=()=>PRODUCTS.filter(p=>level(p)!=='ok').length;
 /* ══ State ═══════════════════════════════════════ */
 let S={screen:'home',tab:'products',q:'',prod:null,step:1,
   add:{prod:null,q:'',qty:100,supplier:'',wid:null},
-  out:{shop:null,prod:null,wid:null,qty:50},
-  last:null};
+  out:{shop:null,prod:null,wid:null,qty:50,inv:'',invs:null},
+  last:null,busy:false,err:'',sq:''};
 /* Offline queue — each entry carries full context and an idempotency key (§21) */
 let QUEUE=[];
 function queueOp(op){
@@ -715,8 +718,8 @@ SC.home=()=>{
     <p class="lead">${nf(allStock())} bags across ${WAREHOUSES.length} warehouses.</p></div></div>
 
   ${document.body.classList.contains('off')?`<div class="banner warn" style="margin-bottom:18px">${I('wifiOff')}
-    <div><b>No internet right now</b><p>Keep working. Every entry is saved on this device with its warehouse
-    and shop, and uploads by itself when the internet comes back.</p></div></div>`:''}
+    <div><b>No internet right now</b><p>${SERVER?'Stock is kept on the company server, so nothing can be received or dispatched until the connection is back. Nothing is stored on this device.'
+      :'Keep working. Every entry is saved on this device with its warehouse and shop, and uploads by itself when the internet comes back.'}</p></div></div>`:''}
 
   <div class="bento enter">
     <div class="b tall"><div class="ic">${I('box')}</div>
@@ -730,13 +733,13 @@ SC.home=()=>{
       <div class="x">${PRODUCTS.filter(p=>p.cat==='چاول').length} brands</div></div>
     <div class="b"><div class="ic">${I('layers')}</div>
       <div class="v num">${nf(catTotal('آٹا'))}</div><div class="l">Flour bags</div>
-      <div class="x">${PRODUCTS.filter(p=>p.cat!=='چاول').length} bag sizes</div></div>
+      <div class="x">${PRODUCTS.filter(p=>p.cat==='آٹا').length} bag sizes${otherBags()>0?' · '+nf(otherBags())+' other bags':''}</div></div>
     <div class="b ${need?'am':'em'}"><div class="ic">${I(need?'alert':'checkC')}</div>
       <div class="v num">${need}</div><div class="l">Need stock</div>
       <div class="x">${need?'Low or empty':'All stocked'}</div></div>
     <div class="b"><div class="ic">${I('history')}</div>
-      <div class="v num">${HISTORY.length}</div><div class="l">Movements today</div>
-      <div class="x">${QUEUE.filter(q=>!q.synced).length} waiting to upload</div></div>
+      <div class="v num">${SERVER?HISTORY.filter(x=>x.today).length:HISTORY.length}</div><div class="l">Movements today</div>
+      <div class="x">${SERVER?'saved on the server':QUEUE.filter(q=>!q.synced).length+' waiting to upload'}</div></div>
   </div>
 
   <div class="btns" style="margin-top:20px">
@@ -895,8 +898,8 @@ SC.add=()=>{
     <div class="qty-in"><input class="inp num" id="qty" value="${a.qty}" inputmode="numeric" aria-label="Bags"></div>
     <div class="chips">${[50,100,200,500].map(v=>`<button data-setqty="${v}">${v} bags</button>`).join('')}</div></div>`;
   if(n===3)body=`<div class="field"><label>Who sent it?</label>
-    <div class="picks">${SUPPLIERS.map(s=>`<button class="pick" aria-pressed="${a.supplier===s}" data-sup="${s}">
-      <span class="thumb">${I('mill')}</span><span style="flex:1"><b>${s}</b></span>
+    <div class="picks">${SUPPLIERS.map(s=>`<button class="pick" aria-pressed="${a.supplier===s.id}" data-sup="${s.id}">
+      <span class="thumb">${I('mill')}</span><span style="flex:1"><b>${s.name}</b></span>
       <span class="tk">${I('checkC',2)}</span></button>`).join('')}</div></div>`;
   if(n===4)body=`<div class="field"><label>Which warehouse is it going into?</label>
     <div class="picks">${WAREHOUSES.map(w=>`<button class="pick" aria-pressed="${a.wid===w.id}" data-awh="${w.id}">
@@ -906,10 +909,10 @@ SC.add=()=>{
     ${a.wid?`<div class="review" style="margin-top:18px">
       <div class="r"><span>Product</span><b>${u(p.ur)} <span class="rn">${p.en}</span></b></div>
       <div class="r"><span>Bags</span><b class="num">${nf(a.qty)}</b></div>
-      <div class="r"><span>Supplier</span><b>${a.supplier}</b></div>
+      <div class="r"><span>Supplier</span><b>${supName(a.supplier)}</b></div>
       <div class="r"><span>Into</span><b>${whName(a.wid)}</b></div>
       <div class="r"><span>Stock after</span><b class="num">${nf(stockAt(p.id,a.wid)+a.qty)} bags</b></div>
-    </div>`:''}</div>`;
+    </div>${SERVER?`<p class="hint" style="margin-top:12px">This adds the bags to stock only. The supplier’s bill is entered in the office.</p>`:''}${errBox()}`:''}</div>`;
   const block=(n===1&&!a.prod)||(n===2&&a.qty<1)||(n===3&&!a.supplier)||(n===4&&!a.wid);
   return `
   ${n>1?`<button class="back" data-back="1">${I('left',2)}Previous step</button>`
@@ -921,7 +924,7 @@ SC.add=()=>{
   <div class="btns" style="margin-top:22px">
     ${n<4?`<button class="btn em lg" data-next="1" ${block?'disabled':''}>
         ${block?'Choose to continue':'Next step'}${block?'':I('right',2)}</button>`
-      :`<button class="btn em lg" data-save="1" ${block?'disabled':''}>${I('check',2)}Add ${nf(a.qty)} bags to ${a.wid?whName(a.wid):'warehouse'}</button>`}
+      :`<button class="btn em lg" data-save="1" ${block||S.busy?'disabled':''}>${I('check',2)}${S.busy?'Saving…':'Add '+nf(a.qty)+' bags to '+(a.wid?whName(a.wid):'warehouse')}</button>`}
     <button class="btn lg" data-go="home">Cancel</button>
   </div>`;
 };
@@ -929,37 +932,62 @@ SC.add=()=>{
 /* ══ Dispatch stock ══ */
 SC.send=()=>{
   const o=S.out, p=o.prod?prodOf(o.prod):null, shop=SHOPS.find(s=>s.id===o.shop);
-  const have=p&&o.wid?stockAt(p.id,o.wid):0, over=p&&o.qty>have;
-  const ready=p&&o.wid&&o.qty>0&&!over&&(SHOPS.length?!!o.shop:true);
+  const selInv=SERVER&&o.inv?(o.invs||[]).find(v=>v.id===o.inv):null;
+  const linked=!!selInv&&selInv.taken;                           /* the invoice already took the bags out of stock: this dispatch only records the delivery */
+  const have=p&&o.wid?stockAt(p.id,o.wid):0, over=!!p&&!linked&&o.qty>have;
+  const ready=p&&o.wid&&o.qty>0&&!over&&(SHOPS.length?!!o.shop:!SERVER)&&!S.busy;
+  const sq=(S.sq||'').toLowerCase().trim();
+  const hit=SHOPS.filter(s=>!sq||(s.sh+' '+((regionOf(s.region)||{}).en||'')).toLowerCase().includes(sq));
+  const shopsShown=hit.slice(0,40);
+  const reg=shop?regionOf(shop.region):null;
+  let n=0; const step=()=>++n;
   return `
   <button class="back" data-go="home">${I('left',2)}Back to home</button>
   <div class="head"><div class="grow"><h1>Dispatch stock</h1>
     <p class="lead">Bags leaving a warehouse for a shop</p></div></div>
-  ${!SHOPS.length?`<div class="banner warn" style="margin-bottom:18px">${I('alert')}
+  ${!SHOPS.length?(SERVER
+    ?`<div class="banner warn" style="margin-bottom:18px">${I('alert')}
+    <div><b>No shops in the company records yet</b><p>A dispatch has to name the shop. The office adds shops under Master data.</p></div></div>`
+    :`<div class="banner warn" style="margin-bottom:18px">${I('alert')}
     <div><b>No shops on this device yet</b><p>Shops and their regions come from the office system.
-    You can still record the dispatch — the office will attach the shop.</p></div></div>`:''}
+    You can still record the dispatch — the office will attach the shop.</p></div></div>`):''}
   <div class="sendgrid">
     <div class="panel" style="padding:22px">
-      ${SHOPS.length?`<div class="field"><label>1. Which shop?</label>
-        <div class="picks">${SHOPS.map(s=>`<button class="pick" aria-pressed="${o.shop===s.id}" data-oshop="${s.id}">
+      ${SHOPS.length?`<div class="field"><label>${step()}. Which shop?</label>
+        <label class="srch" style="margin-bottom:12px">${I('search')}
+          <input id="sq" value="${E(S.sq||'')}" placeholder="Search shop or area" aria-label="Search shop" autocomplete="off"></label>
+        <div class="picks">${shopsShown.map(s=>`<button class="pick" aria-pressed="${o.shop===s.id}" data-oshop="${s.id}">
           <span class="thumb">${I('shop')}</span>
           <span style="flex:1"><b>${s.sh}</b><span>${regionOf(s.region)?regionOf(s.region).ur+' · '+regionOf(s.region).en:'No region'}</span></span>
-          <span class="tk">${I('checkC',2)}</span></button>`).join('')}</div>
-        ${shop?`<p class="hint" style="margin-top:12px">Region: <b>${regionOf(shop.region).en} — ${u(regionOf(shop.region).ur)}</b> (filled in automatically)</p>`:''}
+          <span class="tk">${I('checkC',2)}</span></button>`).join('')||`<p class="hint">No shop matches “${E(S.sq||'')}”.</p>`}</div>
+        ${hit.length>shopsShown.length?`<p class="hint" style="margin-top:10px">Showing ${shopsShown.length} of ${hit.length} — type to narrow the list.</p>`:''}
+        ${shop&&reg?`<p class="hint" style="margin-top:12px">Region: <b>${reg.en} — ${u(reg.ur)}</b> (filled in automatically)</p>`:''}
       </div>`:''}
-      <div class="field"><label>${SHOPS.length?2:1}. From which warehouse?</label>
+      ${SERVER&&shop?`<div class="field"><label>${step()}. Is this load for an invoice?</label>
+        <p class="hint">If the invoice was already made, pick it — its bags were taken out of stock when it was made, so they are not taken out twice.
+          Otherwise choose “No invoice yet” and this dispatch takes the bags out of stock.</p>
+        <div class="picks"><button class="pick" aria-pressed="${!o.inv}" data-oinv="">
+          <span class="thumb">${I('box')}</span><span style="flex:1"><b>No invoice yet</b><span>This dispatch takes the bags out of stock</span></span>
+          <span class="tk">${I('checkC',2)}</span></button>
+          ${(o.invs||[]).map(v=>`<button class="pick" aria-pressed="${o.inv===v.id}" data-oinv="${v.id}">
+            <span class="thumb">${I('layers')}</span>
+            <span style="flex:1"><b>${v.no}</b><span>${v.date} · ${nf(v.bags)} bags${v.dispatched?' · already sent as '+v.dispatched:''}${v.taken?'':' · stock not taken yet'}</span></span>
+            <span class="tk">${I('checkC',2)}</span></button>`).join('')}
+        </div>${o.invs===null?`<p class="hint" style="margin-top:10px">Looking for this shop’s invoices…</p>`:''}
+      </div>`:''}
+      <div class="field"><label>${step()}. From which warehouse?</label>
         <div class="picks">${WAREHOUSES.map(w=>`<button class="pick" aria-pressed="${o.wid===w.id}" data-owh="${w.id}">
           <span class="thumb">${I('box')}</span>
           <span style="flex:1"><b>${w.name}</b><span>${nf(whTotal(w.id))} bags held</span></span>
           <span class="tk">${I('checkC',2)}</span></button>`).join('')}</div></div>
-      <div class="field"><label>${SHOPS.length?3:2}. Which product?</label>
-        <div class="picks">${PRODUCTS.filter(x=>!o.wid||stockAt(x.id,o.wid)>0).map(x=>`
+      <div class="field"><label>${step()}. Which product?</label>
+        <div class="picks">${PRODUCTS.filter(x=>!o.wid||linked||stockAt(x.id,o.wid)>0).map(x=>`
           <button class="pick" aria-pressed="${o.prod===x.id}" data-oprod="${x.id}">
             <span class="thumb">${I('bag')}</span>
             <span style="flex:1"><b>${u(x.ur)}</b><span>${x.en}${o.wid?' · '+nf(stockAt(x.id,o.wid))+' bags here':''}</span></span>
             <span class="tk">${I('checkC',2)}</span></button>`).join('')
           ||`<p class="hint">This warehouse has no stock yet. Receive stock first.</p>`}</div></div>
-      <div class="field" style="margin-bottom:0"><label>${SHOPS.length?4:3}. How many bags?</label>
+      <div class="field" style="margin-bottom:0"><label>${step()}. How many bags?</label>
         <div class="qty-in"><input class="inp num" id="oqty" value="${o.qty}" inputmode="numeric" aria-label="Bags"></div>
         <div class="chips">${[25,50,100,200].map(v=>`<button data-setoqty="${v}">${v} bags</button>`).join('')}</div></div>
     </div>
@@ -968,14 +996,16 @@ SC.send=()=>{
         <div class="r"><span>In ${o.wid?whName(o.wid):'warehouse'}</span><b class="num">${p&&o.wid?nf(have):'—'}</b></div>
         <div class="r"><span>Sending</span><b class="num">${p?nf(o.qty):'—'}</b></div>
         <div class="sep"></div>
-        <div class="fin">Left after sending</div>
+        ${linked?`<div class="fin">Stock is not taken out again</div><div class="cap2">the invoice already did</div>`
+          :`<div class="fin">Left after sending</div>
         <div class="big num">${p&&o.wid?nf(Math.max(0,have-o.qty)):'—'}</div>
-        <div class="cap2">Bags</div>
+        <div class="cap2">Bags</div>`}
       </div>
       ${over?`<div class="warn">${I('alert',2)}<div>${whName(o.wid)} only has ${nf(have)} bags of ${p.en}.</div></div>`:''}
+      ${errBox()}
       <button class="btn em lg blk" style="margin-top:18px" data-send="1" ${ready?'':'disabled'}>
-        ${I('truck',2)}${!o.wid?'Choose a warehouse':!p?'Choose a product':over?'Too many bags':'Confirm dispatch'}</button>
-      <p class="lead" style="text-align:center;font-size:14px;margin-top:12px">Stock leaves the warehouse as soon as you confirm.</p>
+        ${I('truck',2)}${S.busy?'Saving…':!o.wid?'Choose a warehouse':!p?'Choose a product':over?'Too many bags':'Confirm dispatch'}</button>
+      <p class="lead" style="text-align:center;font-size:14px;margin-top:12px">${linked?'This records the delivery against the invoice.':'Stock leaves the warehouse as soon as you confirm.'}</p>
     </div>
   </div>`;
 };
@@ -986,7 +1016,7 @@ SC.done=()=>{
     <h1>${d.title}</h1>
     <p class="to">${d.body}</p>
     <div class="ok-card"><div class="r"><span>Result</span><b>${d.note}</b></div>
-      <div class="r"><span>Saved</span><b>${document.body.classList.contains('off')?'On this device — will upload':'Uploaded'}</b></div></div>
+      <div class="r"><span>Saved</span><b>${SERVER?'On the company server'+(d.ref?' · '+d.ref:''):document.body.classList.contains('off')?'On this device — will upload':'Uploaded'}</b></div></div>
     <div class="btns" style="justify-content:center">
       <button class="btn em lg" data-go="${d.again[1]}">${d.again[0]}</button>
       <button class="btn lg" data-go="home">Go to home</button></div></div>`;
@@ -1030,8 +1060,10 @@ function go(s){
   S.screen=s;
   if(s==='add'){S.step=1;S.add.q='';}
   if(s==='stock'||s==='home')S.q='';
+  S.err='';if(s==='send')S.sq='';
   paint();
   document.querySelector('.canvas').scrollTop=0;window.scrollTo(0,0);
+  if(SERVER&&FcWH.stale)catchUp(true);
 }
 function toast(msg){
   let t=document.getElementById('toast');
@@ -1136,24 +1168,28 @@ document.addEventListener('click',e=>{
   if(h('[data-save]')&&!h('[data-save]').disabled){
     const a2=S.add, pr=prodOf(a2.prod);
     if(!pr||!a2.wid||a2.qty<1){toast('Choose a product, warehouse and quantity');return;}
+    if(SERVER){saveServer('RECEIVE');return;}
     STOCKMAP[skey(pr.id,a2.wid)]=stockAt(pr.id,a2.wid)+a2.qty;
-    HISTORY.unshift({t:'in',pid:pr.id,wid:a2.wid,qty:a2.qty,who:a2.supplier,region:null,when:'Just now'});
-    queueOp({type:'RECEIVE',productId:pr.id,warehouseId:a2.wid,quantity:a2.qty,supplier:a2.supplier});
-    dbPush({t:stampNow(),iso:'2026-09-06',pid:pr.id,wid:a2.wid,delta:a2.qty,kind:'Purchase',ref:'',note:a2.supplier});
-    S.last={title:'Stock received',body:`${nf(a2.qty)} bags of ${pr.en} added to ${whName(a2.wid)} from ${a2.supplier}.`,
+    HISTORY.unshift({t:'in',pid:pr.id,wid:a2.wid,qty:a2.qty,who:supName(a2.supplier),region:null,when:'Just now'});
+    queueOp({type:'RECEIVE',productId:pr.id,warehouseId:a2.wid,quantity:a2.qty,supplier:supName(a2.supplier)});
+    dbPush({t:stampNow(),iso:'2026-09-06',pid:pr.id,wid:a2.wid,delta:a2.qty,kind:'Purchase',ref:'',note:supName(a2.supplier)});
+    S.last={title:'Stock received',body:`${nf(a2.qty)} bags of ${pr.en} added to ${whName(a2.wid)} from ${supName(a2.supplier)}.`,
       note:`${whName(a2.wid)} now holds ${nf(stockAt(pr.id,a2.wid))} bags.`,again:['Receive more','add']};
     S.add={prod:null,q:'',qty:100,supplier:'',wid:null};S.step=1;
     go('done');toast('Stock received');return;
   }
 
   /* dispatch flow */
-  const osh=h('[data-oshop]'); if(osh){S.out.shop=osh.dataset.oshop;paint();return;}
+  const osh=h('[data-oshop]'); if(osh){pickShop(osh.dataset.oshop);return;}
+  const oinv=h('[data-oinv]'); if(oinv){S.out.inv=oinv.dataset.oinv;S.err='';paint();return;}
+  if(h('[data-retry]')){startApp();return;}
   const owh=h('[data-owh]'); if(owh){S.out.wid=owh.dataset.owh;paint();return;}
   const opk=h('[data-oprod]'); if(opk){S.out.prod=opk.dataset.oprod;paint();return;}
   const oq=h('[data-setoqty]'); if(oq){S.out.qty=+oq.dataset.setoqty;paint();return;}
   const sendBtn=h('[data-send]');
   if(sendBtn&&!sendBtn.disabled){
     const o=S.out, pr=prodOf(o.prod), shop=SHOPS.find(x=>x.id===o.shop);
+    if(SERVER){saveServer('DISPATCH');return;}
     const have=stockAt(pr.id,o.wid);
     if(o.qty>have){toast(`${whName(o.wid)} only has ${nf(have)} bags`);return;}
     STOCKMAP[skey(pr.id,o.wid)]=have-o.qty;
@@ -1177,6 +1213,8 @@ document.addEventListener('input',e=>{
     const pos=e.target.selectionStart;paint();
     const n=document.getElementById('q');if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}return;}
   if(id==='cq'){S.cq=e.target.value;S.ci=0;paintCmdk();return;}
+  if(id==='sq'){S.sq=e.target.value;const pos=e.target.selectionStart;paint();
+    const n=document.getElementById('sq');if(n){n.focus();try{n.setSelectionRange(pos,pos)}catch(_){}}return;}
   if(id==='aq'){S.add.q=e.target.value;
     const ph=document.getElementById('pickHost');if(ph)ph.innerHTML=addPicks();return;}
   if(id==='qty'){S.add.qty=+e.target.value.replace(/\D/g,'')||0;return;}
@@ -1206,6 +1244,89 @@ document.addEventListener('keydown',e=>{
 const canvas=document.querySelector('.canvas');
 canvas.addEventListener('scroll',()=>document.getElementById('tbar').classList.toggle('stuck',canvas.scrollTop>6));
 
+/* ══ Company server database (module 39) ═══════════════════════════════════════
+   When the server says the company database is in use, everything above runs on ITS data and every entry is one
+   save to the server (no "saved on this device"). When the switch is off the page behaves exactly as it always did. */
+const E=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+const unE=s=>String(s==null?'':s).replace(/&quot;/g,'"').replace(/&gt;/g,'>').replace(/&lt;/g,'<').replace(/&amp;/g,'&');
+const errBox=()=>S.err?`<div class="banner warn" style="margin:14px 0">${I('alert')}<div><b>Not saved</b><p>${E(S.err)}</p></div></div>`:'';
+function applyModel(m){
+  PRODUCTS=m.products;WAREHOUSES=m.warehouses;REGIONS=m.regions;SHOPS=m.shops;SUPPLIERS=m.suppliers;STOCKMAP=m.stock;
+  HISTORY=m.history.filter(x=>prodOf(x.pid));            /* a movement of a product that is switched off must not break the list */
+}
+function pickShop(id){
+  S.out.shop=id;S.out.inv='';S.out.invs=null;S.err='';paint();
+  if(!SERVER)return;
+  FcWH.invoicesFor(id).then(list=>{if(S.out.shop===id){S.out.invs=list;paint();}})
+    .catch(()=>{if(S.out.shop===id){S.out.invs=[];paint();}});
+}
+async function saveServer(type){
+  if(S.busy)return;
+  const isIn=type==='RECEIVE', src=isIn?S.add:S.out;
+  const pr=prodOf(isIn?S.add.prod:S.out.prod), wid=isIn?S.add.wid:S.out.wid, qty=isIn?S.add.qty:S.out.qty;
+  if(!pr||!wid||qty<1){toast('Choose a product, warehouse and quantity');return;}
+  if(!src.opId)src.opId=FDB.uid('op');                   /* the same id on a retry, so a double tap can never post twice */
+  S.busy=true;S.err='';paint();
+  try{
+    const draft=isIn
+      ?{warehouseId:wid,items:[{productId:pr.id,quantity:qty}],clientOpId:src.opId,
+        reason:'Received from '+unE(supName(S.add.supplier))+' (Warehouse app)'}
+      :{warehouseId:wid,customerId:S.out.shop,invoiceId:S.out.inv||null,items:[{productId:pr.id,quantity:qty}],clientOpId:src.opId};
+    const r=await FcWH.post(type,draft);
+    applyModel(FcWH.model());
+    const d=r.doc, shop=SHOPS.find(x=>x.id===S.out.shop);
+    S.last=isIn
+      ?{title:'Stock received',body:`${nf(qty)} bags of ${pr.en} added to ${whName(wid)} from ${supName(S.add.supplier)}.`,
+        note:`${whName(wid)} now holds ${nf(stockAt(pr.id,wid))} bags.`,ref:d.docNumber,again:['Receive more','add']}
+      :{title:'Stock dispatched',body:`${nf(qty)} bags of ${pr.en} sent from ${whName(wid)}${shop?' to '+shop.sh:''}.`,
+        note:d.stockApplied?`${whName(wid)} now holds ${nf(stockAt(pr.id,wid))} bags.`:`Recorded against ${d.invoiceNumber} — stock was already taken out by the invoice.`,
+        ref:d.docNumber,again:['Dispatch more','send']};
+    if(isIn){S.add={prod:null,q:'',qty:100,supplier:'',wid:null};S.step=1;}
+    else S.out={shop:null,prod:null,wid:null,qty:50,inv:'',invs:null};
+    S.sq='';S.busy=false;go('done');toast(isIn?'Stock received':'Stock dispatched');
+  }catch(e){
+    S.busy=false;
+    if(e&&e.duplicate){                                   /* already saved — the answer was lost on the way back */
+      try{await FcWH.refresh();applyModel(FcWH.model());}catch(x){}
+      if(isIn){S.add={prod:null,q:'',qty:100,supplier:'',wid:null};S.step=1;}
+      else S.out={shop:null,prod:null,wid:null,qty:50,inv:'',invs:null};
+      toast('That was already saved'+(e.existing&&e.existing.ref?' as '+e.existing.ref:''));go('home');return;
+    }
+    if(e&&e.validation){S.err=e.validation.join(' ');paint();return;}
+    /* a failed commit has already put up the driver's own blocking "NOT saved — Reload" notice */
+    S.err=(e&&e.message)||'The server did not accept the entry.';paint();
+  }
+}
+/* catch up with what other people saved — never in the middle of typing or saving */
+function idleNow(){
+  const t=(document.activeElement&&document.activeElement.tagName)||'';
+  return !S.busy&&S.screen!=='add'&&S.screen!=='send'&&!/input|textarea|select/i.test(t);
+}
+async function catchUp(force){
+  if(!SERVER||!FcWH.stale||S.busy||(!force&&!idleNow()))return;
+  try{if(await FcWH.refresh()){applyModel(FcWH.model());paint();}}catch(e){}
+}
+function bootFailed(err){
+  view.innerHTML=`<div class="empty" style="padding:60px 20px"><div class="ic">${I('wifiOff')}</div><h3>Cannot load the stock from the server</h3>
+    <p>${E(err&&err.message||'')} Nothing was changed. Check the internet connection and try again.</p>
+    <button class="btn em" data-retry="1">Try again</button></div>`;
+}
+function legacyBoot(){dbLoad();pwaSeedFromMaster();paint(true);setTimeout(()=>paint(),700);}
+function startApp(){
+  paint(true);
+  if(!window.FcWH){legacyBoot();return;}
+  FcWH.start().then(mode=>{
+    if(mode!=='server'){legacyBoot();return;}
+    SERVER=true;
+    FcWH.onChange=()=>catchUp();
+    setInterval(()=>catchUp(),5000);                     /* picks up news that arrived while the user was typing */
+    const off=()=>{document.body.classList.toggle('off',!FcWH.online());paint();if(FcWH.online())catchUp(true);};
+    window.addEventListener('online',off);window.addEventListener('offline',off);
+    document.body.classList.toggle('off',!FcWH.online());
+    applyModel(FcWH.model());paint();
+  }).catch(bootFailed);
+}
+
 /* first load only */
 /* ══ Real master data — seed the shared record if this device opened first ══ */
 function pwaSeedFromMaster(){
@@ -1224,10 +1345,7 @@ function pwaSeedFromMaster(){
   dbLoad();
 }
 
-dbLoad();
-pwaSeedFromMaster();
-paint(true);
-setTimeout(()=>paint(),700);
+startApp();
 </script>
 </body>
 </html>
