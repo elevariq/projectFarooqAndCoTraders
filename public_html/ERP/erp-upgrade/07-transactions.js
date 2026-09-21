@@ -218,6 +218,15 @@ var TYPES = {
   CONVERT:  { seq: 'CNV', title: 'Brand conversion',   out: true }
 };
 
+/* what a converted bag is worth: the cost Stock value shows for the source row (recorded average, cost carried on the
+   movements, or another warehouse's average). A catalogue list price is only an estimate, so it is NOT passed on as a cost
+   (0 = unknown; the new brand is then valued the way it was before). */
+function convertCost(pid, wid) {
+  var sv = ERP.StockValue && ERP.StockValue.costOf ? ERP.StockValue.costOf(pid, wid) : null;
+  if (sv) return sv.src === 'list' ? 0 : sv.p;
+  return Inventory.row(pid, wid).avgCostP || 0;
+}
+
 var StockDocs = ERP.StockDocs = {
   TYPES: TYPES,
   all: function () { return S.stockDocs; },
@@ -295,7 +304,7 @@ var StockDocs = ERP.StockDocs = {
             invoiceNumber: linkedInvoice ? linkedInvoice.invoiceNumber : '',
             stockApplied: deduct,
             vehicleNo: (draft.vehicleNo || '').toUpperCase(), driver: draft.driver || '',
-            reason: draft.reason || '', notes: draft.notes || '',
+            reason: draft.reason || (type === 'CONVERT' ? 'Brand conversion' : ''), notes: draft.notes || '',
             totalQty: 0, lineCount: 0, status: 'POSTED',
             createdBy: currentUser(), createdAt: nowISO()
           };
@@ -310,7 +319,8 @@ var StockDocs = ERP.StockDocs = {
               toWarehouseId: rec.toWarehouseId, reason: l.reason || rec.reason,
               fromDamaged: !!l.fromDamaged,
               unitCostP: l.unitPrice ? M.toP(l.unitPrice)
-                       : Inventory.costOf(l.productId, type === 'CONVERT' ? (l.warehouseId || rec.warehouseId) : rec.warehouseId)
+                       : type === 'CONVERT' ? convertCost(l.productId, l.warehouseId || rec.warehouseId)
+                       : Inventory.costOf(l.productId, rec.warehouseId)
             });
             if (toProd) {
               r.toProductId = toProd.id;

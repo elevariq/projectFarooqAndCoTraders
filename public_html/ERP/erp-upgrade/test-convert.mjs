@@ -134,6 +134,43 @@ const run = async () => {
   check('C23 a later period starts from the post-conversion opening', rowA2 && rowA2.opening === 60 && rowA2.closing === INV.available(pA.id, wh),
     JSON.stringify(rowA2 && [rowA2.opening, rowA2.closing]));
 
+  /* ── cost edge cases ── */
+  const totalP = () => win.ERP.StockValue.build({ noSell: true }).totals.valueP;
+  const [pD, pF, pG, pH, pI] = act.slice(20, 25);
+  check('C23a the default reason is recorded on the note', rec2.reason === 'Brand conversion' && rec.reason === 're-printed', rec2.reason + ' / ' + rec.reason);
+
+  /* target already holds bags at its own (dearer) average: the converted bags are blended in, the value does not move */
+  await ERP.Purchases.save({ supplierId: supplier, warehouseId: wh, purchaseDate: '2026-09-02',
+    items: [{ productId: pD.id, quantity: 60, unitPrice: 3000 }] });
+  const vD0 = totalP();
+  await SD.convert({ warehouseId: wh, date: '2026-09-07', items: [{ productId: pA.id, toProductId: pD.id, quantity: 40 }] });
+  check('C23b a target with its own average is blended: (60 x 3,000 + 40 x 2,000) / 100 = 2,600',
+    INV.row(pD.id, wh).avgCostP === M.toP(2600) && INV.available(pD.id, wh) === 100, String(INV.row(pD.id, wh).avgCostP));
+  check('C23c …and the total stock value is unchanged', totalP() === vD0, `${vD0} → ${totalP()}`);
+
+  /* bags that came in through Add stock with a typed cost keep no average, only the cost on the movement:
+     the conversion must still pass that cost on (the Stock value screen shows it) */
+  await SD.receive({ warehouseId: wh, reason: 'own production', date: '2026-09-03', items: [{ productId: pF.id, quantity: 50, unitPrice: 1800 }] });
+  check('C23d setup: Add stock leaves no recorded average', INV.row(pF.id, wh).avgCostP === 0);
+  const vF0 = totalP();
+  const recF = await SD.convert({ warehouseId: wh, date: '2026-09-07', items: [{ productId: pF.id, toProductId: pG.id, quantity: 30 }] });
+  const mvF = ERP.S.movements.filter(m => m.ref === recF.docNumber);
+  check('C23e the cost typed on Add stock travels with the bags (Rs 1,800), not zero',
+    mvF.length === 2 && mvF.every(m => m.unitCostP === M.toP(1800)) && INV.row(pG.id, wh).avgCostP === M.toP(1800),
+    JSON.stringify(mvF.map(m => m.unitCostP)) + ' / ' + INV.row(pG.id, wh).avgCostP);
+  check('C23f …so the stock value is unchanged', totalP() === vF0, `${vF0} → ${totalP()}`);
+
+  /* no cost known anywhere: nothing invented, no average written, and the conversion still works */
+  await SD.receive({ warehouseId: wh, reason: 'found', date: '2026-09-03', items: [{ productId: pH.id, quantity: 10 }] });
+  const recH = await SD.convert({ warehouseId: wh, date: '2026-09-07', items: [{ productId: pH.id, toProductId: pI.id, quantity: 10 }] });
+  check('C23g bags of unknown cost convert without inventing a cost',
+    INV.available(pH.id, wh) === 0 && INV.available(pI.id, wh) === 10 && INV.row(pI.id, wh).avgCostP === 0 &&
+    ERP.S.movements.filter(m => m.ref === recH.docNumber).every(m => m.unitCostP === 0));
+
+  /* converting back undoes it exactly (the way to reverse a conversion) */
+  await SD.convert({ warehouseId: wh, date: '2026-09-08', items: [{ productId: pI.id, toProductId: pH.id, quantity: 10 }] });
+  check('C23h converting back restores the original counts', INV.available(pH.id, wh) === 10 && INV.available(pI.id, wh) === 0);
+
   /* the paper: a real note with both brands on it */
   const model = ERP.DocModel.stockDoc(rec.id);
   check('C24 the note is titled and shows from/to', model.title === 'BRAND CONVERSION NOTE' &&
@@ -163,10 +200,11 @@ const run = async () => {
   change($('[data-fcline="to"]'), pB.id); await sleep(60);
   check('C31 picking a target shows how many bags it holds now', /Has\s+30\s+now/.test($('#fcbLines').textContent), $('#fcbLines').textContent.replace(/\s+/g, ' ').slice(0, 200));
   const beforeA = INV.available(pA.id, wh), beforeB = INV.available(pB.id, wh);
+  const docsBefore = SD.byType('CONVERT').length;
   click($('[data-fcbact="save"]')); await sleep(300);
   check('C32 Convert Stock moves the bags from the screen', INV.available(pA.id, wh) === beforeA - 5 && INV.available(pB.id, wh) === beforeB + 5,
     `${INV.available(pA.id, wh)} / ${INV.available(pB.id, wh)}`);
-  check('C33 it returns to Inventory and opens the note', win.cur === 'inventory' && SD.byType('CONVERT').length === 3);
+  check('C33 it returns to Inventory and opens the note', win.cur === 'inventory' && SD.byType('CONVERT').length === docsBefore + 1);
   await sleep(400);
   check('C34 the note viewer opened', !!$('#fcviewer'));
   check('C35 no console errors during the whole run', errors.length === 0, errors.slice(0, 3).join(' | '));

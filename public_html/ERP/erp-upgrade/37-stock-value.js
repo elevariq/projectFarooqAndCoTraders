@@ -146,6 +146,14 @@
   var SV = ERP.StockValue = {
     permission: PERM,
 
+    /* the cost per bag this screen uses for one product in one warehouse (recorded average → cost carried on the movements →
+       another warehouse → list price), so a brand conversion (07-transactions.js) hands the new brand the very cost shown here.
+       { p: paisa, src: 'recorded'|'carried'|'other'|'list'|'none' } */
+    costOf: function (pid, wid) {
+      var r = S.inventory[pid + '|' + wid];
+      return r ? costFor(r, { other: costMap(), carried: carriedMap() }) : { p: 0, src: 'none' };
+    },
+
     /* Goods lying at flour mills (32-milling.js) are on no warehouse shelf, so they are NOT in the stock figure and are never added
        to it — they are reported beside it (bags, kg, worth at the job's cost per bag). Only for the whole-company view: a warehouse,
        category or search filter is about shelves, so it shows none. Zeros when the milling module is absent. */

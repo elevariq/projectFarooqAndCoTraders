@@ -70,6 +70,7 @@ async function scenario(w) {
   R.sret = await ERP.Returns.toSupplier({ supplierId: sup, warehouseId: wh, reason: 'Torn bags', items: [{ productId: prods[4].id, quantity: 5, unitPrice: 2000 }] });
   R.trf = await ERP.StockDocs.transfer({ warehouseId: wh, toWarehouseId: wh2, date: '2026-09-09', items: [{ productId: prods[0].id, quantity: 20 }, { productId: prods[1].id, quantity: 40 }] });
   R.adj = await ERP.StockDocs.adjust({ warehouseId: wh, reason: 'Physical count', date: '2026-09-09', items: [{ productId: prods[2].id, quantity: 7, direction: 'IN' }, { productId: prods[3].id, quantity: 4, direction: 'OUT' }] });
+  R.cnv = await ERP.StockDocs.convert({ warehouseId: wh, reason: 'Re-printed', date: '2026-09-09', items: [{ productId: prods[5].id, toProductId: prods[6].id, quantity: 25 }] });
   R.emp = await ERP.Employees.save({ name: 'Sher Bahadur', role: 'Driver', phone: '0300-1234567', monthlySalary: 30000 });
   R.sal = await ERP.Payroll.pay({ employeeId: R.emp.id, amount: 30000, date: '2026-09-10' });
   const wheat = w.PRODUCTS.find(p => p.id === 'PRD-0097'), flour = w.PRODUCTS.find(p => p.id === 'PRD-0004'), chokar = w.PRODUCTS.find(p => p.id === 'PRD-0041');
@@ -186,6 +187,17 @@ async function main() {
   check('C8 no revision marker leaked into any stored record', !JSON.stringify([...Object.keys(MANIFEST)].map(s => server.rows(s))).includes('__r'));
   check('C9 stock on the server matches the app (sellable stock, every row)', (() => {
     const rows = server.rows('inventory'); return rows.length > 0 && rows.every(r => Math.abs(A.w.ERP.Inventory.available(r.productId, r.warehouseId) - r.qty) < 1e-9);
+  })());
+
+  check('C9b a brand conversion is on the SERVER: its CNV document, both movements and both stock rows, committed together', (() => {
+    const d = server.rows('stockDocs').find(x => x.type === 'CONVERT' && x.docNumber === R.cnv.docNumber);
+    const mv = server.rows('stockMovements').filter(m => m.ref === R.cnv.docNumber);
+    const inv = server.rows('inventory');
+    const rowOf = pid => inv.find(r => r.productId === pid && r.warehouseId === R.wh);
+    return !!d && /^CNV-\d{4}-\d{6}$/.test(d.docNumber) && mv.length === 2 &&
+      mv.some(m => m.kind === 'CONVERT_OUT' && m.productId === R.prods[5] && m.qtyDelta === -25) &&
+      mv.some(m => m.kind === 'CONVERT_IN' && m.productId === R.prods[6] && m.qtyDelta === 25) &&
+      rowOf(R.prods[5]).qty === A.w.ERP.Inventory.available(R.prods[5], R.wh) && rowOf(R.prods[6]).qty === A.w.ERP.Inventory.available(R.prods[6], R.wh);
   })());
 
   /* the same day in the BROWSER driver must give the same books */

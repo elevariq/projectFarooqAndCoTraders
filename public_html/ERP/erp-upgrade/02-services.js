@@ -151,6 +151,13 @@ var Inventory = ERP.Inventory = {
       r.avgCostP = before > 0
         ? Math.round((before * prev + delta * mv.unitCostP) / (before + delta))
         : mv.unitCostP;
+    } else if (mv.kind === 'CONVERT_IN' && mv.unitCostP > 0 && mv.bucket !== 'damaged') {
+      /* a brand conversion brings bags in at the SOURCE's cost. Blend them into the target's average so the total value
+         does not move; a target that has bags but no recorded average keeps none (Stock value carries the cost instead,
+         37-stock-value.js CARRIED) rather than diluting bags of unknown cost to zero. */
+      var had = r.qty - delta, avg0 = r.avgCostP || 0;
+      if (had <= 0) r.avgCostP = mv.unitCostP;
+      else if (avg0 > 0) r.avgCostP = Math.round((had * avg0 + delta * mv.unitCostP) / (had + delta));
     }
     api.put('inventory', r);
 

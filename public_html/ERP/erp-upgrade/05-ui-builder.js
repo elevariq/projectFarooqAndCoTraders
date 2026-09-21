@@ -332,7 +332,7 @@ function headerBody(withCard) {
       'Both sides are saved together or not at all.</p></div></div>';
   }
   if (cfg.reason) {
-    extra += '<label class="f"><span>' + (B.mode === 'convert' ? 'Note (optional)' : 'Reason' + (B.mode === 'adjust' ? ' (required — it is audited)' : '')) + '</span>' +
+    extra += '<label class="f"><span>' + (B.mode === 'convert' ? 'Reason (optional)' : 'Reason' + (B.mode === 'adjust' ? ' (required — it is audited)' : '')) + '</span>' +
       '<input data-fcb="reason" value="' + esc(d.reason || '') + '" placeholder="' +
       (B.mode === 'receive' ? 'e.g. opening stock count, own production'
         : B.mode === 'convert' ? 'e.g. bags re-printed for the new brand'
@@ -458,8 +458,10 @@ function lineRows() {
             .sort(function (a, b) { return (a.en || '').localeCompare(b.en || ''); })
             .map(function (x) {
               return '<option value="' + esc(x.id) + '"' + (it.toProductId === x.id ? ' selected' : '') + '>' +
-                esc(x.en || x.ur || x.id) + (x.brandEn || x.brand ? ' · ' + esc(x.brandEn || x.brand) : '') +
-                (x.kg ? ' — ' + x.kg + ' KG' : '') + '</option>';
+                esc(x.en || x.ur || x.id) +
+                /* the name usually already says the brand and the kg — only add what it does not */
+                (x.brandEn && (x.en || '').toLowerCase().indexOf(String(x.brandEn).toLowerCase()) < 0 ? ' · ' + esc(x.brandEn) : '') +
+                (x.kg && !/kg/i.test(x.en || '') ? ' — ' + x.kg + ' KG' : '') + '</option>';
             }).join('') + '</select>' +
           (it.toProductId ? '<div class="fcb-avail">Has ' + Number(ERP.Inventory.available(it.toProductId, lw)).toLocaleString('en-US') +
             ' now</div>' : '') + '</td>';

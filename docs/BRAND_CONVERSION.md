@@ -14,9 +14,14 @@ It uses the normal line editor (`05-ui-builder.js`, mode `convert`): each line =
   of that product+warehouse across lines (respects the "allow negative stock" setting). Any failure → nothing is written.
 - Per line two movements in ONE transaction: `CONVERT_OUT` on the source (−q) and `CONVERT_IN` on the target (+q).
   The document's `totalQty` counts each bag once.
-- **Cost:** both movements carry the *source's* cost; `37-stock-value.js` lists `CONVERT_IN` in `CARRIED`, so the target is valued at
-  that cost (same treatment as `TRANSFER_IN`) and the company stock value does not change. It does NOT feed the target's moving
-  average (`Inventory.apply` only does that for purchases / mill receipts) — see open item 7 in CLAUDE.md, same caveat as Add stock.
+- **Cost (the bags keep the value they had):** the cost passed on is what the **Stock value** screen shows for the source row
+  (`ERP.StockValue.costOf`: recorded average → cost carried on the movements, e.g. typed on Add stock → another warehouse → list price).
+  A catalogue *list price* is an estimate and is NOT passed on (cost 0 = unknown, nothing invented).
+  On the target, `Inventory.apply` blends the bags into its moving average for `CONVERT_IN` — empty target: takes the source cost;
+  target with its own average: weighted (60 bags @3,000 + 40 @2,000 = 2,600); target holding bags with NO recorded average: keeps none,
+  and Stock value carries the cost via `CARRIED`. Net effect: the company stock value does not change when a bag is re-printed.
+  Caveat (same as any non-purchase stock): a later purchase of the target recomputes its average from purchases (`17-profit.js`), which
+  does not look at conversions.
 - Double-clicked Save is ignored (claimed operation id). Audit entry lists "A → B × n" for every line.
 - Bags in = bags out (1:1). A conversion that changes the count (loss/gain) is an Adjust on top of it, by design.
 
@@ -27,8 +32,12 @@ so the closing figure balances), `06-wiring.js` (change handler, panel map, CSS)
 **No database change.** `stock_docs.type` and `stock_movements.kind` are free-text generated columns, so no DDL and no
 `deploy-api.sh` — only `deploy-erp.sh`.
 
-**Test:** `erp-upgrade/test-convert.mjs` (36 checks: refusals, atomicity, cost/value, idempotency, multi-line, report balance,
-the note, and the real screen flow).
+**Test:** `erp-upgrade/test-convert.mjs` (44 checks: refusals, atomicity, cost/value incl. blended averages and Add-stock cost,
+idempotency, multi-line, converting back, report balance, the note, and the real screen flow); `test-server-db.mjs` also
+runs a conversion through the server-data driver (CNV document, both movements and both stock rows committed together).
 
-**Not seen live yet:** the editor's "Convert to" column at desktop/phone width, the Inventory button row, the note viewer/PDF
-for a conversion, and a real conversion on the server data.
+**Seen in real headless Chrome (2026-09-21):** the Inventory button row, the editor at 1320 px and 390 px, and a real mouse click opening the
+themed "Convert to" popup (searchable, 131 brands). At a narrow desktop width the table scrolls sideways (same as Adjust/Transfer).
+
+**Not yet seen on the live site or a physical phone:** any of the above there, the note viewer/PDF for a conversion, and a real
+conversion against the server data.
