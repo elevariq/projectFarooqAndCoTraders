@@ -158,6 +158,62 @@ const run=async()=>{
   check('E28 and by a percentage', ERP.Prices.of(rice.id).extra===M.toP(66), String(ERP.Prices.of(rice.id).extra));
   check('E29 the bulk form offers it', /value="extra"/.test(win.PANELS.bulkprice.f()));
 
+  /* ── edge cases found in review ── */
+  const held0=ERP.Prices.of(rice.id).extra;
+  check('E34 letters in the extra-cost box are refused, not read as 0 (which would silently clear it)',
+    await ERP.Prices.set(rice.id,{extra:'abc'},{reason:'x'}).then(()=>false)
+      .catch(e=>e.validation.some(m=>/not a number/i.test(m))) && ERP.Prices.of(rice.id).extra===held0);
+  check('E35 so are a lone minus sign and a lone dot, on any price box',
+    await ERP.Prices.set(rice.id,{sell:'-'},{reason:'x'}).then(()=>false).catch(e=>/not a number/i.test(e.validation[0])) &&
+    await ERP.Prices.set(rice.id,{buy:'.'},{reason:'x'}).then(()=>false).catch(e=>/not a number/i.test(e.validation[0])));
+  check('E36 a figure with a comma or a currency word still reads fine ("PKR 2,450.50")',
+    (await ERP.Prices.set(rice.id,{sell:'PKR 2,450.50'},{reason:'format'})).applied===true &&
+    ERP.Prices.of(rice.id).sell===M.toP(2450.5));
+  check('E37 "Change many prices" with a non-number amount is refused rather than doing nothing',
+    await ERP.MasterEdit.bulkPrice([rice.id],{field:'extra',mode:'set',amount:'abc'},'x').then(()=>false)
+      .catch(e=>/how much/i.test(e.validation[0])));
+
+  /* the same bug lived in the workbench's own number reader: a spreadsheet cell of "abc" wrote 0 into a bag size */
+  await ERP.MasterEdit.update('product',rice.id,{kg:25});
+  const sheetPlan=ERP.MasterSheet.plan('product','ID,Bag size (KG)\n'+rice.id+',abc\n'+flour.id+','+((win.prodOf(flour.id).kg||0)+1));
+  check('E44 a spreadsheet cell of "abc" in a number column is reported as a problem row, not written as 0',
+    sheetPlan.problems.length===1 && /should be a number/.test(sheetPlan.problems[0]) && sheetPlan.updates.length===1 &&
+    win.prodOf(rice.id).kg===25, JSON.stringify(sheetPlan.problems)+' updates='+sheetPlan.updates.length);
+
+  await ERP.Prices.set(rice.id,{buy:2000,extra:100,sell:2400,reorder:40},{reason:'Reset for the panel checks'});
+  let calls=0; const realOf=ERP.Prices.of; ERP.Prices.of=function(){calls++;return realOf.apply(this,arguments);};
+  ERP.openPriceEditor(rice.id); await sleep(250);
+  calls=0;
+  const box=k=>$('#panel [data-f="'+k+'"]');
+  type(box('extra'),'1'); type(box('extra'),'12'); type(box('extra'),'125'); type(box('sell'),'2300'); type(box('buy'),'2100');
+  check('E38 typing in the cost boxes does not recompute the product\'s figures on every key', calls===0, String(calls));
+  ERP.Prices.of=realOf;
+  type(box('extra'),'-50');
+  check('E39 a negative typed into the live line says so instead of showing a made-up cost',
+    /cannot be negative/i.test($('#pzLive').textContent), $('#pzLive').textContent);
+  click($('#panel [data-close]')); await sleep(150);
+
+  /* the below-cost warning: once per sitting, and only when a cost/price box is what changed */
+  const reasonBox=()=>$('#panel [data-f="reason"]');
+  const errBox=()=>$('#panelErr').textContent;
+  ERP.openPriceEditor(rice.id); await sleep(250);
+  type(box('sell'),'2050'); reasonBox().value='Clearance'; click($('#panel [data-save]')); await sleep(300);
+  check('E40 selling under the cost to us stops the first Save and says nothing was saved',
+    /Nothing has been saved yet/.test(errBox()) && /lose/.test(errBox()) && ERP.Prices.of(rice.id).sell===M.toP(2400), errBox());
+  click($('#panel [data-close]')); await sleep(150);
+  ERP.openPriceEditor(rice.id); await sleep(250);
+  type(box('sell'),'2050'); reasonBox().value='Clearance'; click($('#panel [data-save]')); await sleep(300);
+  check('E41 closing and reopening the panel does not carry the "already warned" flag over',
+    /Nothing has been saved yet/.test(errBox()) && ERP.Prices.of(rice.id).sell===M.toP(2400), errBox());
+  click($('#panel [data-save]')); await sleep(400);
+  check('E42 pressing Save a second time in the same sitting keeps the price',
+    ERP.Prices.of(rice.id).sell===M.toP(2050), String(ERP.Prices.of(rice.id).sell));
+  ERP.openPriceEditor(rice.id); await sleep(250);
+  type(box('reorder'),'33'); reasonBox().value='Alert level only'; click($('#panel [data-save]')); await sleep(400);
+  check('E43 changing only the stock alert level of a product that already sells under cost is not stopped by the warning',
+    ERP.Prices.of(rice.id).reorder===33 && ERP.Prices.of(rice.id).sell===M.toP(2050), errBox());
+  await ERP.Prices.set(rice.id,{sell:2500,extra:66},{reason:'Back for the restart checks'});
+
   /* ── it survives a restart ── */
   await ERP.flush(); await sleep(400);
   const state={extra:ERP.Prices.of(rice.id).extra,total:ERP.Prices.of(rice.id).totalCost,

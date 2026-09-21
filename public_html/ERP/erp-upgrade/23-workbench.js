@@ -21,7 +21,11 @@ function nowISO() { return new Date().toISOString(); }
 function who() { return ERP.Session ? ERP.Session.name() : (global.CURRENT_USER || 'Owner'); }
 function num(v) {
   if (v === '' || v === null || v === undefined) return null;
-  var n = Number(String(v).replace(/[^\d.\-]/g, ''));
+  var s = String(v).replace(/[^\d.\-]/g, '');
+  /* nothing numeric left ("abc", "-", ".") is not a number: the checks below rely on null meaning
+     that, and it used to read as 0 — quietly writing 0 into a bag size, price or bulk change */
+  if (!/\d/.test(s)) return null;
+  var n = Number(s);
   return isFinite(n) ? n : null;
 }
 

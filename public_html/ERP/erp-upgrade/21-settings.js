@@ -23,7 +23,11 @@ function role() { return ERP.RBAC ? ERP.RBAC.role() : 'OWNER'; }
 function fmtDate(x) { return global.fmtDate ? global.fmtDate(x) : x; }
 function num(v) {
   if (v === '' || v === null || v === undefined) return null;
-  var n = Number(String(v).replace(/[^\d.\-]/g, ''));
+  var s = String(v).replace(/[^\d.\-]/g, '');
+  /* nothing numeric left ("abc", "-", ".") is not a number — it used to read as 0,
+     which silently cleared a price or cost the person meant to leave alone */
+  if (!/\d/.test(s)) return null;
+  var n = Number(s);
   return isFinite(n) ? n : null;
 }
 
@@ -367,10 +371,16 @@ ERP.reorderLevelOf = function (productId) {
    ══════════════════════════════════════════════════════════════════════════ */
 var PRICE_FOR = null;
 var PRICE_WARNED = '';      /* the figures a warning was already shown for; saving them again confirms */
-ERP.openPriceEditor = function (productId) { PRICE_FOR = productId; global.openPanel('prices'); };
+var PRICE_HELD = null;      /* Prices.of() for the product on show, taken once when the panel is drawn */
+ERP.openPriceEditor = function (productId) {
+  PRICE_FOR = productId;
+  PRICE_WARNED = '';        /* a warning belongs to one sitting: reopening the panel must show it again */
+  global.openPanel('prices');
+};
 
 /* The line under the cost boxes. Numbers only, so nothing typed can reach the page as markup. */
 function costLine(buyP, extraP, sellP) {
+  if (buyP < 0 || extraP < 0 || sellP < 0) return 'A price or cost cannot be negative.';
   var f = figures(buyP, extraP, sellP);
   if (!f.cost) return 'Enter the purchase price and our extra cost to see what a bag costs us.';
   return 'Cost to us per bag <b>' + M.fmt(f.cost) + '</b>' +
@@ -383,7 +393,7 @@ global.PANELS.prices = {
   t: 'Product prices', s: 'What it costs, what it sells for, and why it changed', cta: 'Save prices',
   f: function () {
     var pid = PRICE_FOR || ((global.PRODUCTS || [])[0] || {}).id;
-    var info = Prices.of(pid);
+    var info = PRICE_HELD = Prices.of(pid);
     if (!info) return '<p class="hint">Product not found.</p>';
     var p = info.product;
     var hist = Prices.history(pid).slice(0, 6);
@@ -440,7 +450,13 @@ global.PANELS.prices = {
       .forEach(function (k) { if (v[k] !== undefined && v[k] !== '') values[k] = v[k]; });
     var pre = Prices.validate(pid, values);
     if (pre.errors.length) return pre.errors[0];
-    if (pre.warnings.length) {
+    /* the below-cost warning is about the three cost/price boxes — editing only the alert level or the
+       discount of a product that already sells under cost must not be stopped by it */
+    var held = Prices.of(pid) || {};
+    var costMoved = ['buy', 'extra', 'sell'].some(function (k) {
+      return values[k] !== undefined && M.toP(values[k]) !== held[k];
+    });
+    if (pre.warnings.length && costMoved) {
       var ack = pid + '|' + JSON.stringify(values);
       if (PRICE_WARNED !== ack) {
         PRICE_WARNED = ack;
@@ -868,7 +884,7 @@ D.addEventListener('input', function (e) {
   /* the price panel's "cost to us" line follows the three boxes as they are typed in;
      a box left blank counts as what the product already holds, exactly as Save treats it */
   if (e.target.dataset.f === 'buy' || e.target.dataset.f === 'extra' || e.target.dataset.f === 'sell') {
-    var live = D.getElementById('pzLive'), held = live && Prices.of(PRICE_FOR);
+    var live = D.getElementById('pzLive'), held = live && PRICE_HELD;
     if (held) {
       var box = function (k) {
         var el = D.querySelector('#panel [data-f="' + k + '"]'), n = el ? num(el.value) : null;

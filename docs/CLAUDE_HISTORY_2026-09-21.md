@@ -1536,10 +1536,20 @@ still use what was actually bought plus whatever is entered per purchase on the 
 Wiring the product figure into sale-time profit would move every profit number (same class of change as open item 7) and would double-count anything also entered as a landed cost. It touches no supplier,
 payment, purchase total or stock cost (test E14). No schema change: a product is a JSON `doc`, no new store, so no `deploy-api.sh` step.
 
-**Noticed, not changed.** `num()` in module 21 strips non-digits, so typing letters into ANY price box ("abc") reads as 0 rather than an error; only a malformed figure like "1.2.3" is refused.
+**Edge cases found in review and fixed (same day).**
+- `num()` (module 21, and its twin in `23-workbench.js`) stripped non-digits, so "abc" — or a lone "-" / "." — read as **0**: typing letters into a price box, the bulk-change amount, or a spreadsheet
+  number cell silently wrote/cleared 0. It now returns `null` when no digit is left, so it is refused ("… is not a number" / "Enter how much…" / a "should be a number" problem row on import — the
+  workbench's own check at `validate` always expected `null` here). "PKR 2,450.50" still reads fine.
+- The below-cost warning's "already warned, press Save again" flag (`PRICE_WARNED`) survived closing the panel, so reopening it and pressing Save once skipped the warning: reset in `openPriceEditor`.
+- The warning stopped **any** save of a product already selling under cost (e.g. editing only the alert level): it now applies only when the purchase, extra or selling price is being changed.
+- The live line recomputed the product's average cost on every keystroke: `Prices.of` is taken once when the panel is drawn (`PRICE_HELD`). A negative typed in a box shows "cannot be negative".
+- Checked and fine: the server stores a product as a free-form JSON `doc` (`_stores.php`, `schema-mariadb.sql`; no field whitelist) and `mergeMasterFromDb` uses `Object.assign`, so `extraP` survives the
+  server path (by reading the code — not exercised against the live database); no other code uses a product field called `extra`/`extraP`.
+- Still by design: Stock value's list-price fallback (`37-stock-value.js` `costFor`) uses the purchase price only; when a product has no purchase price the box shows the average cost (which under the LANDED
+  basis already includes actual landed costs) and the extra is added on top — the person sees the number that is used.
 
-Tests: `test-extra-cost.mjs` (33 checks: numbers, warning, history, refusals, no supplier/payment/stock-cost movement, approval flow and rupee/paisa unit, the real panel + live line, bulk change, restart;
-mutation-checked by making the warning ignore the extra).
+Tests: `test-extra-cost.mjs` (44 checks: numbers, warning, history, refusals, no supplier/payment/stock-cost movement, approval flow and rupee/paisa unit, the real panel + live line, bulk change, the review
+fixes above, restart; mutation-checked — making the warning ignore the extra, the number reader accept letters, the warned-flag persist, or the warning fire on every save each turns named checks red).
 
 ## Where to look for more detail
 
