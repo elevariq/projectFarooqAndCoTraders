@@ -200,8 +200,9 @@ async function main() {
     w.close();
   }
 
-  /* ── F: idle lock engages only once a server identity exists, and can be
-         released offline with the correct password via the PBKDF2 verifier ── */
+  /* ── F: there is NO idle lock (removed 2026-09-21 at the owner's request); the sign-in screen that
+         comes back when the session really ends can be released offline with the correct password via
+         the PBKDF2 verifier ── */
   {
     const store = { idb: new FDBFactory() };
     const w = boot(store, mockFetch({
@@ -214,15 +215,19 @@ async function main() {
         : { status: 401, data: { error: 'That username or password is not right.' } },
     }));
     const ERP = await ready(w);
-    ERP.Auth.IDLE_MS = 60000; // not exercising the real timer here, just the lock/unlock functions directly
+    ERP.Auth.IDLE_MS = 30;    /* what the old idle timer would have used — it must no longer be read by anything */
     await ERP.Auth.login('owner3', 'secret123');
-    check('F1 idle lock is a no-op with no identity signed in (never annoys the client-only path)',
-      (() => { const before = ERP.Auth.locked; ERP.Auth.logout(); return before === false; })());
+    await sleep(250);
+    w.document.dispatchEvent(new w.Event('mousemove')); await sleep(250);
+    const lockEl = w.document.getElementById('fcAuthLock');
+    check('F1 signed in and left alone: the screen is NOT locked for being idle (no password asked again)',
+      ERP.Auth.locked === false && !(lockEl && lockEl.classList.contains('on')));
+    check('F1b the idle lock code is gone (no lockScreen / idle-watch entry points, no idle timer)',
+      !ERP.Auth._internal.lockScreen && !ERP.Auth._internal.startIdleWatch && !ERP.Auth._internal.stopIdleWatch && !ERP.Auth._idleTimer);
 
-    // re-sign in for the actual lock/unlock check
-    await ERP.Auth.login('owner3', 'secret123');
-    ERP.Auth._internal.lockScreen();
-    check('F2 the lock overlay appears once idle-locked', !!w.document.getElementById('fcAuthLock').classList.contains('on'));
+    // the session really ending is what brings the sign-in screen back
+    ERP.Auth._internal.sessionEnded();
+    check('F2 the sign-in screen appears when the session has ended', !!w.document.getElementById('fcAuthLock').classList.contains('on'));
 
     ERP.Auth.online = false; // simulate connectivity loss while locked
     check('F3 the wrong password is refused offline',
@@ -374,9 +379,6 @@ async function main() {
     const lock = w.document.getElementById('fcAuthLock');
     check('H13 a 401 while enforced locks the screen behind a sign-in', ERP.Auth.locked === true && !!lock && lock.classList.contains('on'));
     check('H14 …and says the session ended (not "you have been idle")', /session has ended/i.test(lock.textContent) && !/idle/i.test(lock.textContent));
-    ERP.Auth._internal.lockScreen();    /* the 15-minute idle timer firing while already locked */
-    check('H14b an idle lock firing while "session ended" is showing does not overwrite that message',
-      /session has ended/i.test(w.document.getElementById('fcAuthLock').textContent));
     check('H15 the identity is kept, so the app does NOT quietly fall back to being the local Owner', !!ERP.Auth.identity && ERP.Auth.role === 'OWNER');
     const c1 = meCalls; await ERP.Auth._internal.beat();
     check('H16 while locked no further heartbeats are sent', meCalls === c1);

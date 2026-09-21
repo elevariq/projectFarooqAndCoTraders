@@ -42,7 +42,7 @@ return [
     'session' => [
         'cookie_name'      => '__Host-fcsid',
         'absolute_ttl_min' => 12 * 60,   // 12 hours
-        'idle_ttl_min'     => 2 * 60,    // 2 hours
+        'idle_ttl_min'     => 0,         // 0 / absent = never sign anyone out for being idle (the 12 h cap above still applies); N > 0 = N minutes
     ],
 
     // Phase 3 login gate — THE KILL-SWITCH. Leave this out (or false) and the

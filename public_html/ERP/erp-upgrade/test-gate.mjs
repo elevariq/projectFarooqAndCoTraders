@@ -54,11 +54,11 @@ if (isset($map[$p])) { $_GET = ['f' => $map[$p]]; require __DIR__ . '/api/gate.p
 return false;
 `);
 
-function cfg({ enforce, dsn }) {
+function cfg({ enforce, dsn, idle }) {
   const lines = [
     "'db' => ['dsn' => " + JSON.stringify(dsn || 'sqlite:' + DBFILE.replace(/\\/g, '/')) + ", 'user' => null, 'pass' => null]",
     "'ticket_secret' => 'test-secret-test-secret-test-secret-0000'",
-    "'session' => ['cookie_name' => '__Host-fcsid', 'absolute_ttl_min' => 720, 'idle_ttl_min' => 120]",
+    "'session' => ['cookie_name' => '__Host-fcsid', 'absolute_ttl_min' => 720, " + (idle === null ? "" : "'idle_ttl_min' => " + (idle || 120)) + "]",
     "'offline_grace_hours' => 12",
     "'lockout' => ['max_attempts' => 5, 'window_minutes' => 15, 'lock_minutes' => 15]",
   ];
@@ -261,7 +261,16 @@ async function main() {
 
     ck = await fresh();
     db("UPDATE auth_sessions SET last_seen_at = '2000-01-01 00:00:00' WHERE revoked_at IS NULL AND expires_at > datetime('now')");
-    check('O6 an idle session (untouched > 2 h) is refused', (await get('/', { cookie: ck })).status === 401);
+    check('O6 an idle session (untouched > 2 h) is refused WHEN the config asks for an idle limit', (await get('/', { cookie: ck })).status === 401);
+
+    cfg({ enforce: true, idle: null });   /* the new default: no idle_ttl_min at all */
+    ck = await fresh();
+    db("UPDATE auth_sessions SET last_seen_at = '2000-01-01 00:00:00' WHERE revoked_at IS NULL AND expires_at > datetime('now')");
+    check('O6b with no idle limit configured, a session untouched for years is NOT signed out (no password asked again for being idle)',
+      (await get('/', { cookie: ck })).status === 200 && (await get('/api/auth/me.php', { cookie: ck })).status === 200);
+    db("UPDATE auth_sessions SET expires_at = '2000-01-01 00:00:00'");
+    check('O6c …but the absolute cap still ends it', (await get('/', { cookie: ck })).status === 401);
+    cfg({ enforce: true });               /* back to the explicit 120-minute limit for the rest of the file */
 
     ck = await fresh();
     check('O7 (control) fresh again', (await get('/', { cookie: ck })).status === 200);

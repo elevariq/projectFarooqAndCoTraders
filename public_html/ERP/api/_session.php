@@ -70,10 +70,13 @@ function current_session(PDO $pdo, array $CFG): ?array {
     if (!$row) return null;
     if ((int)$row['is_active'] !== 1) return null;
 
-    $idleMinutes = $CFG['session']['idle_ttl_min'] ?? 120;
+    // NO idle timeout unless the config asks for one (2026-09-21, owner's request: nobody is asked
+    // for the password again just because they stopped working for a while). 'idle_ttl_min' => N
+    // (N > 0) switches it back on; the absolute cap ('absolute_ttl_min', expires_at) always applies.
+    $idleMinutes = (int)($CFG['session']['idle_ttl_min'] ?? 0);
     $lastSeen = strtotime($row['last_seen_at']);
-    if ($lastSeen !== false && (time() - $lastSeen) > $idleMinutes * 60) {
-        // idle timeout — revoke rather than silently extend
+    if ($idleMinutes > 0 && $lastSeen !== false && (time() - $lastSeen) > $idleMinutes * 60) {
+        // idle timeout (only when configured) — revoke rather than silently extend
         $upd = $pdo->prepare('UPDATE auth_sessions SET revoked_at = NOW() WHERE id = ?');
         $upd->execute([$hash]);
         return null;

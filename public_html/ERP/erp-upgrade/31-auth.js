@@ -51,7 +51,6 @@ if (!D) return;
 var AUTH_MODE = 'observe';           /* starting value only; the server's `enforce` flag sets it — see header */
 var API_BASE = 'api/auth/';
 var TICKET_KEY = 'farooqco_auth_ticket';
-var IDLE_MS_DEFAULT = 15 * 60 * 1000;
 var HEARTBEAT_MS_DEFAULT = 60 * 1000;
 
 function esc(s) {
@@ -65,15 +64,13 @@ function say(m) { return global.say ? global.say(m) : null; }
    ══════════════════════════════════════════════════════════════════════════ */
 var Auth = ERP.Auth = {
   mode: AUTH_MODE,
-  IDLE_MS: IDLE_MS_DEFAULT,
   HEARTBEAT_MS: HEARTBEAT_MS_DEFAULT,
   identity: null,        /* { id, username, displayName } once signed in server-side */
   role: null,
   permissions: null,      /* array; ['*'] means "all", matching the API */
   csrf: null,
   online: true,
-  locked: false,
-  _idleTimer: null
+  locked: false
 };
 
 function api(path) {
@@ -284,7 +281,6 @@ Auth.login = function (username, password) {
       }
       Auth.online = true;
       applyIdentity(r.data);
-      startIdleWatch();
       return storeVerifier(password).then(function () {
         try { global.paint(); } catch (e) {}
         if (Auth.mustChangePassword) openChangePw(true);
@@ -297,7 +293,6 @@ Auth.logout = function () {
   return request('logout.php', { method: 'POST' }).catch(function () { /* best effort */ })
     .then(function () {
       clearIdentity();
-      stopIdleWatch();
       stopHeartbeat();
       try { global.paint(); } catch (e) {}
       /* enforced: there is nothing to go back to in this page — reload the
@@ -374,8 +369,10 @@ Auth.refresh = function () {
    to the local "Owner" role, which is precisely what enforcing is meant to end.
    Asks the server once a minute, only while the screen is unlocked and the tab
    is visible, so an abandoned tab neither keeps the server session alive nor
-   hammers the API. The 15-minute idle lock (below) is what actually bounds
-   how long an unattended screen stays open.
+   hammers the API. There is deliberately NO idle lock: an unattended screen stays as it is
+   (removed 2026-09-21 at the owner's request — nobody is asked for the password again just
+   because they stopped typing). The only things that ask again are the session really ending
+   (12 h cap, account switched off, signed out elsewhere) — see sessionEnded below.
    A network failure never locks by itself — shop-floor devices lose signal —
    unless the offline grace ticket has also run out.
    ══════════════════════════════════════════════════════════════════════════ */
@@ -425,37 +422,9 @@ function sessionEnded(why) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
-   IDLE LOCK — only engages once a server identity is active, so it never
-   affects anyone still solely on the module-22 PIN system (Phase 2).
+   THE SIGN-IN SCREEN THAT COMES BACK — only when the session has really ended (never for
+   being idle: the idle lock was removed 2026-09-21). unlockWith is what its button calls.
    ══════════════════════════════════════════════════════════════════════════ */
-function startIdleWatch() {
-  stopIdleWatch();
-  var reset = function () {
-    if (Auth._idleTimer) global.clearTimeout(Auth._idleTimer);
-    Auth._idleTimer = global.setTimeout(lockScreen, Auth.IDLE_MS);
-  };
-  Auth._resetIdle = reset;
-  ['click', 'keydown', 'touchstart', 'mousemove'].forEach(function (ev) {
-    D.addEventListener(ev, reset, true);
-  });
-  reset();
-}
-function stopIdleWatch() {
-  if (Auth._idleTimer) global.clearTimeout(Auth._idleTimer);
-  Auth._idleTimer = null;
-  if (Auth._resetIdle) {
-    ['click', 'keydown', 'touchstart', 'mousemove'].forEach(function (ev) {
-      D.removeEventListener(ev, Auth._resetIdle, true);
-    });
-    Auth._resetIdle = null;
-  }
-}
-function lockScreen() {
-  if (!Auth.identity) return;
-  if (Auth.locked) return;     /* already locked (e.g. "session ended") — don't overwrite that message with "idle" */
-  Auth.locked = true;
-  renderLock();
-}
 function unlockWith(password) {
   var username = Auth.identity ? Auth.identity.username : '';
   var finish = function () {
@@ -502,7 +471,7 @@ function renderLock(message) {
   if (!host) { host = D.createElement('div'); host.id = 'fcAuthLock'; D.body.appendChild(host); }
   var name = Auth.identity ? Auth.identity.displayName : '';
   host.innerHTML =
-    '<div class="box"><b>' + (message ? esc(message) : esc(name) + ', you have been idle') + '</b>' +
+    '<div class="box"><b>' + (message ? esc(message) : esc(name) + ', please sign in again') + '</b>' +
     '<p style="color:var(--muted);font-size:13px">Enter your password to keep going.</p>' +
     '<input id="fcLockPw" type="password" placeholder="Password" autocomplete="off">' +
     '<div class="err" id="fcLockErr"></div>' +
@@ -694,8 +663,7 @@ if (typeof origPaint === 'function') {
 Auth._internal = {
   TICKET_KEY: TICKET_KEY, VERIFIER_KEY: VERIFIER_KEY,
   decodeTicketPayload: decodeTicketPayload, validCachedTicket: validCachedTicket,
-  lockScreen: lockScreen, unlockWith: unlockWith,
-  startIdleWatch: startIdleWatch, stopIdleWatch: stopIdleWatch,
+  unlockWith: unlockWith, sessionEnded: sessionEnded,
   openChangePw: openChangePw, closeChangePw: closeChangePw,
   beat: beat, startHeartbeat: startHeartbeat, stopHeartbeat: stopHeartbeat,
   heartbeatRunning: function () { return !!HB.timer; }
@@ -706,7 +674,6 @@ Auth._internal = {
    ══════════════════════════════════════════════════════════════════════════ */
 (ERP.bootPromise || Promise.resolve()).then(function () {
   return Auth.refresh().then(function (signedIn) {
-    if (signedIn) startIdleWatch();
     try { global.paint(); } catch (e) {}
     if (signedIn && Auth.mustChangePassword) openChangePw(true);
   });
