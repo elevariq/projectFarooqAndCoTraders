@@ -1434,6 +1434,17 @@ string in `api/_gate_login.php` (the sign-in page's logo).** App deploy (`deploy
 - **Tests:** `test-shell.mjs` (80 checks: unique icons, groups/fold/remember/active-group rule, the bell — panel not toast, names, filter link, seen-dot, Esc,
   phone sheet, empty state — action row, paging + search over the whole list + print, bare tables, emoji scan, and the Warehouse frame/paging/filter/bell).
   Looked at in real headless Chrome: 1320/1100/1080/820/390px, light + dark, both apps. **Not seen by anyone on the live site or a physical phone.**
+- **Deployed live 2026-09-21** (commits `2eee81a`..`685eea1`). `api/_gate_login.php` (sign-in page logo) was uploaded by hand as ONE file — `scp` to
+  `_gate_login.php.uploading`, `php -l` on the server, atomic `mv`, then the same anonymous probes as `deploy-api.sh` (401 gate with the emblem CSS, form post 303,
+  me/data endpoints 401) — because `scripts/deploy-api.sh` uploads 18 files with 18 back-to-back `scp` logins and the server **reset the connection part-way
+  twice (each time rolling itself back correctly), then refused SSH for a few minutes**; a tar-over-one-ssh variant was reset too. So the server throttles rapid
+  new SSH logins: pause a few minutes, upload only what changed, and never fire the script in a retry loop. `scripts/deploy-erp.sh` (detached wrapper, full
+  40-harness gate green) then uploaded; backup `~/backups/erp-deploy-20260921095236`; `_app/` md5s equal the build (`index.html` `0a9539cc…`, `farooq-co-erp.html`
+  `be3306b7…`, `farooq-erp-data.js` `bf0bf077…`), no `.uploading` leftovers; Hostinger cache cleared. Checked in the owner's signed-in Chrome: the live app has
+  5 folding groups, 24/24 distinct icons, the emblem, and the bell panel lists real items (136 no stock, 3 shops owe, 3 suppliers owed) with no toast.
+  **Practical trap:** several test loops started at once (background loops + monitors) made a 10-minute suite take over an hour — run ONE loop, in the
+  foreground in two chunks, or let `deploy-erp.sh` do it. Rollback: app = copy the three files from that backup into `ERP/_app/`, clear cache; sign-in page = the
+  previous `_gate_login.php` is in `~/backups/api-20260921094019/api/`.
 - **Not done:** the ERP has no "mark all read"/snooze on notifications (derived, not stored); the `.tbl` of Inventory is still a wide table that scrolls
   inside its card; the Documents/Audit lists are capped by their own `slice`, not paged; the base `<title>` still says "Warehouse ERP".
 
