@@ -8,7 +8,7 @@
 #   4. Backs up the live files it's about to overwrite (timestamped, on the server).
 #   5. Uploads the rebuilt files to ERP/_app/ (Phase 3 login gate: api/gate.php reads the app from
 #      there, and the public URLs are rewritten to the gate — they are no longer files at the ERP
-#      root) and, for parity, to the legacy app/ copy nothing else links to.
+#      root). The old server-side app/ copy is NOT touched any more (see the note below).
 #      It REFUSES to run if _app/ isn't on the server yet (run scripts/gate-rollout.sh migrate
 #      first): it must never drop the app back at the ERP root, where nothing protects it.
 #   6. Clears the Hostinger CDN/server cache so the change is visible immediately.
@@ -19,7 +19,11 @@
 # not public_html/ERP/app/. The app/ folder was part of the original site pull and nothing on
 # the server links to it; it was mistakenly treated as the deploy target in an earlier session,
 # so real feature deploys were landing there while the site kept serving the untouched root
-# copy. This script now uploads to both, with the root copy as the one that matters.
+# copy. Since the login gate (2026-09-20) the served files are ERP/_app/ only; the server's app/
+# is denied by its own .htaccess and nothing reads it, so this script neither uploads to it nor
+# backs it up (that doubled the upload — 5 more files, ~6.5 MB — and the number of SSH logins the
+# host throttles, for a copy nobody could ever load). The app/ in the REPO is different: it is the
+# build input, and stays.
 #
 # Usage: scripts/deploy-erp.sh
 # Run from the repo root. Requires: git, python3, node, ssh, scp, curl.
@@ -85,8 +89,7 @@ TS="$(date +%Y%m%d%H%M%S)"
 ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_HOST" \
   "mkdir -p /home/u943531942/backups/erp-deploy-$TS && \
    cp '$REMOTE_ERP/_app/index.html' '$REMOTE_ERP/_app/farooq-co-erp.html' '$REMOTE_ERP/_app/farooq-erp-data.js' \
-     /home/u943531942/backups/erp-deploy-$TS/ 2>/dev/null; \
-   cp -r '$REMOTE_ERP/app' /home/u943531942/backups/erp-deploy-$TS/app"
+     /home/u943531942/backups/erp-deploy-$TS/"
 
 echo "==> Uploading rebuilt files to ERP/_app/ (what api/gate.php serves — the public URLs are rewritten to it)"
 # Upload under temporary names, then rename in one step: a visitor loading the page mid-upload
@@ -96,12 +99,6 @@ for f in index.html farooq-co-erp.html farooq-erp-data.js; do
 done
 ssh -p "$SSH_PORT" -o BatchMode=yes "$SSH_HOST" \
   "cd '$REMOTE_ERP/_app' && for f in index.html farooq-co-erp.html farooq-erp-data.js; do mv -f \"\$f.uploading\" \"\$f\"; done"
-
-echo "==> Uploading the same build to app/ too (legacy copy, kept in sync for parity)"
-scp -P "$SSH_PORT" -o BatchMode=yes \
-  dist/farooq-co-erp.html dist/index.html dist/farooq-co-warehouse-pwa.html \
-  dist/farooq-and-co-homepage.html dist/farooq-erp-data.js \
-  "$SSH_HOST:$REMOTE_ERP/app/"
 
 echo "==> Clearing Hostinger cache (CDN can otherwise serve the old version)"
 echo "    NOTE: run this from Claude via the hosting_clearWebsiteCacheV1 MCP tool"

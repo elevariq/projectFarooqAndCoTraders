@@ -17,7 +17,7 @@ Two live sites on ONE Hostinger account (owner: theumairzero7@gmail.com, GitHub 
 Server layout: `/home/u943531942/domains/farooqandcotraders.online/public_html/` (homepage) and `.../public_html/ERP/`
 (ERP doc root — there is no separate filesystem for `erp.*`). `ERP/_app/` holds the three served app files
 (`index.html`, `farooq-co-erp.html`, `farooq-erp-data.js`); the public URLs are rewritten to `api/gate.php`.
-`ERP/app/` is an orphaned legacy duplicate (nothing serves it; deploy still uploads there for parity only).
+`ERP/app/` on the server is an orphaned legacy duplicate (denied by its own `.htaccess`, nothing serves it; deploy no longer uploads to it or backs it up — the repo's `app/` is the build input and stays).
 `private/erp-config.php` is at `domains/farooqandcotraders.online/private/` (NOT under `public_html`).
 DNS: `@` and `erp` are ALIAS records to Hostinger's CDN. Read `public_html/ERP/README.md` and
 `public_html/ERP/database/SCHEMA.md` for how the ERP itself is built (numbered modules injected into one HTML file).
@@ -134,7 +134,7 @@ SSH), then `scp -P 65002 public_html/index.html u943531942@31.97.219.57:/home/u9
 
 **ERP app** — `./scripts/deploy-erp.sh` (from the repo root or a clean clone):
 1. refuses if the tree is dirty; 2. rebuilds; 3. runs every `test-*.mjs` (aborts on any failure — nothing broken is uploaded);
-4. backs up live files to `~/backups/erp-deploy-<ts>/`; 5. uploads atomically (`*.uploading` → rename) to `ERP/_app/`, then `app/` for parity
+4. backs up live files to `~/backups/erp-deploy-<ts>/`; 5. uploads atomically (`*.uploading` → rename) to `ERP/_app/` only
    (refuses if `_app/` is missing; takes a lock in `.git/deploy-erp.lock`); 6. curls the live URLs.
 Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's `dist/`.
 - Takes 10–15 min → run it **detached** (a wrapper started with `Start-Process`) so the tool's 10-min timeout can't kill it mid-upload;
