@@ -285,7 +285,7 @@ body.fc-mobile:not(.fc-hidechrome) .fc-tabbar{display:grid}
    ══════════════════════════════════════════════════════════════════════════ */
 var TABS = [
   { id: 'dashboard', label: 'Home',    icon: 'grid' },
-  { id: 'invoices',  label: 'Sales',   icon: 'tag' },
+  { id: 'invoices',  label: 'Sales',   icon: 'receipt' },
   { id: 'newsale',   label: 'New',     icon: 'plus', primary: true },
   { id: 'inventory', label: 'Stock',   icon: 'box' },
   { id: 'more',      label: 'More',    icon: 'menu' }

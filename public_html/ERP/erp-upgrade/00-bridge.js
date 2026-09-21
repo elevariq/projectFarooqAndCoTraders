@@ -73,6 +73,7 @@ expose('stockTotal', function () { return stockTotal; });
 expose('levelOf',    function () { return levelOf; });
 expose('u',          function () { return u; });
 expose('I',          function () { return I; });
+expose('P',          function () { return P; });          /* the icon set: name -> SVG path (modules add their own) */
 expose('pill',       function () { return pill; });
 expose('opts',       function () { return opts; });
 expose('nf',         function () { return nf; });
