@@ -563,3 +563,29 @@ the latest backup. Afterwards clear the Hostinger cache and check in a REAL priv
 **Routine deploys afterwards**: `scripts/deploy-erp.sh` uploads to `_app/` (it refuses to run if
 `_app/` is absent). It does not touch the PHP files or `.htaccess`; changes to those are uploaded
 by hand with `scp` (`migrate` is a one-time step and refuses to run a second time).
+
+## Warehouse app on the database + no idle lock — deploy record (2026-09-21)
+
+What and why: `docs/SERVER_DATA.md` sections 8 and 9. Commits `e6a49ad` (no idle lock) and `038a59c` (Warehouse on the database).
+Order used (API before app, because the app now asks for `read.php?...&recent=N` and reads `user.name` from `status.php`):
+
+1. `scripts/deploy-api.sh` — backup `~/backups/api-20260921051241`, lint OK, all anonymous probes held.
+2. `scp scripts/test-data-core.php` to `~/tools/` and `php ~/tools/test-data-core.php --api=<the deployed api dir>` — 45 passed, 0 failed
+   against the real database (keys `zz_dc_*`, cleaned up; includes the new `recent` checks 1.5–1.7).
+3. Server config: `'idle_ttl_min' => 2 * 60` changed to `0` in `private/erp-config.php` (backup `erp-config.php.bak-20260921001519` — the
+   server clock is UTC, local is +5 h). Verified with `php -l` and by loading it: idle 0, absolute 720, enforce_login true, data_backend server.
+4. `scripts/deploy-erp.sh` — full harness gate green, backup `~/backups/erp-deploy-20260921060504`, three files in `_app/` md5-identical to
+   the build (`index.html` f36f6f58…, `farooq-co-erp.html` 3f184e63…, `farooq-erp-data.js` bf0bf077…), `app/index.html` identical, ERP `401`, homepage `200`.
+5. `hosting_clearWebsiteCacheV1` for `erp.farooqandcotraders.online` (accepted).
+
+Lesson: the gate's first run aborted on a `test-ui-kit` "promise never settled" while the machine was busy with other work (nothing uploaded);
+the harness passes alone and on a quiet machine. On this dev machine start `deploy-erp.sh` **detached** (a wrapper script launched with
+PowerShell `Start-Process -WindowStyle Hidden`) and leave the machine idle: a foreground run is killed by the tool's 10-minute limit, and a
+quiet run of the whole gate takes ~10 minutes (a busy one, over an hour). Remove a stale `.git/deploy-erp.lock` directory only after checking
+nothing is running.
+
+Rollback: app — copy the three files from the backup above into `ERP/_app/` and clear the cache; API — `scripts/deploy-api.sh rollback`;
+idle limit — set `'idle_ttl_min' => 120` in the server config; Warehouse back to browser-only — `scripts/data-backend.sh off` (also puts the office
+back on browser storage; there is no Warehouse-only switch).
+Not seen live by a person: a real receive/dispatch through the Warehouse tile, the signed-in Warehouse screens, a phone.
+

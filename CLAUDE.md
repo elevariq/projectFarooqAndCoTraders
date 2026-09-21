@@ -10,7 +10,7 @@ GitHub: talhaazhar-ta):
 
 - **`farooqandcotraders.online`** — public homepage (`public_html/index.html`).
 - **`erp.farooqandcotraders.online`** — a subdomain pointing at `public_html/ERP`, serving a
-  **ERP app whose business data now lives on the company MySQL database** (since 2026-09-20 — see "MySQL database" below and
+  **ERP app whose business data now lives on the company MySQL database — the Warehouse tile too, since 2026-09-21** (since 2026-09-20 — see "MySQL database" below and
   `docs/SERVER_DATA.md`, the single current guide). The browser loads everything from the server at page load and saves through a small PHP
   API; each browser's old IndexedDB copy (`farooqco_erp_ledger`) is frozen and no longer used. The static HTML/JS files here are the
   *application code*, not the data. **The switch** is `'data_backend' => 'server'` in the server's `private/erp-config.php`
@@ -1297,6 +1297,50 @@ not filtered at all, and the "Receipts & vouchers" log stopped at the latest 200
   identical; no `*.uploading` leftovers; the ERP answers `401` (gated, healthy), the homepage `200`. Hostinger cache cleared for `erp.farooqandcotraders.online`
   (`hosting_clearWebsiteCacheV1`, accepted). No API or schema change, so no `deploy-api.sh`. **Still not seen by anyone in a signed-in browser or on a physical phone:**
   the Payments screen (search box, filters, Show more, Print), the Pay-a-shop and Pay-supplier panels, the "Paid by" hint, the "Lying at mills" card — check them once live.
+
+## The Warehouse app is on the database, and there is no idle lock (2026-09-21)
+
+Request: "shift the warehouse app too to db, I want my whole system on the db" and "remove the option that when the system is idle the
+password is asked again". Full design, decisions and limits: **`docs/SERVER_DATA.md` §8 and §9** (the current guide). In short:
+
+- **Warehouse app.** Before, the launcher's *Warehouse* tile kept a stock map in the browser (`farooqco_erp_v1`) that the office app overwrote
+  from its own tables — a bag received/dispatched there never reached the real stock, and its offline queue was never persisted. Now, with
+  `data_backend` = `server`, the page reads the company database and saves through the SAME driver as the office (`01b-server-db.js`) plus
+  a small module of its own, **`erp-upgrade/39-warehouse-server.js`** (`window.FcWH`). `build.py` injects modules 1, 1b and 39 in front of
+  the page's own script (`inject_warehouse_data`); the page source is `app/farooq-co-warehouse-pwa.html` (it now has a server path beside the
+  old browser path — the switch off, or no server API, gives exactly the old behaviour).
+  - *Receive* = a `RECEIVE` stock document `RCV-…` (bags only, no money). *Dispatch* = a `DISPATCH` document `DSP-…` naming the shop, with an
+    optional link to the shop's invoice: if that invoice already took the bags out of stock the dispatch does NOT take them out again (the
+    office's own rule). Stock rows and number counters are re-read from the server before every save; a lost race is refused whole. No offline
+    entry. Entries are attributed to the signed-in person (`status.php` now returns `user.name`).
+  - Server API additions (deploy `deploy-api.sh` BEFORE the app): `read.php?stores=…&recent=N` (newest N rows, 1–1000) and `name`/`username`
+    in `status.php`'s `user`. Driver additions (`01b`): `FDB.server.{hot,onStale,loadPartial,rows,user}`.
+  - **Tests:** `test-warehouse-server.mjs` (66 checks: the real page in jsdom on the shared `test-mock-server.mjs`, every entry made by clicking
+    the page; **it runs the office's `StockDocs` and the warehouse page side by side and compares every record** — that is the drift guard;
+    14 deliberate breakages each turn it red). `test-mock-server.mjs` is the mock factored out of `test-server-db.mjs`. `scripts/test-data-core.php`
+    has 3 new checks for `recent` (run on the server).
+  - **Office rule to remember:** a warehouse receipt adds bags; if the office also enters the supplier's purchase with the bags received they are
+    counted twice — enter the bill with **Received = 0** (bill only).
+  - **Not verified live by a person:** a real receive/dispatch through the Warehouse tile on the live site (no live write was made — it would put
+    a document in the real books); the layout on a physical phone. Not built: receiving against a purchase, per-role rules for who may dispatch,
+    a session watch in the Warehouse page.
+- **Deployed live 2026-09-21** (commits `e6a49ad` idle lock, `038a59c` Warehouse). Order: `deploy-api.sh` (~06:12 local; backup
+  `~/backups/api-20260921051241`; anonymous probes all held) → `scripts/test-data-core.php` on the server against the real database
+  (45/45 incl. the 3 `recent` checks; copy in `~/tools/`) → server config `idle_ttl_min` set to `0` (backup
+  `private/erp-config.php.bak-20260921001519`; verified the config loads: idle 0, absolute 720, enforce true, backend server) →
+  `deploy-erp.sh` (full 39-harness gate green; backup `~/backups/erp-deploy-20260921060504`; `_app/index.html` md5 `f36f6f58…`,
+  `_app/farooq-co-erp.html` md5 `3f184e63…`, `_app/farooq-erp-data.js` md5 `bf0bf077…`, all identical to the build; `app/index.html`
+  identical; no `.uploading` leftovers; ERP `401` gated, homepage `200`) → Hostinger cache cleared for `erp.farooqandcotraders.online`.
+  The first `deploy-erp.sh` attempt stopped in its own test gate on a `test-ui-kit` load flake ("a promise never settled" while the
+  machine was busy); nothing had been uploaded; that harness passed 3/3 alone and the rerun on a quiet machine passed everything.
+  Run it detached (a wrapper script started with `Start-Process`) so the tool's 10-minute timeout cannot kill it mid-upload.
+  Rollback: app = copy the three files from that backup into `ERP/_app/`; API = `scripts/deploy-api.sh rollback`; idle limit back =
+  `'idle_ttl_min' => 120` in the server config. **Not seen live by a person:** a real receive/dispatch through the Warehouse tile (no live
+  write was made on purpose), the signed-in Warehouse screens in a browser (the Chrome extension was not connected), a phone.
+- **No idle lock.** Removed the 15-minute screen lock (`31-auth.js`) and the server's idle sign-out (`_session.php`: none unless
+  `'idle_ttl_min' => N` with N > 0 is in the server config; the live config was set to `0`). Still asking again: the 12 h session cap
+  (`absolute_ttl_min`), an account switched off, or signing out elsewhere — the app shows "Your session has ended" without a reload.
+  `test-auth-client.mjs` F1/F1b, `test-gate.mjs` O6/O6b/O6c (the gate test needs PHP — it skips on this machine).
 
 ## Where to look for more detail
 
