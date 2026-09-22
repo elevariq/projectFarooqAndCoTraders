@@ -136,8 +136,26 @@ var Inventory = ERP.Inventory = {
       if (S.inventory[k].productId === pid && S.inventory[k].avgCostP) any = any || S.inventory[k].avgCostP;
     });
     if (any) return any;
+    var carried = Inventory.carriedCost(pid, wid);
+    if (carried) return carried;
     var p = global.prodOf && global.prodOf(pid);
     return p && p.buy ? M.toP(p.buy) : 0;
+  },
+  /* the weighted cost of stock that came in without ever touching avgCostP — opening stock, "Add
+     stock" with a cost typed, transfers, brand conversions. avgCostP only moves on PURCHASE_IN /
+     MILL_RECEIPT_IN (see apply() below), so a product priced only through one of these ways used to
+     cost 0 everywhere else — Prices.of then showed a false 100% margin, and a sale's profit was
+     wrong. Mirrors the same "carried" cost Stock value already shows (37-stock-value.js) so the two
+     agree. Scoped to one warehouse when given, else every warehouse the product is in. */
+  carriedCost: function (pid, wid) {
+    var CARRIED = { OPENING_STOCK: 1, ADJUSTMENT_IN: 1, TRANSFER_IN: 1, CONVERT_IN: 1 };
+    var qty = 0, cost = 0;
+    (S.movements || []).forEach(function (mv) {
+      if (mv.productId !== pid || (wid && mv.warehouseId !== wid)) return;
+      if (!CARRIED[mv.kind] || mv.bucket === 'damaged' || !(mv.qtyDelta > 0) || !(mv.unitCostP > 0)) return;
+      qty += mv.qtyDelta; cost += mv.qtyDelta * mv.unitCostP;
+    });
+    return qty ? Math.round(cost / qty) : 0;
   },
   /* Apply one movement inside a caller-owned transaction. */
   apply: function (api, mv) {

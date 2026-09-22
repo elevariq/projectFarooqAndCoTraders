@@ -150,6 +150,12 @@ Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's 
 
 ## Rules that keep code changes safe (learned the hard way)
 
+- **Stock cost (fixed 2026-09-22 — client: "when we add product in stock it gives 100% margin"):** `Inventory.apply`'s `avgCostP` still only moves on
+  `PURCHASE_IN`/`MILL_RECEIPT_IN`; a cost typed on Add stock / opening stock / a transfer / brand conversion still lives on the movement only. But
+  `Inventory.costOf` (used by Prices.of's margin, Cost.forSale, invoice `costSnapshot`) now falls back to `Inventory.carriedCost` — the same qty-weighted
+  "carried" cost Stock value already computed for itself — before falling to the product's list price, so a brand-new product priced only through Add
+  stock no longer costs 0 (false 100% margin) elsewhere. Don't touch `avgCostP` itself for those movement kinds — `test-stock-value.mjs` M5 relies on a
+  purchase-kept average NOT being overridden by a later typed Add-stock cost.
 - **Money screens never pre-select a party.** Shop / supplier / employee choice starts on a blank "— Choose … —" line and Save refuses
   without one (Receive payment, Pay a shop, Pay supplier, Change shop, Pay salary). Start payments via `data-fcpayopen` (clears stale
   `PAY_FOR`/`REFUND_FOR`/`WATARGET`; `WATARGET` is a lexical `let` in the base script — not reachable as `window.WATARGET`).
@@ -202,18 +208,15 @@ Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's 
 6. **Milling — decided 2026-09-21 (recommended answers, kept until the client says otherwise):** wheat comes from our own books (record the wheat
    purchase first, then the job); goods at the mills are shown beside stock value; arrivals recorded by `PURCHASE_CREATE` roles; job carries the agreed
    rates; one job per handover; 1–8 % loss band is a warning only. Recommended next, not built: dated running in/out/balance statement per mill.
-7. **Found, not fixed — Add stock "Cost" field:** `Inventory.apply` only feeds a row's moving average from `PURCHASE_IN`/`MILL_RECEIPT_IN`, so a cost typed
-   on Add stock / opening stock is saved on the movement only, and later sales are costed from another source → margin reports differ from Stock value.
-   Shared-core change that moves profit figures — needs the owner's decision.
-8. `PAYMENT_CREATE` (Sales role has it) doesn't gate the Pay-a-shop / Pay-supplier panels — anyone can record cash paid OUT; gate `Payments.refund` if wanted.
-9. Settings has lost its **Warehouses card** (same root cause as the old Regions card; handlers `data-whedit/whdel/whadd` still exist). Not asked for.
-10. Payroll: ask the client whether they want "pay everyone for the month" in one go. Not built: tax, attendance, overtime, instalment loans, payslips by message.
-11. **Owner to do:** a signed-OUT sign-in test in a private window with a real password; add real staff under Company accounts (switch off/delete `test`);
+7. `PAYMENT_CREATE` (Sales role has it) doesn't gate the Pay-a-shop / Pay-supplier panels — anyone can record cash paid OUT; gate `Payments.refund` if wanted.
+8. Settings has lost its **Warehouses card** (same root cause as the old Regions card; handlers `data-whedit/whdel/whadd` still exist). Not asked for.
+9. Payroll: ask the client whether they want "pay everyone for the month" in one go. Not built: tax, attendance, overtime, instalment loans, payslips by message.
+10. **Owner to do:** a signed-OUT sign-in test in a private window with a real password; add real staff under Company accounts (switch off/delete `test`);
     decide on the lockout-DoS limit; keep an off-site backup copy occasionally; check Hostinger hPanel → Backups is enabled (no MCP tool shows it).
-12. Not done by design/for later: undo for an area delete; bulk "move all shops"; notification "mark all read"; Documents/Audit lists paged;
+11. Not done by design/for later: undo for an area delete; bulk "move all shops"; notification "mark all read"; Documents/Audit lists paged;
     persistent PDO connections; base `<title>` still says "Warehouse ERP".
-13. The business-logic of the ERP modules has not had a dedicated audit — scope it separately if the user wants one.
-14. **Extra cost per bag** (Product prices panel, 2026-09-21, module 21, `docs/CLAUDE_HISTORY_2026-09-21.md`): a per-product planning figure (transport/labour WE pay) that drives the panel's
+12. The business-logic of the ERP modules has not had a dedicated audit — scope it separately if the user wants one.
+13. **Extra cost per bag** (Product prices panel, 2026-09-21, module 21, `docs/CLAUDE_HISTORY_2026-09-21.md`): a per-product planning figure (transport/labour WE pay) that drives the panel's
     cost-to-us / margin / below-cost warning only. Invoices, Profit and Stock value still use actual purchase cost + the Landed costs screen. Ask the owner whether it should also feed sale-time
     profit (moves every profit figure; would double-count anything also entered as a landed cost). Not yet seen on the live site.
 

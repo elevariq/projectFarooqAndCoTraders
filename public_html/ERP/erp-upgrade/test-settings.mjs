@@ -87,6 +87,20 @@ const run=async()=>{
   check('S14 the stock alert level comes from the product, then the setting',
     ERP.reorderLevelOf(rice.id)===40 && ERP.reorderLevelOf(P[7].id)===ERP.Settings.get().defaultReorderLevel);
 
+  /* ── client-reported: "when we add product in stock it gives 100% margin" ──
+     a brand-new product with no purchase behind it, added only through Add stock with a cost
+     typed, must not be costed at zero everywhere else that cost is used. */
+  const newP=P[10];
+  await ERP.StockDocs.receive({warehouseId:wh, reason:'New line', opening:true,
+    items:[{productId:newP.id,quantity:20,unitPrice:1500}]});
+  check('S14b a product only ever added through Add stock carries that typed cost, not zero',
+    ERP.Inventory.costOf(newP.id,wh)===M.toP(1500), M.fmt(ERP.Inventory.costOf(newP.id,wh)));
+  await ERP.Prices.set(newP.id,{sell:1800},{reason:'First sale price'});
+  const newInfo=ERP.Prices.of(newP.id);
+  check('S14c …so its margin is worked from that cost, not a false 100%',
+    newInfo.buy===M.toP(1500) && newInfo.margin===16.7,
+    `buy ${M.fmt(newInfo.buy)} margin ${newInfo.margin}%`);
+
   /* ── approval workflow, with real accounts ── */
   await ERP.Settings.save({priceApproval:true});
   const ownerAcct=ERP.Users.all()[0];
