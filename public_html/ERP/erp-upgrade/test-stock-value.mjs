@@ -313,6 +313,15 @@ async function main() {
     rowOf(d, pJ, wh2.id).costSrc === 'other' && rowOf(d, pJ, wh2.id).costP === R(700) && rowOf(d, pJ, wh2.id).valueP === R(5600));
   check('M7 …and that is not called an estimate', !d.rows.some(r => r.productId === pJ.id && r.costSrc === 'list'));
 
+  const pL = P[25];
+  await buy(pL, 15, 3000, wh2.id);                 // a purchase-kept average, but in the OTHER warehouse
+  await receive(pL, 10, 1200, true);                // opening stock with a typed cost, in THIS warehouse
+  check('M8 costing a sale in the warehouse that only ever had "Add stock" uses ITS OWN carried cost, ' +
+    'not another warehouse\'s recorded average', ERP.Inventory.costOf(pL.id, wh.id) === R(1200));
+  check('M9 …the other warehouse still uses its own recorded average', ERP.Inventory.costOf(pL.id, wh2.id) === R(3000));
+  check('M10 …and with no warehouse given (e.g. the Prices panel), a recorded average outranks a carried cost',
+    ERP.Inventory.costOf(pL.id) === R(3000));
+
   /* ═════════════════════════════════════════════════════════════════
      N. EDGE CASES
      ═════════════════════════════════════════════════════════════════ */

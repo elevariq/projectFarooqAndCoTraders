@@ -131,13 +131,23 @@ var Inventory = ERP.Inventory = {
   costOf: function (pid, wid) {
     var r = Inventory.row(pid, wid);
     if (r.avgCostP) return r.avgCostP;
+    /* this row's own carried cost outranks another warehouse's recorded average — the same
+       priority Stock value uses for one row (37-stock-value.js costFor: recorded → carried →
+       other → list) — so costing a sale in THIS warehouse cannot pick up a different warehouse's
+       price just because this one was only ever stocked through Add stock. */
+    if (wid) {
+      var ownCarried = Inventory.carriedCost(pid, wid);
+      if (ownCarried) return ownCarried;
+    }
     var any = 0;
     Object.keys(S.inventory).forEach(function (k) {
       if (S.inventory[k].productId === pid && S.inventory[k].avgCostP) any = any || S.inventory[k].avgCostP;
     });
     if (any) return any;
-    var carried = Inventory.carriedCost(pid, wid);
-    if (carried) return carried;
+    if (!wid) {                                   // product-level (no warehouse given): fall to a
+      var carried = Inventory.carriedCost(pid, wid);   // product-wide carried cost before the list price
+      if (carried) return carried;
+    }
     var p = global.prodOf && global.prodOf(pid);
     return p && p.buy ? M.toP(p.buy) : 0;
   },

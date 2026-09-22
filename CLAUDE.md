@@ -155,7 +155,9 @@ Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's 
   `Inventory.costOf` (used by Prices.of's margin, Cost.forSale, invoice `costSnapshot`) now falls back to `Inventory.carriedCost` — the same qty-weighted
   "carried" cost Stock value already computed for itself — before falling to the product's list price, so a brand-new product priced only through Add
   stock no longer costs 0 (false 100% margin) elsewhere. Don't touch `avgCostP` itself for those movement kinds — `test-stock-value.mjs` M5 relies on a
-  purchase-kept average NOT being overridden by a later typed Add-stock cost.
+  purchase-kept average NOT being overridden by a later typed Add-stock cost. `costOf` also now prefers a warehouse's OWN
+  carried cost over another warehouse's recorded average (else costing a sale in the Add-stock-only warehouse silently used
+  a different warehouse's price) — but with no warehouse given (Prices panel) a recorded average still outranks a carried one.
 - **Money screens never pre-select a party.** Shop / supplier / employee choice starts on a blank "— Choose … —" line and Save refuses
   without one (Receive payment, Pay a shop, Pay supplier, Change shop, Pay salary). Start payments via `data-fcpayopen` (clears stale
   `PAY_FOR`/`REFUND_FOR`/`WATARGET`; `WATARGET` is a lexical `let` in the base script — not reachable as `window.WATARGET`).
