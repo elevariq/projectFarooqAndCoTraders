@@ -1392,29 +1392,31 @@ var Payments = ERP.Payments = {
     }).then(function (r) { Mirror.refresh(); return r; });
   },
   /* Client request (2026-09-23): a wrong amount on a voucher paid to a shop
-     needs a straight correction. Deliberately narrow: a stand-alone "Pay a
-     shop" voucher only. Ledger.customer reads p.amount live (never the
-     balanceBefore/After stamped on the record), so changing it here is safe
-     for the shop's balance on its own — but two cases are refused because
-     something ELSE would then disagree with it: a payment with allocations
-     (none — a refund never has any — would need its allocated total redone
-     too), and the cash side of a customer return's REFUND treatment (Returns.
-     fromCustomer writes both a customerReturns.creditAmount and this same
-     kind of payment for the same event; editing only the payment would
-     silently unbalance the two ledger lines it produces). Correct the return
-     instead for that case — not built. */
+     needs a straight correction; extended the same day to a voucher paid to a
+     SUPPLIER — same shape of problem, same fix. Ledger.customer/supplier both
+     read p.amount live (never the balanceBefore/After stamped on the record),
+     so changing it here is safe for either party's balance on its own — but
+     two cases are refused because something ELSE would then disagree with it:
+     a payment with allocations (a shop refund never has any, but a supplier
+     voucher can be tied to a purchase — "Paid with purchase …" — whose paid
+     total would then be wrong), and the cash side of a customer return's
+     REFUND treatment (Returns.fromCustomer writes both a customerReturns.
+     creditAmount and this same kind of payment for the same event; editing
+     only the payment would silently unbalance the two ledger lines it
+     produces — supplier returns have no such twin, Returns.toSupplier never
+     writes a payment). Correct the return instead for that case — not built. */
   editAmountCheck: function (id) {
     var p = Payments.byId(id), errs = [];
     if (!p) { errs.push('Payment not found.'); return { p: p, errs: errs }; }
     if (p.status === 'REVERSED') errs.push('A reversed voucher cannot be edited.');
-    else if (!(p.direction === 'OUT' && p.partyType === 'CUSTOMER'))
-      errs.push('Only a voucher paid to a shop can have its amount corrected here.');
+    else if (p.direction !== 'OUT' || (p.partyType !== 'CUSTOMER' && p.partyType !== 'SUPPLIER'))
+      errs.push('Only a voucher paid to a shop or a supplier can have its amount corrected here.');
     else if (S.allocations.some(function (a) { return a.paymentId === id; }))
-      errs.push('This payment is applied to an invoice; its amount can’t be changed here.');
+      errs.push('This payment is applied to an invoice or purchase; its amount can’t be changed here.');
     /* matched on both fields Returns.fromCustomer actually stamps (reference AND the note
        prefix) — reference alone would false-positive on a stand-alone voucher whose reference
        happens to be typed the same as some unrelated return's number */
-    else if (/^Refund against return /.test(p.note || '') &&
+    else if (p.partyType === 'CUSTOMER' && /^Refund against return /.test(p.note || '') &&
              S.custReturns.some(function (r) { return r.returnNumber === p.reference; }))
       errs.push('This voucher is the refund for a customer return — correct the return instead.');
     return { p: p, errs: errs };

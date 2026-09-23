@@ -351,11 +351,13 @@ function regionCell(p) {
 function docBtn(p, label) {
   return '<button class="btn sm" data-fcreceipt="' + esc(p.id) + '">' + I('doc') + label + '</button>';
 }
-/* Client request (2026-09-23): correct a wrong amount on a "Paid to shops"
-   voucher. Gated like other two-account corrections (Invoices.changeCustomer):
-   the panel itself (ERP.actions.editPaymentAmount → PANELS.editpayamt) explains
-   when a particular voucher cannot be corrected here (see Payments.editAmountCheck),
-   rather than hiding the button case by case. */
+/* Client request (2026-09-23): correct a wrong amount on a "Paid to shops" or
+   "Supplier payments" voucher. Gated like other two-account corrections
+   (Invoices.changeCustomer): the panel itself (ERP.actions.editPaymentAmount →
+   PANELS.editpayamt) explains when a particular voucher cannot be corrected
+   here (see Payments.editAmountCheck), rather than hiding the button case by
+   case — a supplier voucher tied to a purchase will show the button and then
+   say why it can't be edited here, same as any other refused case. */
 function editAmtBtn(p) {
   if (ERP.Can && !ERP.Can('TRANSACTION_CORRECT')) return '';
   return '<button class="btn sm" data-fceditamt="' + esc(p.id) + '">Edit amount</button>';
@@ -534,7 +536,7 @@ global.PAGES.payments = function () {
             '<td data-label="Amount" class="num r"><b>' + M.fmtPlain(p.amount) + '</b></td>' +
             '<td data-label="Reference">' + refCell(p) + '</td>' +
             '<td data-label="Applied to">' + appliedCell(p) + '</td>' +
-            '<td class="r fcb-rowacts">' + docBtn(p, 'Voucher') + '</td></tr>';
+            '<td class="r fcb-rowacts">' + docBtn(p, 'Voucher') + editAmtBtn(p) + '</td></tr>';
         });
   }
 

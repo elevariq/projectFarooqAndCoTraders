@@ -392,41 +392,54 @@ PANELS.refund = {
   }
 };
 
-/* Correct the amount on a voucher already paid to a shop — see
-   Payments.editAmountCheck for exactly what may and may not be corrected here.
-   The "will become" preview matches every other money panel here (Pay a shop,
-   Change shop): shown once an amount is typed, not before. */
+/* Correct the amount on a voucher already paid OUT — to a shop or (added
+   2026-09-23, same request) a supplier. See Payments.editAmountCheck for
+   exactly what may and may not be corrected here. The "will become" preview
+   matches every other money panel here (Pay a shop, Pay supplier, Change
+   shop): shown once an amount is typed, not before. */
 var EDITAMT_FOR = null;
+function editAmtParty(p) {
+  return p.partyType === 'SUPPLIER' ? (global.supOf ? global.supOf(p.partyId) : null)
+                                     : (global.custBy ? global.custBy(p.partyId) : null);
+}
+function editAmtPartyName(p, party) {
+  return party ? (p.partyType === 'SUPPLIER' ? party.co : party.sh) : (p.partyNameSnapshot || '—');
+}
 function editAmtBalanceHtml(paymentId, typedAmtStr) {
   var p = ERP.Payments.byId(paymentId);
   if (!p) return '';
-  var c = global.custBy ? global.custBy(p.partyId) : null;
+  var party = editAmtParty(p);
   var newAmt = M.toP(String(typedAmtStr || '').replace(/[^\d.]/g, ''));
   var h = I('wallet') + '<div><p>Currently <b>' + M.fmt(p.amount) + '</b>';
   if (newAmt > 0 && newAmt !== p.amount) {
     h += ' → will become <b>' + M.fmt(newAmt) + '</b>';
-    if (c) {
-      var before = ERP.Ledger.customerBalance(c.id);
-      h += '. ' + esc(c.sh) + ' balance: ' + M.fmt(before) + ' → <b>' + M.fmt(before - p.amount + newAmt) + '</b>';
+    if (party) {
+      /* raising a shop refund raises what it owes us; raising a supplier
+         voucher lowers what we owe it — same sign Payments.editAmount itself
+         uses (p.isRefund) */
+      var before = p.partyType === 'SUPPLIER' ? ERP.Ledger.supplierBalance(party.id) : ERP.Ledger.customerBalance(party.id);
+      var sign = p.isRefund ? 1 : -1;
+      h += '. ' + esc(editAmtPartyName(p, party)) + ' balance: ' + M.fmt(before) +
+        ' → <b>' + M.fmt(before + sign * (newAmt - p.amount)) + '</b>';
     }
   }
   return h + '.</p></div>';
 }
 PANELS.editpayamt = {
-  t: 'Correct voucher amount', s: 'Change the amount on a voucher already paid to a shop',
+  t: 'Correct voucher amount', s: 'Change the amount on a voucher already paid to a shop or a supplier',
   cta: 'Save new amount',
   f: function () {
     var chk = ERP.Payments.editAmountCheck(EDITAMT_FOR), p = chk.p;
     if (!p) return '<div class="banner warn">' + I('alert') + '<div><b>Voucher not found</b></div></div>';
     if (ERP.Can && !ERP.Can('TRANSACTION_CORRECT'))
       return '<div class="banner warn">' + I('lock') + '<div><b>Not available for the ' + esc(ERP.RBAC.label()) +
-        ' role</b><p>Correcting a paid voucher changes the shop’s balance. Ask the owner, a manager or the accountant.</p></div></div>';
+        ' role</b><p>Correcting a paid voucher changes the balance owed. Ask the owner, a manager or the accountant.</p></div></div>';
     if (chk.errs.length)
       return '<div class="banner warn">' + I('alert') + '<div><b>This voucher’s amount cannot be corrected here</b>' +
         chk.errs.map(function (m) { return '<p>' + esc(m) + '</p>'; }).join('') + '</div></div>';
-    var c = global.custBy ? global.custBy(p.partyId) : null;
+    var party = editAmtParty(p);
     return '<div class="banner info">' + I('doc') + '<div><b>' + esc(p.receiptNumber) + '</b> · paid to <b>' +
-        esc(c ? c.sh : p.partyNameSnapshot || '—') + '</b><p>The date, method and reference stay exactly as they are.</p></div></div>' +
+        esc(editAmtPartyName(p, party)) + '</b><p>The date, method and reference stay exactly as they are.</p></div></div>' +
       '<div class="banner info" id="fcEditAmtBal">' + editAmtBalanceHtml(EDITAMT_FOR, M.toR(p.amount)) + '</div>' +
       '<label class="f"><span>Correct amount</span><input data-f="amt" inputmode="decimal" value="' + M.toR(p.amount) + '"></label>' +
       '<label class="f"><span>Reason</span><input data-f="reason" maxlength="200" placeholder="e.g. wrong amount typed"></label>';

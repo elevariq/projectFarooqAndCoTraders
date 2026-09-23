@@ -161,11 +161,13 @@ Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's 
 - **Money screens never pre-select a party.** Shop / supplier / employee choice starts on a blank "— Choose … —" line and Save refuses
   without one (Receive payment, Pay a shop, Pay supplier, Change shop, Pay salary). Start payments via `data-fcpayopen` (clears stale
   `PAY_FOR`/`REFUND_FOR`/`WATARGET`; `WATARGET` is a lexical `let` in the base script — not reachable as `window.WATARGET`).
-- **Correcting a Paid-to-shops voucher amount** (2026-09-23, client request): an "Edit amount" button (gated `TRANSACTION_CORRECT`,
-  same as Change shop) opens `PANELS.editpayamt` → `Payments.editAmount`, which corrects the figure in place (no cancel-and-redo).
-  Refused for a reversed voucher, one with allocations, or the cash side of a customer return's REFUND treatment — that amount is
-  duplicated onto `customerReturns.creditAmount` and the two must stay equal for the shop's ledger to net to zero; correct the
-  return instead (not built). Deliberately does not touch Receive-payment or Pay-supplier vouchers (those carry allocations).
+- **Correcting a paid-out voucher amount** (2026-09-23, client request; extended same day to Supplier payments): an "Edit amount"
+  button (gated `TRANSACTION_CORRECT`, same as Change shop) on a Paid-to-shops or Supplier-payments voucher opens `PANELS.editpayamt`
+  → `Payments.editAmount`, which corrects the figure in place (no cancel-and-redo). Refused for a reversed voucher, one with
+  allocations (a supplier voucher tied to a purchase — "Paid with purchase …" — refuses this way), or the cash side of a customer
+  return's REFUND treatment — that amount is duplicated onto `customerReturns.creditAmount` and the two must stay equal for the
+  shop's ledger to net to zero; correct the return instead (not built; no supplier-side equivalent — `Returns.toSupplier` never
+  writes a payment). Deliberately does not touch Receive-payment vouchers.
 - **Names are written into pages unescaped** by the base `u()` helper and `data-row="…"` attributes — refuse `< > "` in any new name field.
 - **Icons:** the base exposes `window.I` (and `window.P` via module 40), NOT `window.icon`. Modules 30/32 still read `window.icon`
   (Payroll "Excel" button and some Milling icons blank) — fix when touched.

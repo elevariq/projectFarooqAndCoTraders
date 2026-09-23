@@ -272,6 +272,26 @@ async function main() {
   type(box(), 'SUPREF-3301'); await sleep(260);
   check('U13 a supplier payment is found by its reference',
     pageText().includes('SUPREF-3301') && /No payment to a shop matches/.test(pageText()));
+
+  /* Client request (2026-09-23, same day): the same "Edit amount" button, on a
+     Supplier-payments voucher (mine.P5 has no allocations, so it's correctable). */
+  check('U13a the supplier row offers an Edit amount button too',
+    !!$('[data-fceditamt="' + mine.P5.id + '"]'));
+  const supBalBeforeEdit = ERP.Ledger.supplierBalance(sup.id);
+  const p5OldAmount = mine.P5.amount;              /* mine.P5 is the SAME object editAmount mutates in place */
+  click($('[data-fceditamt="' + mine.P5.id + '"]')); await sleep(150);
+  check('U13b the panel opens naming the voucher, its current amount and the supplier',
+    $('#panel').textContent.includes(mine.P5.receiptNumber) && $('[data-f="amt"]').value === String(M.toR(p5OldAmount)) &&
+    $('#panel').textContent.includes(sup.co),
+    $('[data-f="amt"]') ? $('[data-f="amt"]').value : 'panel did not open');
+  $('[data-f="amt"]').value = '16000'; $('[data-f="reason"]').value = 'typed the wrong amount';
+  click($('[data-save="1"]')); await sleep(300);
+  check('U13c saving updates the voucher, the supplier\'s balance (the opposite way to a shop refund), and the row on screen',
+    ERP.Payments.byId(mine.P5.id).amount === M.toP(16000) &&
+    ERP.Ledger.supplierBalance(sup.id) === supBalBeforeEdit - (M.toP(16000) - p5OldAmount) &&
+    pageText().includes('16,000'));
+  click($('[data-fcpact="clear"]')); await sleep(100);
+
   type(box(), 'REV-0007'); await sleep(260);
   check('U14 a reversed voucher is found, in its own list, with the reason and struck-out amount',
     /Reversed receipts/.test(pageText()) && pageText().includes('wrong shop') && !!$('#view table s'));

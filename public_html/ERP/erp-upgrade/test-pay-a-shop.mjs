@@ -443,12 +443,38 @@ async function main() {
   check('C8 a reversed voucher is refused', /reversed voucher/.test(ERP.Payments.editAmountCheck(badPay.id).errs[0] || ''));
 
   const recvPay = await ERP.Payments.receive({ customerId: c3.id, amount: 500, method: 'Cash', reference: 'IN-ONLY' });
-  check('C9 an ordinary receipt (money received) is refused — this only corrects a voucher paid to a shop',
-    /paid to a shop/.test(ERP.Payments.editAmountCheck(recvPay.id).errs[0] || ''));
+  check('C9 an ordinary receipt (money received) is refused — this only corrects a voucher paid to a shop or a supplier',
+    /paid to a shop or a supplier/.test(ERP.Payments.editAmountCheck(recvPay.id).errs[0] || ''));
 
+  /* Extended the same day (2026-09-23) to a "Pay supplier" voucher — same fix,
+     same panel, opposite balance direction (paying a supplier LOWERS what we
+     owe it, where a shop refund RAISES what it owes us). */
   const supPay3 = await ERP.Payments.pay({ supplierId: sup.id, amount: 500, method: 'Cash', reference: 'SUP-ONLY' });
-  check('C10 a supplier payment is refused the same way',
-    /paid to a shop/.test(ERP.Payments.editAmountCheck(supPay3.id).errs[0] || ''));
+  check('C10a a stand-alone supplier voucher (no allocations) is NOT refused',
+    ERP.Payments.editAmountCheck(supPay3.id).errs.length === 0,
+    JSON.stringify(ERP.Payments.editAmountCheck(supPay3.id).errs));
+  const supBalBefore = ERP.Ledger.supplierBalance(sup.id);
+  ERP.actions.editPaymentAmount(supPay3.id); await sleep(200);
+  check('C10b the panel names the supplier voucher, its current amount and the supplier (not a shop)',
+    $('#panel').textContent.includes(supPay3.receiptNumber) && $('#panel').textContent.includes(M.fmt(supPay3.amount)) &&
+    $('#panel').textContent.includes(sup.co));
+  const supAmtInput = $('[data-f="amt"]');
+  supAmtInput.value = '650'; supAmtInput.dispatchEvent(new w.Event('input', { bubbles: true })); await sleep(60);
+  check('C10c typing a new figure previews the supplier balance moving the OPPOSITE way to a shop refund',
+    $('#fcEditAmtBal').textContent.includes(M.fmt(supBalBefore - (M.toP(650) - supPay3.amount))));
+  click($('[data-save="1"]')); await sleep(250);
+  check('C10d saving updates the supplier voucher amount', ERP.Payments.byId(supPay3.id).amount === M.toP(650));
+  check('C10e the supplier\'s balance moved by exactly the difference, opposite direction to a shop refund',
+    ERP.Ledger.supplierBalance(sup.id) === supBalBefore - (M.toP(650) - M.toP(500)),
+    `${ERP.Ledger.supplierBalance(sup.id)} vs ${supBalBefore - (M.toP(650) - M.toP(500))}`);
+  await closePanel();
+
+  const supPayAlloc = await ERP.Payments.pay({
+    supplierId: sup.id, amount: 700, method: 'Cash', reference: 'SUP-ALLOC',
+    allocations: [{ purchaseId: 'test-fake-purchase', amountP: M.toP(700) }]
+  });
+  check('C10f a supplier voucher applied to a purchase is refused — its allocated total would then be wrong',
+    /applied to an invoice or purchase/.test(ERP.Payments.editAmountCheck(supPayAlloc.id).errs[0] || ''));
 
   /* the cash side of a customer return's REFUND treatment must not be edited on its own —
      its amount is duplicated onto customerReturns.creditAmount, and the two cancel out
