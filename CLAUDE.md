@@ -14,6 +14,11 @@ Two live sites on ONE Hostinger account (owner: theumairzero7@gmail.com, GitHub 
   Warehouse tile) lives on the company MySQL database since 2026-09-20/21 (`docs/SERVER_DATA.md` = the guide).
   Each browser's old IndexedDB copy is frozen and unused.
 
+**A separate rebuild is being planned/built in parallel at `D:\farooq-erp-next` (new repo `talhaazhar-ta/farooq-erp-next`,
+not deployed).** Whenever you change anything under `public_html/ERP/`, append one line to
+`D:\farooq-erp-next\docs\PARITY.md` (commit hash + what changed + affected module) and commit+push that file alone in
+that repo. It never affects this project's build/deploy/rules.
+
 Server layout: `/home/u943531942/domains/farooqandcotraders.online/public_html/` (homepage) and `.../public_html/ERP/`
 (ERP doc root — there is no separate filesystem for `erp.*`). `ERP/_app/` holds the three served app files
 (`index.html`, `farooq-co-erp.html`, `farooq-erp-data.js`); the public URLs are rewritten to `api/gate.php`.
