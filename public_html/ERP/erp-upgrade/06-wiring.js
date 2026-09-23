@@ -392,6 +392,61 @@ PANELS.refund = {
   }
 };
 
+/* Correct the amount on a voucher already paid to a shop — see
+   Payments.editAmountCheck for exactly what may and may not be corrected here.
+   The "will become" preview matches every other money panel here (Pay a shop,
+   Change shop): shown once an amount is typed, not before. */
+var EDITAMT_FOR = null;
+function editAmtBalanceHtml(paymentId, typedAmtStr) {
+  var p = ERP.Payments.byId(paymentId);
+  if (!p) return '';
+  var c = global.custBy ? global.custBy(p.partyId) : null;
+  var newAmt = M.toP(String(typedAmtStr || '').replace(/[^\d.]/g, ''));
+  var h = I('wallet') + '<div><p>Currently <b>' + M.fmt(p.amount) + '</b>';
+  if (newAmt > 0 && newAmt !== p.amount) {
+    h += ' → will become <b>' + M.fmt(newAmt) + '</b>';
+    if (c) {
+      var before = ERP.Ledger.customerBalance(c.id);
+      h += '. ' + esc(c.sh) + ' balance: ' + M.fmt(before) + ' → <b>' + M.fmt(before - p.amount + newAmt) + '</b>';
+    }
+  }
+  return h + '.</p></div>';
+}
+PANELS.editpayamt = {
+  t: 'Correct voucher amount', s: 'Change the amount on a voucher already paid to a shop',
+  cta: 'Save new amount',
+  f: function () {
+    var chk = ERP.Payments.editAmountCheck(EDITAMT_FOR), p = chk.p;
+    if (!p) return '<div class="banner warn">' + I('alert') + '<div><b>Voucher not found</b></div></div>';
+    if (ERP.Can && !ERP.Can('TRANSACTION_CORRECT'))
+      return '<div class="banner warn">' + I('lock') + '<div><b>Not available for the ' + esc(ERP.RBAC.label()) +
+        ' role</b><p>Correcting a paid voucher changes the shop’s balance. Ask the owner, a manager or the accountant.</p></div></div>';
+    if (chk.errs.length)
+      return '<div class="banner warn">' + I('alert') + '<div><b>This voucher’s amount cannot be corrected here</b>' +
+        chk.errs.map(function (m) { return '<p>' + esc(m) + '</p>'; }).join('') + '</div></div>';
+    var c = global.custBy ? global.custBy(p.partyId) : null;
+    return '<div class="banner info">' + I('doc') + '<div><b>' + esc(p.receiptNumber) + '</b> · paid to <b>' +
+        esc(c ? c.sh : p.partyNameSnapshot || '—') + '</b><p>The date, method and reference stay exactly as they are.</p></div></div>' +
+      '<div class="banner info" id="fcEditAmtBal">' + editAmtBalanceHtml(EDITAMT_FOR, M.toR(p.amount)) + '</div>' +
+      '<label class="f"><span>Correct amount</span><input data-f="amt" inputmode="decimal" value="' + M.toR(p.amount) + '"></label>' +
+      '<label class="f"><span>Reason</span><input data-f="reason" maxlength="200" placeholder="e.g. wrong amount typed"></label>';
+  },
+  save: function (v) {
+    var chk = ERP.Payments.editAmountCheck(EDITAMT_FOR);
+    if (chk.errs.length) return esc(chk.errs[0]);
+    var amount = String(v.amt || '').replace(/[^\d.]/g, '');
+    if (!amount || Number(amount) <= 0) return 'Enter an amount greater than zero.';
+    if (M.toP(amount) === chk.p.amount) return 'Enter a different amount — that is already the recorded figure.';
+    ERP.Payments.editAmount(EDITAMT_FOR, amount, v.reason).then(function (p) {
+      global.paint();
+      say('Voucher ' + p.receiptNumber + ' updated to ' + M.fmt(p.amount) + '.');
+    }).catch(function (e) {
+      say(e && e.validation ? e.validation[0] : 'The voucher could not be updated. Nothing was changed.');
+    });
+    return { msg: 'Saving…' };
+  }
+};
+
 /* Change shop — the invoice was made out to the wrong shop. Everything else on
    it stays; the account entry (and any money taken with it) moves. The rules
    for what may move live in Invoices.reassignCheck / changeCustomer. */
@@ -903,6 +958,10 @@ D.addEventListener('input', function (e) {
     if (rsel.value && !rsel.disabled) rb.innerHTML = refundBalanceHtml(rsel.value, el.value);
     return;
   }
+  if (el.dataset.f === 'amt' && D.getElementById('fcEditAmtBal') && EDITAMT_FOR) {
+    D.getElementById('fcEditAmtBal').innerHTML = editAmtBalanceHtml(EDITAMT_FOR, el.value);
+    return;
+  }
   if (el.dataset.fcq !== undefined) { ERP.InvoiceList.q = el.value; ERP.InvoiceList.page = 1; repaintList(); return; }
   if (el.dataset.fcline) {
     var ix = +el.dataset.ix, k = el.dataset.fcline;
@@ -1200,8 +1259,10 @@ function cancelInvoice(id) {
     }).catch(function () { say('The invoice could not be cancelled.'); });
   });
 }
+function editPaymentAmount(id) { EDITAMT_FOR = id; global.openPanel('editpayamt'); }
 ERP.actions = { editInvoice: editInvoice, duplicateInvoice: duplicateInvoice, cancelInvoice: cancelInvoice,
-                changeInvoiceShop: changeInvoiceShop, editPurchase: editPurchase, backup: doBackup };
+                changeInvoiceShop: changeInvoiceShop, editPurchase: editPurchase, backup: doBackup,
+                editPaymentAmount: editPaymentAmount };
 
 /* ══════════════════════════════════════════════════════════════════════════
    PATCHES — point the existing screens at the new database

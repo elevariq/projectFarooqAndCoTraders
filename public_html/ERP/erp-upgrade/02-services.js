@@ -1390,6 +1390,52 @@ var Payments = ERP.Payments = {
         ref: p.receiptNumber, reason: reason || '', oldValues: { status: 'POSTED' }, newValues: { status: 'REVERSED' } });
       return p;
     }).then(function (r) { Mirror.refresh(); return r; });
+  },
+  /* Client request (2026-09-23): a wrong amount on a voucher paid to a shop
+     needs a straight correction. Deliberately narrow: a stand-alone "Pay a
+     shop" voucher only. Ledger.customer reads p.amount live (never the
+     balanceBefore/After stamped on the record), so changing it here is safe
+     for the shop's balance on its own — but two cases are refused because
+     something ELSE would then disagree with it: a payment with allocations
+     (none — a refund never has any — would need its allocated total redone
+     too), and the cash side of a customer return's REFUND treatment (Returns.
+     fromCustomer writes both a customerReturns.creditAmount and this same
+     kind of payment for the same event; editing only the payment would
+     silently unbalance the two ledger lines it produces). Correct the return
+     instead for that case — not built. */
+  editAmountCheck: function (id) {
+    var p = Payments.byId(id), errs = [];
+    if (!p) { errs.push('Payment not found.'); return { p: p, errs: errs }; }
+    if (p.status === 'REVERSED') errs.push('A reversed voucher cannot be edited.');
+    else if (!(p.direction === 'OUT' && p.partyType === 'CUSTOMER'))
+      errs.push('Only a voucher paid to a shop can have its amount corrected here.');
+    else if (S.allocations.some(function (a) { return a.paymentId === id; }))
+      errs.push('This payment is applied to an invoice; its amount can’t be changed here.');
+    /* matched on both fields Returns.fromCustomer actually stamps (reference AND the note
+       prefix) — reference alone would false-positive on a stand-alone voucher whose reference
+       happens to be typed the same as some unrelated return's number */
+    else if (/^Refund against return /.test(p.note || '') &&
+             S.custReturns.some(function (r) { return r.returnNumber === p.reference; }))
+      errs.push('This voucher is the refund for a customer return — correct the return instead.');
+    return { p: p, errs: errs };
+  },
+  editAmount: function (id, newAmount, reason) {
+    var chk = Payments.editAmountCheck(id);
+    if (chk.errs.length) return Promise.reject({ validation: chk.errs });
+    var p = chk.p, amountP = M.toP(newAmount);
+    if (!(amountP > 0)) return Promise.reject({ validation: ['Enter an amount greater than zero.'] });
+    if (amountP === p.amount) return Promise.reject({ validation: ['That is already the recorded amount.'] });
+    return FDB.tx(['payments', 'auditLog'], function (api) {
+      var oldAmount = p.amount;
+      p.amount = amountP;
+      p.balanceAfter = p.balanceBefore + (p.isRefund ? p.amount : -p.amount);
+      api.put('payments', p);
+      Audit.write(api, {
+        action: 'Payment amount corrected', entity: 'Payment', entityId: id, ref: p.receiptNumber,
+        reason: reason || '', oldValues: { amount: oldAmount }, newValues: { amount: amountP }
+      });
+      return p;
+    }).then(function (r) { Mirror.refresh(); return r; });
   }
 };
 

@@ -398,6 +398,83 @@ async function main() {
   check('L3 Pay supplier still labels it "Amount Paid"', amtLabel() === 'Amount Paid', amtLabel());
   await closePanel();
 
+  /* ── Client request (2026-09-23): "want to change amount" on a Paid-to-shops
+     voucher. Payments.editAmount corrects the figure in place — no cancel and
+     redo — but only for a stand-alone "Pay a shop" voucher; see
+     Payments.editAmountCheck for what is refused and why. ── */
+  const badPay = await ERP.Payments.refund({ customerId: c3.id, amount: 5000, method: 'Cash', reference: 'FIX-ME' });
+  const badPayOldAmount = badPay.amount;            /* badPay is the SAME object editAmount mutates in place */
+  const c3BalBefore = ERP.Ledger.customerBalance(c3.id);
+  check('C1 ERP.Payments.editAmount exists', typeof ERP.Payments.editAmount === 'function');
+  ERP.actions.editPaymentAmount(badPay.id); await sleep(200);
+  check('C2 the panel names the voucher and its current amount',
+    $('#panel').textContent.includes(badPay.receiptNumber) && $('#panel').textContent.includes(M.fmt(badPayOldAmount)));
+  check('C3 the amount field starts filled with the current figure, in rupees',
+    $('[data-f="amt"]').value === String(M.toR(badPayOldAmount)), $('[data-f="amt"]').value);
+  check('C3a with the figure unchanged the balance banner shows only "Currently", no "will become"',
+    !!$('#fcEditAmtBal') && /Currently/.test($('#fcEditAmtBal').textContent) && !/will become/.test($('#fcEditAmtBal').textContent));
+  click($('[data-save="1"]')); await sleep(200);
+  check('C3b saving with the unchanged figure is refused inline, and the panel stays open',
+    /already the recorded figure/.test($('#panel').textContent) && ERP.Payments.byId(badPay.id).amount === badPayOldAmount);
+  const amtInput = $('[data-f="amt"]');
+  amtInput.value = '4200'; amtInput.dispatchEvent(new w.Event('input', { bubbles: true })); await sleep(60);
+  check('C3c typing a new figure previews it and the shop\'s new balance, live',
+    $('#fcEditAmtBal').textContent.includes(M.fmt(M.toP(4200))) &&
+    $('#fcEditAmtBal').textContent.includes(M.fmt(c3BalBefore - badPayOldAmount + M.toP(4200))));
+  $('[data-f="reason"]').value = 'typed the wrong amount';
+  click($('[data-save="1"]')); await sleep(250);
+  check('C4 saving updates the amount only — reference and method are untouched',
+    ERP.Payments.byId(badPay.id).amount === M.toP(4200) &&
+    ERP.Payments.byId(badPay.id).reference === 'FIX-ME' && ERP.Payments.byId(badPay.id).method === 'Cash');
+  check('C5 the shop\'s balance moves by exactly the difference (not a fresh amount added on top)',
+    ERP.Ledger.customerBalance(c3.id) === c3BalBefore - badPayOldAmount + M.toP(4200),
+    `${ERP.Ledger.customerBalance(c3.id)} vs ${c3BalBefore - badPayOldAmount + M.toP(4200)}`);
+  const editAudit = ERP.S.audit.find(a => a.entityId === badPay.id && a.action === 'Payment amount corrected');
+  check('C6 the correction is recorded in the audit log with the old and new figures and the reason',
+    !!editAudit && editAudit.oldValues.amount === M.toP(5000) && editAudit.newValues.amount === M.toP(4200) &&
+    editAudit.reason === 'typed the wrong amount');
+  await closePanel();
+
+  check('C7 zero or the unchanged figure is refused',
+    (await ERP.Payments.editAmount(badPay.id, 0).catch(e => e)).validation &&
+    (await ERP.Payments.editAmount(badPay.id, 4200).catch(e => e)).validation);
+
+  await ERP.Payments.reverse(badPay.id, 'test');
+  check('C8 a reversed voucher is refused', /reversed voucher/.test(ERP.Payments.editAmountCheck(badPay.id).errs[0] || ''));
+
+  const recvPay = await ERP.Payments.receive({ customerId: c3.id, amount: 500, method: 'Cash', reference: 'IN-ONLY' });
+  check('C9 an ordinary receipt (money received) is refused — this only corrects a voucher paid to a shop',
+    /paid to a shop/.test(ERP.Payments.editAmountCheck(recvPay.id).errs[0] || ''));
+
+  const supPay3 = await ERP.Payments.pay({ supplierId: sup.id, amount: 500, method: 'Cash', reference: 'SUP-ONLY' });
+  check('C10 a supplier payment is refused the same way',
+    /paid to a shop/.test(ERP.Payments.editAmountCheck(supPay3.id).errs[0] || ''));
+
+  /* the cash side of a customer return's REFUND treatment must not be edited on its own —
+     its amount is duplicated onto customerReturns.creditAmount, and the two cancel out
+     in the shop's ledger (N7.8 in test-erp.mjs) only as long as they still match */
+  const invRet = await ERP.Invoices.save({
+    customerId: c3.id, warehouseId: wh.id, invoiceDate: '2026-09-14', paidAmount: 0,
+    items: [{ productId: prod.id, quantity: 5, unitPrice: 1000, discount: 0, warehouseId: wh.id }]
+  });
+  const itRet = ERP.Invoices.items(invRet.id)[0];
+  const custRet = await ERP.Returns.fromCustomer({
+    invoiceId: invRet.id, warehouseId: wh.id, treatment: 'REFUND', reason: 'test',
+    items: [{ invoiceItemId: itRet.id, quantity: 2, condition: 'SELLABLE' }]
+  });
+  const retPay = ERP.Payments.refunds().find(p => p.reference === custRet.returnNumber);
+  check('C11 setup: the return posted its own refund payment', !!retPay, JSON.stringify(custRet));
+  check('C12 that refund is refused too, pointing at the return instead',
+    /return instead/.test(ERP.Payments.editAmountCheck(retPay.id).errs[0] || ''));
+
+  /* the return-linkage guard must match on the note Returns.fromCustomer actually writes,
+     not the reference alone — a stand-alone voucher whose reference is coincidentally typed
+     the same as an unrelated return's number is a real, if unusual, false-positive risk */
+  const coincidence = await ERP.Payments.refund({ customerId: c3.id, amount: 300, method: 'Cash',
+    reference: custRet.returnNumber, note: 'unrelated cash handed back' });
+  check('C13 a reference that only coincidentally matches a return number is NOT blocked',
+    ERP.Payments.editAmountCheck(coincidence.id).errs.length === 0);
+
   console.log('\n' + out.join('\n') + `\n\n${pass} passed, ${fail} failed\n`);
   w.close();
   process.exit(fail ? 1 : 0);

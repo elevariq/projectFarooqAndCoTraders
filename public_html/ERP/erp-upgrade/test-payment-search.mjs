@@ -234,6 +234,41 @@ async function main() {
   check('U11 a payment to a shop is found in "Paid to shops"', $('#fcPaidToShops').textContent.includes('RFD-5521'));
   check('U12 the received and supplier lists say nothing matches instead of showing everything',
     /No received payment matches/.test(pageText()) && /No supplier payment matches/.test(pageText()));
+
+  /* Client request (2026-09-23): "want to change amount" on a Paid-to-shops voucher —
+     an "Edit amount" button opens the correction panel (ERP.Payments.editAmount). */
+  check('U12a the row offers an Edit amount button (OWNER holds TRANSACTION_CORRECT)',
+    !!$('#fcPaidToShops [data-fceditamt="' + mine.P4.id + '"]'));
+  const c2BalBeforeEdit = ERP.Ledger.customerBalance(c2.id);
+  const p4OldAmount = mine.P4.amount;             /* mine.P4 is the SAME object editAmount mutates in place */
+  click($('#fcPaidToShops [data-fceditamt="' + mine.P4.id + '"]')); await sleep(150);
+  check('U12b the panel opens naming the voucher and its current amount',
+    $('#panel').textContent.includes(mine.P4.receiptNumber) && $('[data-f="amt"]').value === String(M.toR(p4OldAmount)),
+    $('[data-f="amt"]') ? $('[data-f="amt"]').value : 'panel did not open');
+  $('[data-f="amt"]').value = '650'; $('[data-f="reason"]').value = 'typed the wrong amount';
+  click($('[data-save="1"]')); await sleep(300);
+  check('U12c saving updates the voucher, the shop\'s balance, and the row on screen',
+    ERP.Payments.byId(mine.P4.id).amount === M.toP(650) &&
+    ERP.Ledger.customerBalance(c2.id) === c2BalBeforeEdit - p4OldAmount + M.toP(650) &&
+    $('#fcPaidToShops').textContent.includes('650'));
+
+  /* a role without TRANSACTION_CORRECT sees no button at all (the same gate as Change shop).
+     The accounts module (22-users.js) auto-provisions a first "Owner" account and, once one
+     exists, every permission check reads that account's role — not ERP.Settings.currentRole
+     any more — so the role is switched by signing in as a different account, not Settings.save. */
+  const ownerUserId = (ERP.Session.user() || {}).id;
+  const salesUser = await ERP.Users.save({ name: 'Test Sales Clerk', role: 'SALES' });
+  ERP.Session.userId = salesUser.id;
+  w.go('payments'); await sleep(200);
+  type(box(), 'RFD-5521'); await sleep(260);
+  check('U12d a Sales-role user sees the voucher but no Edit amount button',
+    pageText().includes('RFD-5521') && !$('[data-fceditamt="' + mine.P4.id + '"]'));
+  ERP.Session.userId = ownerUserId;
+  w.go('payments'); await sleep(200);
+  type(box(), 'RFD-5521'); await sleep(260);
+  check('U12e back on OWNER the button is offered again', !!$('[data-fceditamt="' + mine.P4.id + '"]'));
+  click($('[data-fcpact="clear"]')); await sleep(100);
+
   type(box(), 'SUPREF-3301'); await sleep(260);
   check('U13 a supplier payment is found by its reference',
     pageText().includes('SUPREF-3301') && /No payment to a shop matches/.test(pageText()));

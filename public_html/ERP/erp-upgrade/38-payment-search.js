@@ -351,6 +351,15 @@ function regionCell(p) {
 function docBtn(p, label) {
   return '<button class="btn sm" data-fcreceipt="' + esc(p.id) + '">' + I('doc') + label + '</button>';
 }
+/* Client request (2026-09-23): correct a wrong amount on a "Paid to shops"
+   voucher. Gated like other two-account corrections (Invoices.changeCustomer):
+   the panel itself (ERP.actions.editPaymentAmount → PANELS.editpayamt) explains
+   when a particular voucher cannot be corrected here (see Payments.editAmountCheck),
+   rather than hiding the button case by case. */
+function editAmtBtn(p) {
+  if (ERP.Can && !ERP.Can('TRANSACTION_CORRECT')) return '';
+  return '<button class="btn sm" data-fceditamt="' + esc(p.id) + '">Edit amount</button>';
+}
 
 /* "Show more" under a list that has more rows than it draws */
 function moreBar(key, shown, of) {
@@ -502,7 +511,7 @@ global.PAGES.payments = function () {
               '<td data-label="Method">' + esc(p.method) + '</td>' +
               '<td data-label="Amount" class="num r"><b>' + M.fmtPlain(p.amount) + '</b></td>' +
               '<td data-label="Reference">' + refCell(p) + '</td>' +
-              '<td class="r fcb-rowacts">' + docBtn(p, 'Voucher') + '</td></tr>';
+              '<td class="r fcb-rowacts">' + docBtn(p, 'Voucher') + editAmtBtn(p) + '</td></tr>';
           }, 'fcPaidToShops')
         : '<div class="card" id="fcPaidToShops"><div class="card-b"><p class="hint">No payments to shops yet. Use “Pay a shop” when you hand a shop cash ' +
           'or return money — a numbered voucher is made for every payment.</p></div></div>');
@@ -625,16 +634,20 @@ D.addEventListener('change', function (e) {
 });
 D.addEventListener('click', function (e) {
   var b = e.target && e.target.closest ? e.target.closest('[data-fcpact]') : null;
-  if (!b) return;
-  e.preventDefault();
-  var a = b.dataset.fcpact;
-  if (a === 'clear') { reset(PL); global.paint(); return; }
-  if (a === 'csv') { PL.exportCsv(); return; }
-  if (a === 'more') {
-    var k = b.dataset.sec;
-    PL.limit[k] = limitOf(k) + pageRows();
-    global.paint();
+  if (b) {
+    e.preventDefault();
+    var a = b.dataset.fcpact;
+    if (a === 'clear') { reset(PL); global.paint(); return; }
+    if (a === 'csv') { PL.exportCsv(); return; }
+    if (a === 'more') {
+      var k = b.dataset.sec;
+      PL.limit[k] = limitOf(k) + pageRows();
+      global.paint();
+    }
+    return;
   }
+  var ea = e.target && e.target.closest ? e.target.closest('[data-fceditamt]') : null;
+  if (ea) { e.preventDefault(); ERP.actions.editPaymentAmount(ea.dataset.fceditamt); }
 });
 
 ERP.PaymentSearch = {
