@@ -85,6 +85,9 @@ DNS: `@` and `erp` are ALIAS records to Hostinger's CDN. Read `public_html/ERP/R
   browser copy. Full runbook: `docs/OPERATIONS.md` → "Server-side business data" and `docs/SERVER_DATA.md`.
 - **Backups:** nightly verified backups (Hostinger cron `65drF1UNgJ`, 02:00 Pakistan → `~/backups/nightly/`, same account —
   keep an occasional off-site copy). Each deploy also backs up to `~/backups/erp-deploy-<ts>/` / `~/backups/api-<ts>/`.
+- **Test data wiped 2026-09-25 (client wanted a clean start):** every transaction table, the audit log, the number counters, `supplier_products` and product P-139 "testing"
+  were deleted; shops/products/suppliers/regions/warehouses/settings kept (cached `bal/tot/due/paid` zeroed). The pre-wipe snapshot is
+  `~/backups/nightly/business-20260925-175016-v710-f893.json` (plus a copy in `D:\projectFarooqAndCoTraders-backups\`); it will be pruned from the server after 30 days.
 - Re-import (rare): `scripts/empty-business-db.php` then `scripts/import-backup.php` (refuses a non-empty DB).
 - **Connection cap (outage 2026-09-21):** Hostinger allows 500 DB connections/hour per user; every request opens one. Open tabs poll:
   stale-window check `POLL_MS` = 90 s (`01b-server-db.js`), sign-in heartbeat `HEARTBEAT_MS` = 180 s (`31-auth.js`;
