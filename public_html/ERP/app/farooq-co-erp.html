@@ -1944,7 +1944,7 @@ const PANELS={
    if(!v.ur&&!v.en)return 'Enter the product name.';
    const en=(v.en||v.ur).trim();
    if(PRODUCTS.some(p=>p.en.toLowerCase()===en.toLowerCase()&&p.kg==(v.kg?+v.kg:null)))return 'That product and bag size already exists.';
-   PRODUCTS.push({id:'P-'+(PRODUCTS.length+1).toString().padStart(3,'0'),ur:v.ur.trim()||en,en,
+   PRODUCTS.push({id:'P-'+(Math.max(PRODUCTS.length,...PRODUCTS.map(p=>{const m=/^P-(\d+)$/.exec(p.id||'');return m?+m[1]:0;}))+1).toString().padStart(3,'0'),ur:v.ur.trim()||en,en,
      brand:v.ur.trim()||en,brandEn:en,cat:v.cat,kg:v.kg?+v.kg:null,sku:v.sku.trim(),barcode:'',
      supplier:v.supplier||null,buy:null,sell:null,min:v.min?+v.min:null,active:true,notes:''});
    return {msg:`${en} added to ${v.cat}.`};

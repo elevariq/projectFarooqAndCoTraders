@@ -2029,6 +2029,23 @@ var Mirror = ERP.Mirror = {
     }
     /* stock map + per-customer roll-ups the old screens read directly */
     global.STOCKMAP = global.STOCKMAP || {};
+    /* On the server the database is the only copy: the browser's old stock map and movement history (loaded from
+       its localStorage record before the data arrived) must not survive, or stock deleted on the server still shows. */
+    if (FDB.driver === 'server') {
+      Object.keys(global.STOCKMAP).forEach(function (k) { if (!S.inventory[k]) delete global.STOCKMAP[k]; });
+      if (global.MOVES) {
+        global.MOVES.length = 0;
+        S.movements.slice(0, 4000).forEach(function (rec) {
+          var d = new Date(rec.createdAt || rec.date), h = d.getHours();
+          global.MOVES.push({
+            id: 'MV-' + String(rec.id || '').slice(-6).toUpperCase(),
+            t: isNaN(h) ? '' : ((h % 12) || 12) + ':' + String(d.getMinutes()).padStart(2, '0') + ' ' + (h < 12 ? 'AM' : 'PM'),
+            iso: rec.date, pid: rec.productId, wid: rec.warehouseId, delta: rec.qtyDelta,
+            kind: Movements.label(rec.kind), ref: rec.ref || '', note: rec.note || '', by: rec.userId || ''
+          });
+        });
+      }
+    }
     Object.keys(S.inventory).forEach(function (k) { global.STOCKMAP[k] = S.inventory[k].qty; });
     (global.CUSTOMERS || []).forEach(function (c) {
       c.bal = M.toR(Ledger.customerBalance(c.id));
@@ -2381,12 +2398,30 @@ var Migrate = ERP.Migrate = {
 /* The database is the master record. The app's own shared blob is only a
    bridge to the warehouse device, and reloading from it must never remove a
    product, shop, supplier, area or warehouse the database still holds. */
+var serverIds = {};   /* per master list: the ids the server had at the last sync (server mode only) */
 ERP.mergeMasterFromDb = function (data) {
+  /* On the server the database is the only copy. The old screens' lists were first filled from this browser's
+     localStorage record, so MERGING would keep anything deleted on the server (and the next save would write it
+     back for everyone) — replace them instead. Browser mode keeps the merge. */
+  var server = FDB.driver === 'server';
   ['products', 'customers', 'suppliers', 'warehouses', 'regions'].forEach(function (name) {
     var GLOBAL = { products: 'PRODUCTS', customers: 'CUSTOMERS', suppliers: 'SUPPLIERS',
                    warehouses: 'WAREHOUSES', regions: 'REGIONS' }[name];
     var rows = (data && data[name]) || [];
     if (!rows.length || !global[GLOBAL]) return;
+    if (server) {
+      /* a record added on this page since the last sync (its save may still be waiting) is kept; one that was on
+         the server at the last sync and is gone now was deleted there, and anything from before the first sync
+         (the old localStorage copy) is dropped */
+      var list = global[GLOBAL], known = serverIds[name], onServer = {};
+      rows.forEach(function (rec) { onServer[rec.id] = true; });
+      var addedHere = known ? list.filter(function (r) { return r && !onServer[r.id] && !known[r.id]; }) : [];
+      list.length = 0;
+      rows.forEach(function (rec) { list.push(rec); });
+      addedHere.forEach(function (rec) { list.push(rec); });
+      serverIds[name] = onServer;
+      return;
+    }
     var byId = {};
     global[GLOBAL].forEach(function (r) { byId[r.id] = r; });
     rows.forEach(function (rec) {
@@ -2394,9 +2429,45 @@ ERP.mergeMasterFromDb = function (data) {
       else global[GLOBAL].push(rec);
     });
   });
+  if (!server || !data) return;
+  if (Array.isArray(data.documents) && global.DOCS) {
+    var onServerDocs = {}, knownDocs = serverIds.documents;
+    data.documents.forEach(function (d) { onServerDocs[d.no] = true; });
+    var docsHere = knownDocs ? global.DOCS.filter(function (d) { return d && !onServerDocs[d.no] && !knownDocs[d.no]; }) : [];
+    serverIds.documents = onServerDocs;
+    var allDocs = data.documents.concat(docsHere);
+    global.DOCS = allDocs.slice().sort(function (a, b) {
+      return (b.iso || '') < (a.iso || '') ? -1 : (b.iso || '') > (a.iso || '') ? 1 : (b.no || '') < (a.no || '') ? -1 : 1;
+    });
+    /* the Documents page's own audit list and number counter live only in this browser: keep only entries for
+       documents that still exist, and number the next document after the highest one there is */
+    var docNos = {}, top = {};
+    allDocs.forEach(function (d) {
+      docNos[d.no] = true;
+      var m = /^([A-Z]+)-\d{4}-(\d+)$/.exec(d.no || '');
+      if (m) top[m[1]] = Math.max(top[m[1]] || 0, +m[2]);
+    });
+    if (Array.isArray(global.AUDIT)) global.AUDIT = global.AUDIT.filter(function (a) { return a && docNos[a.doc]; });
+    if (global.DOCSEQ && typeof global.DOCSEQ === 'object') {
+      Object.keys(global.DOCSEQ).forEach(function (k) { global.DOCSEQ[k] = top[k] || 0; });
+      Object.keys(top).forEach(function (k) { global.DOCSEQ[k] = top[k]; });
+    }
+  }
+  /* new shops are numbered from a counter in this browser (SEQ.cust): never hand out a number already used */
+  if (global.SEQ && global.CUSTOMERS) {
+    var maxCust = 0;
+    global.CUSTOMERS.forEach(function (c) { var m = /^CUST-(\d+)$/.exec(c.id || ''); if (m) maxCust = Math.max(maxCust, +m[1]); });
+    if (!(global.SEQ.cust > maxCust)) global.SEQ.cust = maxCust + 1;
+  }
+  var legacy = {};
+  (data.legacy || []).forEach(function (r) { if (r && r.k) legacy[r.k] = r.v; });
+  [['activity', 'ACTIVITY'], ['log', 'LOG']].forEach(function (p) {
+    if (Array.isArray(legacy[p[0]]) && global[p[1]]) global[p[1]] = legacy[p[0]];
+  });
 };
 ERP.refreshMasterFromDb = function () {
-  return FDB.hydrate().then(function (d) {
+  /* wait for this page's own queued saves, so a record just added here is not replaced by a copy without it */
+  return Promise.resolve(ERP.flush()).catch(function () {}).then(function () { return FDB.hydrate(); }).then(function (d) {
     ERP.mergeMasterFromDb(d);
     return d;
   }).catch(function () { return null; });

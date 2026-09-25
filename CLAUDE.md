@@ -88,6 +88,9 @@ DNS: `@` and `erp` are ALIAS records to Hostinger's CDN. Read `public_html/ERP/R
 - **Test data wiped 2026-09-25 (client wanted a clean start):** every transaction table, the audit log, the number counters, `supplier_products` and product P-139 "testing"
   were deleted; shops/products/suppliers/regions/warehouses/settings kept (cached `bal/tot/due/paid` zeroed). The pre-wipe snapshot is
   `~/backups/nightly/business-20260925-175016-v710-f893.json` (plus a copy in `D:\projectFarooqAndCoTraders-backups\`); it will be pruned from the server after 30 days.
+- **Trap found by that wipe:** each browser's old `farooqco_erp_v1` localStorage copy fed the base screens (stock map, movement history, Documents/audit) and
+  `mergeMasterFromDb` only merged, so deleted rows showed and got written BACK to the server. Since then server mode REPLACES those lists from the server
+  (`02-services.js` mergeMasterFromDb/Mirror.refresh; `test-server-db.mjs` W1–W10). Deleting data server-side is only safe with that code deployed.
 - Re-import (rare): `scripts/empty-business-db.php` then `scripts/import-backup.php` (refuses a non-empty DB).
 - **Connection cap (outage 2026-09-21):** Hostinger allows 500 DB connections/hour per user; every request opens one. Open tabs poll:
   stale-window check `POLL_MS` = 90 s (`01b-server-db.js`), sign-in heartbeat `HEARTBEAT_MS` = 180 s (`31-auth.js`;

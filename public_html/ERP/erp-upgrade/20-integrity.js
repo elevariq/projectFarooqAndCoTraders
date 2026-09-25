@@ -84,6 +84,9 @@ var SHARED_KEY = 'farooqco_erp_v1';
     try { before = JSON.parse(global.localStorage.getItem(SHARED_KEY) || 'null'); } catch (e) {}
     var r = inner.apply(global, arguments);
     if (!before) return r;
+    /* on the server this record is only a per-browser cache: a list that became empty (data deleted on the server)
+       must stay empty, not be put back from the stale copy */
+    if (global.FDB && global.FDB.driver === 'server') return r;
     try {
       var after = JSON.parse(global.localStorage.getItem(SHARED_KEY) || 'null');
       if (!after) return r;

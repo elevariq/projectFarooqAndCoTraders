@@ -505,6 +505,69 @@ async function main() {
     !!failK && S10.rows('salaryPayments').length === nowK && EK.S.salaryPayments.length === nowK && /NOT saved/.test(overlayText(K1.w, 'fcsd-failed') || ''), failK && failK.message);
   for (const b of [K1, K2, K2b]) b.w.close();
 
+  /* ══ W. a browser's OLD localStorage copy never survives on the server (2026-09-25) ═════════════════
+     The client's test data was deleted on the server, yet the Inventory page still showed each browser's old
+     bag counts and movement history, and a browser put the deleted "testing" product back on the server. */
+  {
+    const S11 = new Mock(SEED);
+    const stale = {
+      v: 1, stock: { 'PRD-0001|wh-main': 2760, 'PRD-0002|wh-ko': 14500 },
+      moves: [{ id: 'MV-FXLU8I', t: '1:36 PM', iso: '2026-09-24', pid: 'P-139', wid: 'wh-college', delta: 1, kind: 'Adjustment in', ref: 'RCV-2026-000006', note: '', by: 'Farooq Ahmed' }],
+      products: SEED.data.products.concat([{ id: 'P-139', ur: 'testing', en: 'testing', brand: 'testing', brandEn: 'testing', cat: 'چاول', kg: null, active: true }]),
+      customers: SEED.data.customers, suppliers: SEED.data.suppliers, warehouses: SEED.data.warehouses, regions: SEED.data.regions,
+      docs: [{ no: 'GRN-2026-000001', kind: 'GRN', type: 'GOODS_RECEIVED_NOTE', iso: '2026-09-06', date: '06 Sep 2026', ref: { party: 'x' } }],
+      activity: [{ t: 'old test activity' }], log: [{ t: 'old test log' }],
+      audit: [{ at: '1:00 PM', date: '06 Sep 2026', by: 'x', action: 'Goods received note generated', doc: 'GRN-2026-000001', ref: 'x' }],
+      docseq: { INV: 3, PINV: 2, RCPT: 0, SPV: 0, DSP: 1, GRN: 2, CN: 0, CST: 1, SST: 0 }, seq: { cust: 1, ord: 1, inv: 1, po: 1, dsp: 1 }
+    };
+    S11.stores.customers.set('CUST-0004', { r: 1, d: { id: 'CUST-0004', sh: 'Shop added on another device', region: SEED.data.customers[0].region, active: true, bal: 0, tot: 0, ord: 0, bagsOut: 0 } });
+    S11.stores.products.set('P-150', { r: 1, d: { id: 'P-150', ur: 'x', en: 'Gap product', brand: 'x', brandEn: 'x', cat: SEED.data.products[0].cat, kg: 5, active: true } });
+    const W1 = await boot(S11, { ls: { farooqco_erp_v1: JSON.stringify(stale), farooqco_backend: 'server' } }), w = W1.w;
+    check('W1 boots on the server with a stale browser copy present', W1.ready && w.FDB.driver === 'server', W1.errors.join(';'));
+    check('W2 the old stock map is gone — every bag count is the server\'s (none)', Object.keys(w.STOCKMAP).filter(k => w.STOCKMAP[k]).length === 0, JSON.stringify(w.STOCKMAP));
+    check('W3 the old movement history is gone', w.MOVES.length === 0, JSON.stringify(w.MOVES.slice(0, 2)));
+    check('W4 a product deleted on the server is not listed', !w.PRODUCTS.some(p => p.id === 'P-139') && w.PRODUCTS.length === S11.count('products'));
+    check('W5 old documents / activity / log are not shown', w.DOCS.length === 0 && w.ACTIVITY.length === 0 && w.LOG.length === 0);
+    check('W5b the Documents page\'s own audit list drops entries for documents that no longer exist', w.AUDIT.length === 0, JSON.stringify(w.AUDIT));
+    check('W5c the next document number follows the server (restarts at 1 when there are none)', w.DOCSEQ.GRN === 0 && w.DOCSEQ.INV === 0 && w.DOCSEQ.CST === 0, JSON.stringify(w.DOCSEQ));
+    check('W5d a new shop can never take a number already used on the server', w.SEQ.cust > 4, JSON.stringify(w.SEQ));
+    const addP = w.PANELS.product.save({ ur: '', en: 'Brand new rice', cat: SEED.data.products[0].cat, kg: '25', sku: '', supplier: '', min: '' });
+    const newP = w.PRODUCTS[w.PRODUCTS.length - 1];
+    check('W5e a new product never re-uses an existing number (numbering skips past the highest, not the count)',
+      addP && newP.en === 'Brand new rice' && newP.id === 'P-151' && w.PRODUCTS.filter(p => p.id === newP.id).length === 1, newP && newP.id);
+    w.ERP.markMasterDirty(); w.dbSave(); await w.ERP.persistMasterAndLegacy().catch(() => {}); await sleep(600); await w.ERP.flush();
+    check('W6 a save afterwards writes NOTHING deleted back to the server (no product, no document)',
+      !S11.rows('products').some(p => p.id === 'P-139') && S11.count('documents') === 0 &&
+      !(S11.rows('legacy').find(l => l.k === 'activity') || { v: [] }).v.some(a => a.t === 'old test activity'));
+    const blob = JSON.parse(w.localStorage.getItem('farooqco_erp_v1'));
+    check('W7 the browser copy itself is cleaned (emptied lists are not put back from the stale copy)',
+      blob && Object.keys(blob.stock || {}).length === 0 && (blob.moves || []).length === 0 && (blob.docs || []).length === 0, JSON.stringify({ s: blob && blob.stock, m: blob && (blob.moves || []).length }));
+    const wh = w.WAREHOUSES[0].id, p0 = w.PRODUCTS.find(p => p.active !== false);
+    await w.ERP.StockDocs.adjust({ warehouseId: wh, reason: 'count', date: '2026-09-25', items: [{ productId: p0.id, quantity: 5, direction: 'IN' }] });
+    w.ERP.Mirror.refresh();
+    check('W8 new stock still shows in the old screens\' map and history', w.STOCKMAP[p0.id + '|' + wh] === 5 && w.MOVES.length === 1 && w.MOVES[0].delta === 5 && w.MOVES[0].pid === p0.id, JSON.stringify(w.MOVES));
+    w.PRODUCTS.push({ id: 'P-152', ur: 'y', en: 'Added a moment ago', brand: 'y', brandEn: 'y', cat: SEED.data.products[0].cat, kg: 10, active: true });
+    const snap = { products: S11.rows('products').filter(p => p.id !== 'P-150') };
+    w.ERP.mergeMasterFromDb(snap);
+    check('W8b a re-sync keeps a product added on this page whose save has not gone out yet',
+      w.PRODUCTS.some(p => p.id === 'P-152'), w.PRODUCTS.slice(-3).map(p => p.id).join());
+    check('W8c …and drops one that the server had at the last sync but no longer has (deleted there)',
+      !w.PRODUCTS.some(p => p.id === 'P-150'));
+    w.DOCS.unshift({ no: 'CST-2026-000001', kind: 'CST', type: 'CUSTOMER_STATEMENT', iso: '2026-09-25', ref: { party: 'y' } });
+    w.AUDIT.unshift({ at: '1:00 PM', date: '25 Sep 2026', by: 'x', action: 'Statement generated', doc: 'CST-2026-000001', ref: 'y' });
+    w.ERP.mergeMasterFromDb({ documents: [] });
+    check('W8d a re-sync keeps a document generated on this page before its save went out, with its audit entry and number',
+      w.DOCS.some(d => d.no === 'CST-2026-000001') && w.AUDIT.length === 1 && w.DOCSEQ.CST === 1, JSON.stringify({ d: w.DOCS.length, a: w.AUDIT.length, s: w.DOCSEQ.CST }));
+    const W2 = await boot(S11);
+    check('W9 another browser sees the same: the new movement and stock, nothing old', W2.w.MOVES.length === 1 && W2.w.STOCKMAP[p0.id + '|' + wh] === 5 && !W2.w.PRODUCTS.some(p => p.id === 'P-139'));
+    for (const b of [W1, W2]) b.w.close();
+  }
+  { // W10: browser mode keeps its merge behaviour (unchanged)
+    const W3 = await boot(null);
+    check('W10 browser mode is unchanged (still on IndexedDB, starts normally)', W3.ready && W3.w.FDB.driver === 'indexeddb');
+    W3.w.close();
+  }
+
   /* ══ F. failures are never hidden ═════════════════════════════════════ */
   const S3 = new Mock(SEED); const F1 = await boot(S3), wF = F1.w;
   const whF = wF.WAREHOUSES[1].id, pf = wF.PRODUCTS.filter(x => x.active !== false);
