@@ -32,4 +32,4 @@ below cost; later extra changes do not rewrite the invoice; no-extra products un
 unknown cost stays unknown; the double-count warning shows only when it should). Mutation-checked: costing the
 invoice line at `costOf` again turns X8/X9/X10/X12 red (X9 then shows the client's exact bug: 4,000 profit instead of 2,000).
 
-**Deploy.** App only (`deploy-erp.sh`); no schema or PHP change. Not yet seen on the live site.
+**Deploy.** App only (`deploy-erp.sh`); no schema or PHP change. **Deployed 2026-09-25 ~22:33** with `b2b0778` (the other session's stock-receipt edit): clean-clone deploy, full test gate green, served `_app/*` md5 = build, ERP 401 / homepage 200, Hostinger cache cleared. Backup `~/backups/erp-deploy-20260925223246`. Not yet seen by a person on the live site.
