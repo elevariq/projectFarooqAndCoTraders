@@ -131,9 +131,29 @@ DocModel.stockDoc = function (docId) {
               : d.type === 'DISPATCH' ? ['Loaded by', 'Driver', 'Received by (shop)']
               : ['Counted by', 'Approved by'],
     footer: { thanks: '', terms: '', bank: '' },
-    actions: { whatsapp: d.type === 'DISPATCH', email: true }
+    actions: { whatsapp: d.type === 'DISPATCH', email: true, edit: ERP.StockDocs.canEdit(d) }
   };
 };
+
+/* ── editing a posted "Add stock" receipt (07-transactions.js StockDocs.editReceive) ── */
+ERP.editStockReceipt = function (id) {
+  var d = ERP.StockDocs.byId(id);
+  if (!d) { if (global.say) global.say('Stock receipt not found.'); return; }
+  if (!ERP.StockDocs.canEdit(d)) { if (global.say) global.say('You are not allowed to edit this stock receipt.'); return; }
+  ERP.UI.confirm('Edit stock receipt ' + d.docNumber + '?', {
+    detail: 'Saving the change takes the old lines back out of stock and puts the corrected ones in, ' +
+      'under the same number. The change is recorded in the audit log.',
+    okText: 'Continue editing', cancelText: 'Cancel', tone: 'warn'
+  }).then(function (ok) {
+    if (ok) ERP.Builder.start('receive', ERP.StockDocs.toDraft(d));
+  });
+};
+D.addEventListener('click', function (e) {
+  var b = e.target.closest ? e.target.closest('[data-fcsdedit]') : null;
+  if (!b) return;
+  e.preventDefault();
+  ERP.editStockReceipt(b.dataset.fcsdedit);
+}, true);
 
 /* every document number resolves to its document */
 var origOpenDoc = global.openDoc;
@@ -269,7 +289,8 @@ function docTable(type, title, empty) {
         '<td class="c num">' + d.lineCount + '</td>' +
         '<td class="r num">' + qtyFmt(d.totalQty) + '</td>' +
         '<td>' + esc(d.toWarehouseSnapshot || d.customerSnapshot || (d.type === 'CONVERT' ? convertSummary(d) : '') || d.reason || '—') + '</td>' +
-        '<td class="c"><button class="btn sm" data-fcdoc="stock" data-id="' + d.id + '">Open</button></td></tr>';
+        '<td class="c"><button class="btn sm" data-fcdoc="stock" data-id="' + d.id + '">Open</button>' +
+          (ERP.StockDocs.canEdit(d) ? ' <button class="btn sm" data-fcsdedit="' + d.id + '">Edit</button>' : '') + '</td></tr>';
     }).join('') + '</tbody></table></div></div></div>';
 }
 var origDispatch = global.PAGES.dispatch;

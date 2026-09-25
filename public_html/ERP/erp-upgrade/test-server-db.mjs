@@ -343,6 +343,36 @@ async function main() {
     staleErr && (staleErr.conflict === true || staleErr.duplicate === true) && JSON.stringify(S6.rows('purchases').find(p => p.id === puH.id)) === before6, staleErr && staleErr.message);
   for (const b of [H1, H2]) b.w.close();
 
+  /* ══ HR. editing an "Add stock" receipt on the server (2026-09-25) ═══════════════
+     StockDocs.editReceive reverses the old lines and re-posts the new ones: the header, the replaced lines, the
+     stock row and the movements must reach the server in ONE commit, and a stale window must be refused. */
+  const S6r = new Mock(SEED);
+  const HR1 = await boot(S6r), ER = HR1.w.ERP;
+  const whR = HR1.w.WAREHOUSES[1].id, prR = HR1.w.PRODUCTS.filter(x => x.active !== false);
+  const rcR = await ER.StockDocs.receive({ warehouseId: whR, date: '2026-09-02', reason: 'opening count',
+    items: [{ productId: prR[0].id, quantity: 30, unitPrice: 1000 }, { productId: prR[1].id, quantity: 10, unitPrice: 500 }] });
+  const HR2 = await boot(S6r);                                  /* a second window, loaded before the edit */
+  const oldLineIds = ER.StockDocs.items(rcR.id).map(i => i.id), commitsR0 = S6r.commits, revR0 = S6r.rev('stockDocs', rcR.id);
+  const dR = ER.StockDocs.toDraft(ER.StockDocs.byId(rcR.id));
+  dR.items[0].quantity = 25; dR.items.splice(1, 1);
+  await ER.StockDocs.editReceive(dR);
+  const linesR = S6r.rows('stockDocItems').filter(i => i.docId === rcR.id);
+  const invRow = S6r.rows('inventory').find(r => r.productId === prR[0].id && r.warehouseId === whR);
+  const invRow2 = S6r.rows('inventory').find(r => r.productId === prR[1].id && r.warehouseId === whR);
+  check('HR1 a receipt edit reaches the server in ONE commit: header revised, old lines gone, one new line of 25',
+    S6r.commits === commitsR0 + 1 && S6r.rev('stockDocs', rcR.id) === revR0 + 1 && linesR.length === 1 && linesR[0].quantity === 25 &&
+    !S6r.rows('stockDocItems').some(i => oldLineIds.includes(i.id)), 'commits +' + (S6r.commits - commitsR0) + ', lines ' + linesR.length);
+  check('HR2 …and the stock rows on the server follow (25 and 0)', invRow && invRow.qty === 25 && invRow2 && invRow2.qty === 0,
+    JSON.stringify([invRow && invRow.qty, invRow2 && invRow2.qty]));
+  check('HR3 …with the reversal movements stored', S6r.rows('stockMovements').filter(m => m.ref === rcR.docNumber && m.kind === 'RECEIPT_EDIT_OUT').length === 2);
+  const dRs = HR2.w.ERP.StockDocs.toDraft(HR2.w.ERP.StockDocs.byId(rcR.id)); dRs.reason = 'from the stale window';
+  const beforeR = JSON.stringify(S6r.rows('stockDocs').find(d => d.id === rcR.id));
+  const staleR = await HR2.w.ERP.StockDocs.editReceive(dRs).then(() => null, e => e);
+  check('HR4 a second window editing the receipt from its OLD copy is refused, and the first edit stands',
+    staleR && (staleR.conflict === true || staleR.duplicate === true) && JSON.stringify(S6r.rows('stockDocs').find(d => d.id === rcR.id)) === beforeR,
+    staleR && staleR.message);
+  for (const b of [HR1, HR2]) b.w.close();
+
   /* ══ I. deleting an area on the server (2026-09-20) ═════════════════════════════
      A deleted area is kept as a hidden marker {deleted:true}. On the server that marker must arrive in ONE commit with the
      moved shops and the audit row, and NOTHING that runs later — a fresh device, a device with an old saved copy, a window that

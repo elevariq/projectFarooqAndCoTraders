@@ -834,7 +834,9 @@ D.addEventListener('click', function (e) {
     else if (act === 'sms') ERP.Viewer.sms();
     else if (act === 'edit') {
       var m = ERP.Viewer.current; ERP.Viewer.close();
-      if (m.kind === 'PURCHASE') editPurchase(m.entityId); else editInvoice(m.entityId);
+      if (m.kind === 'PURCHASE') editPurchase(m.entityId);
+      else if (m.kind === 'STOCK_RECEIVE') ERP.editStockReceipt(m.entityId);
+      else editInvoice(m.entityId);
     }
     else if (act === 'changeshop') { var m6 = ERP.Viewer.current; ERP.Viewer.close(); changeInvoiceShop(m6.entityId); }
     else if (act === 'dup') { var m2 = ERP.Viewer.current; ERP.Viewer.close(); duplicateInvoice(m2.entityId); }
@@ -860,9 +862,9 @@ D.addEventListener('click', function (e) {
     if (a === 'save') { B.save(false); return; }
     if (a === 'draft') { B.save(true); return; }
     if (a === 'cancel') {
-      var leave = function () { B.draft = null; global.go(B.mode === 'sale' ? 'invoices' : 'purchases'); };
+      var leave = function () { B.draft = null; global.go(B.mode === 'sale' ? 'invoices' : B.mode === 'receive' ? 'inventory' : 'purchases'); };
       if (!B.dirty) { leave(); return; }
-      var what = B.mode === 'sale' ? 'invoice' : 'purchase';
+      var what = B.mode === 'sale' ? 'invoice' : B.mode === 'receive' ? (B.editingId ? 'change to the stock receipt' : 'stock receipt') : 'purchase';
       ERP.UI.confirm('Discard this ' + what + '?', {
         detail: 'Everything you have entered on it will be lost.',
         okText: 'Discard', cancelText: 'Keep editing', tone: 'danger'

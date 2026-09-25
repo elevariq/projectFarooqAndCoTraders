@@ -257,7 +257,7 @@ var IN_KINDS = { PURCHASE_IN: 'received', CUSTOMER_RETURN_IN: 'returnedIn',
                  SALE_REVERSAL_IN: 'adjusted', SUPPLIER_REPLACEMENT_IN: 'received', ADJUSTMENT: 'adjusted' };
 var OUT_KINDS = { SALE_OUT: 'sold', SUPPLIER_RETURN_OUT: 'returnedOut', TRANSFER_OUT: 'transferOut',
                   ADJUSTMENT_OUT: 'adjusted', STOCK_WRITE_OFF: 'writtenOff', DISPATCH_OUT: 'sold',
-                  PURCHASE_REVERSAL_OUT: 'adjusted', REPLACEMENT_OUT: 'sold' };
+                  PURCHASE_REVERSAL_OUT: 'adjusted', REPLACEMENT_OUT: 'sold', RECEIPT_EDIT_OUT: 'adjusted' };
 
 A.inventory = function (from, to, f) {
   f = f || {};
@@ -298,13 +298,17 @@ A.inventory = function (from, to, f) {
     var bucket = delta >= 0 ? IN_KINDS[m.kind] : OUT_KINDS[m.kind];
     if (!bucket) bucket = 'adjusted';
     if (bucket === 'opening') r.opening += delta;
+    /* adjustments go both ways (Adjust in/out, a purchase or receipt edit's reversal), so they are kept as a
+       signed net like conversions — added as a plain size, a bag taken OUT used to RAISE the closing
+       figure of any report run with a start date */
+    else if (bucket === 'adjusted') r.adjusted += delta;
     else r[bucket] += Math.abs(delta);
   });
   var list = Object.keys(rows).map(function (k) {
     var r = rows[k];
     r.closing = r.opening + r.received + r.returnedIn + r.transferIn + r.converted + r.adjusted
               - r.sold - r.returnedOut - r.transferOut - r.writtenOff;
-    /* the adjusted bucket holds both directions, so trust the live figure
+    /* every column above now nets correctly, but trust the live figure
        when the whole history is in view */
     if (!from) r.closing = ERP.Inventory.available(r.productId, r.warehouseId);
     return r;

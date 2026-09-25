@@ -199,6 +199,9 @@ Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's 
   BESIDE the stock value, never inside it. Story/forms: `docs/MILLING_WORKFLOW.md`.
 - **Purchase edit** (`Purchases.save` edit branch): money is only ever added (no lowering "Paid"); line ids are stable; stock guard is on the
   NET change. There is still no cancel/delete of a purchase, and no "Change supplier" action.
+- **Stock receipt edit** (Inventory → Stock receipts → Edit, 2026-09-25, `StockDocs.editReceive`, `docs/STOCK_RECEIPT_EDIT.md`): old lines reversed as
+  `RECEIPT_EDIT_OUT` at their OLD cost (`carriedCost`/Stock value subtract it, so a corrected cost replaces the old one), new lines re-posted, same RCV number,
+  guard on the NET change. The movement report's "adjusted" is now a signed net (it used to raise closing on an Adjust OUT). No DB change → `deploy-erp.sh` only.
 - **Change shop** (`Invoices.changeCustomer`) moves the shop and nothing else; posted invoices can't change shop through `save`. Needs `TRANSACTION_CORRECT`.
 - **Stock value** (`37-stock-value.js`) needs `FINANCIAL_REPORT_VIEW`; reads cost from the movement, not just the row average.
 - **Warehouse app** (`app/farooq-co-warehouse-pwa.html` + `39-warehouse-server.js`): a warehouse receipt adds bags — if the office also enters the supplier
@@ -238,7 +241,7 @@ Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's 
 
 The whole recent UI batch: Payments screen + Pay-a-shop/Pay-supplier panels, Payroll, Milling / Stock at mills / "Lying at mills" card, Edit purchase (no real
 purchase edited yet — try a harmless note edit first), themed dropdowns/calendar/dialogs, sidebar collapse at ~1100 px, the bell panel, reload-keeps-screen,
-themed Landed-cost boxes, the Warehouse tile's receive/dispatch (no live write was made on purpose), Firefox / iOS Safari / Android.
+themed Landed-cost boxes, the Warehouse tile's receive/dispatch (no live write was made on purpose), Edit stock receipt, Firefox / iOS Safari / Android.
 Tell the user when a change belongs to this list.
 
 ## Where to look for more detail

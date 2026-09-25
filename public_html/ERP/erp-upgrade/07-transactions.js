@@ -402,7 +402,142 @@ var StockDocs = ERP.StockDocs = {
   receive:  function (d) { return StockDocs.save(Object.assign({}, d, { type: 'RECEIVE' })); },
   adjust:   function (d) { return StockDocs.save(Object.assign({}, d, { type: 'ADJUST' })); },
   convert:  function (d) { return StockDocs.save(Object.assign({}, d, { type: 'CONVERT' })); },
-  dispatch: function (d) { return StockDocs.save(Object.assign({}, d, { type: 'DISPATCH' })); }
+  dispatch: function (d) { return StockDocs.save(Object.assign({}, d, { type: 'DISPATCH' })); },
+
+  /* ── editing a posted "Add stock" receipt (client request, 2026-09-25) ──
+     Same shape as the purchase edit (02-services.js Purchases.save): the old
+     lines come back OUT of stock, dated as the original receipt, and the
+     corrected lines go IN again — one atomic save, same RCV number. The
+     reversal is its own movement kind, RECEIPT_EDIT_OUT, carrying the old
+     line's cost, so the carried cost (Inventory.carriedCost, Stock value)
+     drops the old figure instead of averaging it with the corrected one.
+     Only RECEIVE documents; transfers / adjustments / conversions / dispatches
+     are not editable. */
+  canEdit: function (d) {
+    return !!d && d.type === 'RECEIVE' && d.status !== 'CANCELLED' &&
+           (!ERP.Can || ERP.Can('STOCK_MANAGE') || ERP.Can('TRANSACTION_CORRECT'));
+  },
+  /* the form the edit screen starts from */
+  toDraft: function (d) {
+    return {
+      id: d.id, existing: true, revision: d.revision || 0, clientOpId: d.clientOpId || d.id,
+      warehouseId: d.warehouseId, date: d.docDate, reason: d.reason || '', notes: d.notes || '',
+      items: StockDocs.items(d.id).map(function (it) {
+        return {
+          lineId: FDB.uid('ln'), productId: it.productId, quantity: it.quantity,
+          unitPrice: it.unitCostP ? M.toR(it.unitCostP) : '', discount: '', receivedQty: '',
+          direction: 'IN', warehouseId: it.warehouseId || d.warehouseId, fromDamaged: false,
+          toProductId: '', batchNo: it.batchNo || '', notes: it.notes || '', unit: it.unit || 'Bag'
+        };
+      })
+    };
+  },
+  editReceive: function (draft) {
+    var prior = draft && draft.id ? StockDocs.byId(draft.id) : null;
+    if (!prior || prior.type !== 'RECEIVE') return Promise.reject({ validation: ['Stock receipt not found.'] });
+    if (!StockDocs.canEdit(prior)) return Promise.reject({ validation: ['You are not allowed to edit a stock receipt.'] });
+    var errs = [];
+    if (!draft.warehouseId) errs.push('Choose a warehouse.');
+    if (!draft.reason) errs.push('Give a reason for adding this stock.');
+    var v = validateLines(draft.items, { out: false });
+    errs = errs.concat(v.errs);
+    v.lines.forEach(function (l, n) {
+      if (l.unitPrice && M.toP(l.unitPrice) < 0) errs.push('Line ' + (n + 1) + ': the cost cannot be negative.');
+    });
+
+    var oldItems = StockDocs.items(prior.id);
+    /* the stock guard is on the NET change per product and warehouse: bags this
+       receipt brought in may since have been sold or moved, and taking back
+       more than is still there would push the stock below zero */
+    if (!errs.length && !ERP.Settings.allowNegativeStock()) {
+      var net = {}, label = {};
+      var key = function (pid, wid) { var k = pid + '|' + wid; label[k] = { pid: pid, wid: wid }; return k; };
+      oldItems.forEach(function (o) {
+        var k = key(o.productId, o.warehouseId || prior.warehouseId);
+        net[k] = (net[k] || 0) - (Number(o.quantity) || 0);
+      });
+      v.lines.forEach(function (l) {
+        var k = key(l.productId, l.warehouseId || draft.warehouseId);
+        net[k] = (net[k] || 0) + M.qty(l.quantity);
+      });
+      Object.keys(net).forEach(function (k) {
+        var d = Math.round(net[k] * 1000) / 1000;
+        if (d >= 0) return;
+        var have = Inventory.available(label[k].pid, label[k].wid);
+        if (have + d < 0) {
+          var p = prodOf(label[k].pid) || {};
+          errs.push('Only ' + have + ' bags of ' + (p.en || p.ur || 'that product') + ' are in ' +
+            whName(label[k].wid) + ' now, but this edit takes ' + (-d) + ' bags back out of stock. ' +
+            'The rest of that receipt has already been sold or moved, so it cannot be reduced by that much.');
+        }
+      });
+    }
+    if (errs.length) return Promise.reject({ validation: errs });
+
+    var revision = prior.revision || 0;
+    var opId = (prior.clientOpId || prior.id) + '#edit' + (revision + 1);
+    var number = prior.docNumber;
+    /* a receipt posted as opening stock is re-posted as opening stock */
+    var wasOpening = (S.movements || []).some(function (mv) {
+      return mv.ref === number && mv.refType === 'STOCK_RECEIPT' && mv.kind === 'OPENING_STOCK';
+    });
+
+    return FDB.tx(['stockDocs', 'stockDocItems', 'inventory', 'stockMovements', 'auditLog', 'operations'], function (api) {
+      return FDB.claimOperation(api, opId, 'StockDocEdit:RECEIVE', { entityId: prior.id }).then(function () {
+        var before = { warehouse: prior.warehouseSnapshot, date: prior.docDate, reason: prior.reason,
+          qty: prior.totalQty, lines: oldItems.map(function (i) {
+            return (i.descriptionEnSnapshot || i.productId) + ' × ' + i.quantity + (i.unitCostP ? ' @ ' + M.toR(i.unitCostP) : '');
+          }) };
+        oldItems.forEach(function (o) {
+          var q = Number(o.quantity) || 0;
+          if (q > 0) {
+            Inventory.apply(api, { productId: o.productId, warehouseId: o.warehouseId || prior.warehouseId,
+              qtyDelta: -q, kind: 'RECEIPT_EDIT_OUT', ref: number, refType: 'STOCK_RECEIPT_EDIT',
+              note: 'Reversed on receipt edit', date: prior.docDate, unitCostP: o.unitCostP || 0 });
+          }
+          api.del('stockDocItems', o.id);
+        });
+        S.stockDocItems = S.stockDocItems.filter(function (i) { return i.docId !== prior.id; });
+
+        var rec = Object.assign({}, prior, {
+          docDate: draft.date || prior.docDate,
+          warehouseId: draft.warehouseId, warehouseSnapshot: whName(draft.warehouseId),
+          reason: draft.reason || '', notes: draft.notes || '',
+          revision: revision + 1, updatedAt: nowISO(), updatedBy: currentUser()
+        });
+        var qty = 0;
+        v.lines.forEach(function (l, ix) {
+          var q = M.qty(l.quantity);
+          var r = snapshot(l, {
+            id: FDB.uid('sdi'), docId: rec.id, sortOrder: ix, direction: 'IN',
+            warehouseId: l.warehouseId || rec.warehouseId, toWarehouseId: null,
+            reason: l.reason || rec.reason, fromDamaged: false,
+            unitCostP: l.unitPrice ? M.toP(l.unitPrice) : Inventory.costOf(l.productId, rec.warehouseId)
+          });
+          api.put('stockDocItems', r); S.stockDocItems.push(r);
+          qty += q;
+          Inventory.apply(api, { productId: r.productId, warehouseId: r.warehouseId, qtyDelta: q,
+            kind: wasOpening ? 'OPENING_STOCK' : 'ADJUSTMENT_IN', ref: number, refType: 'STOCK_RECEIPT',
+            note: rec.reason, date: rec.docDate, unitCostP: r.unitCostP });
+        });
+        rec.totalQty = qty; rec.lineCount = v.lines.length;
+        api.put('stockDocs', rec);
+        var ix2 = S.stockDocs.findIndex(function (d) { return d.id === rec.id; });
+        if (ix2 > -1) S.stockDocs[ix2] = rec; else S.stockDocs.unshift(rec);
+
+        Audit.write(api, {
+          action: 'Stock receipt edited', entity: 'StockDoc', entityId: rec.id, ref: number,
+          oldValues: before,
+          newValues: { warehouse: rec.warehouseSnapshot, date: rec.docDate, reason: rec.reason, qty: qty,
+            lines: S.stockDocItems.filter(function (i) { return i.docId === rec.id; }).map(function (i) {
+              return (i.descriptionEnSnapshot || i.productId) + ' × ' + i.quantity + (i.unitCostP ? ' @ ' + M.toR(i.unitCostP) : '');
+            }) },
+          reason: rec.reason
+        });
+        return rec;
+      });
+    }).then(function (rec) { Mirror.refresh(); return rec; });
+  }
 };
 
 /* ── load the new parents at boot and keep the old screens fed ── */

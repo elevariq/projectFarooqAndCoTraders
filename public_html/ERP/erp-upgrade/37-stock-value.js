@@ -95,11 +95,14 @@
   function carriedMap() {
     var m = {};
     (S.movements || []).forEach(function (mv) {
-      if (!CARRIED[mv.kind] || mv.bucket === 'damaged' || !(mv.qtyDelta > 0) || !(mv.unitCostP > 0)) return;
+      if (mv.bucket === 'damaged' || !(mv.unitCostP > 0)) return;
+      /* an edited Add-stock receipt's old lines come back out at their old cost (StockDocs.editReceive) */
+      var undo = mv.kind === 'RECEIPT_EDIT_OUT' && mv.qtyDelta < 0;
+      if (!undo && (!CARRIED[mv.kind] || !(mv.qtyDelta > 0))) return;
       var k = mv.productId + '|' + mv.warehouseId, a = m[k] || (m[k] = { qty: 0, cost: 0 });
       a.qty += mv.qtyDelta; a.cost += mv.qtyDelta * mv.unitCostP;
     });
-    Object.keys(m).forEach(function (k) { m[k] = Math.round(m[k].cost / m[k].qty); });
+    Object.keys(m).forEach(function (k) { m[k] = m[k].qty > 0 && m[k].cost > 0 ? Math.round(m[k].cost / m[k].qty) : 0; });
     return m;
   }
 

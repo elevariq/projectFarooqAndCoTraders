@@ -35,7 +35,7 @@ var ENUM = ERP.ENUM = {
              'SALE_REVERSAL_IN', 'PURCHASE_REVERSAL_OUT', 'REPLACEMENT_OUT', 'SUPPLIER_REPLACEMENT_IN',
              'STOCK_WRITE_OFF', 'DISPATCH_OUT',
              'MILL_ISSUE_OUT', 'MILL_RECEIPT_IN', 'MILL_ISSUE_REVERSAL_IN', 'MILL_RECEIPT_REVERSAL_OUT',
-             'CONVERT_OUT', 'CONVERT_IN'],
+             'CONVERT_OUT', 'CONVERT_IN', 'RECEIPT_EDIT_OUT'],
   /* what physically happens to a returned bag */
   returnCondition: ['SELLABLE', 'DAMAGED', 'DEFECTIVE', 'WRONG_ITEM', 'EXPIRED', 'OTHER'],
   /* what happens to the money */
@@ -181,10 +181,14 @@ var Inventory = ERP.Inventory = {
     var qty = 0, cost = 0;
     (S.movements || []).forEach(function (mv) {
       if (mv.productId !== pid || (wid && mv.warehouseId !== wid)) return;
-      if (!CARRIED[mv.kind] || mv.bucket === 'damaged' || !(mv.qtyDelta > 0) || !(mv.unitCostP > 0)) return;
+      if (mv.bucket === 'damaged' || !(mv.unitCostP > 0)) return;
+      /* an edited Add-stock receipt takes its old lines back out AT THEIR OLD COST (07-transactions.js
+         StockDocs.editReceive), so the corrected cost replaces the old one instead of averaging with it */
+      if (mv.kind === 'RECEIPT_EDIT_OUT' && mv.qtyDelta < 0) { qty += mv.qtyDelta; cost += mv.qtyDelta * mv.unitCostP; return; }
+      if (!CARRIED[mv.kind] || !(mv.qtyDelta > 0)) return;
       qty += mv.qtyDelta; cost += mv.qtyDelta * mv.unitCostP;
     });
-    return qty ? Math.round(cost / qty) : 0;
+    return qty > 0 && cost > 0 ? Math.round(cost / qty) : 0;
   },
   /* Apply one movement inside a caller-owned transaction. */
   apply: function (api, mv) {
@@ -248,7 +252,8 @@ var Movements = ERP.Movements = {
       DISPATCH_OUT: 'Dispatch', OPENING_STOCK: 'Opening stock', OPENING: 'Opening stock',
       MILL_ISSUE_OUT: 'Issued for milling', MILL_RECEIPT_IN: 'Received from mill',
       MILL_ISSUE_REVERSAL_IN: 'Milling issue reversed', MILL_RECEIPT_REVERSAL_OUT: 'Milling receipt reversed',
-      CONVERT_OUT: 'Converted to another brand', CONVERT_IN: 'Converted from another brand'
+      CONVERT_OUT: 'Converted to another brand', CONVERT_IN: 'Converted from another brand',
+      RECEIPT_EDIT_OUT: 'Stock receipt edited (old lines reversed)'
     })[k] || k;
   }
 };

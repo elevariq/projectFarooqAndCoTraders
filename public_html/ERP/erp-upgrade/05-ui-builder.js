@@ -85,7 +85,8 @@ var MODES = {
   receive: {
     title: 'Add stock', reason: true, cost: true,
     cta: 'Add to Stock', back: 'inventory', noun: 'stock receipt',
-    save: function (d) { return ERP.StockDocs.receive(d); },
+    /* an existing receipt comes here through its Edit button (09-paperwork.js ERP.editStockReceipt) */
+    save: function (d) { return d.existing ? ERP.StockDocs.editReceive(d) : ERP.StockDocs.receive(d); },
     after: function (rec) { return ERP.DocModel.stockDoc(rec.id); }
   },
   adjust: {
@@ -358,9 +359,11 @@ function headerBody(withCard) {
       esc(d.date || todayISO()) + '"></label>' : '') +
     extra;
   var card = '<div class="card fcb-card"><div class="card-h"><h3>' +
-    esc(B.mode === 'purchase' && B.editingId ? 'Edit purchase' : cfg.title) + '</h3>' +
+    esc(B.mode === 'purchase' && B.editingId ? 'Edit purchase'
+        : B.mode === 'receive' && B.editingId ? 'Edit stock receipt' : cfg.title) + '</h3>' +
     '<span class="pill neu mono">' + (B.editingId
-      ? 'Editing' + (B.mode === 'purchase' ? ' ' + esc((ERP.Purchases.byId(B.editingId) || {}).purchaseNumber || '') : '')
+      ? 'Editing' + (B.mode === 'purchase' ? ' ' + esc((ERP.Purchases.byId(B.editingId) || {}).purchaseNumber || '')
+                   : B.mode === 'receive' ? ' ' + esc((ERP.StockDocs.byId(B.editingId) || {}).docNumber || '') : '')
       : 'Next: ' + nextNo) + '</span>' +
     '</div><div class="card-b" id="fcbHead">' + body + '</div></div>';
   return withCard ? card : body;
@@ -581,7 +584,7 @@ global.PAGES.invoiceBuilder = function () {
         '<button class="btn" data-fcbact="cancel">Discard</button>' +
         (cfg.drafts ? '<button class="btn" data-fcbact="draft">' + I('doc') + 'Save Draft</button>' : '') +
         '<button class="btn pri lg" data-fcbact="save">' + I('check') +
-          (B.mode === 'purchase' && B.editingId ? 'Save changes' : cfg.cta) + '</button>' +
+          ((B.mode === 'purchase' || B.mode === 'receive') && B.editingId ? 'Save changes' : cfg.cta) + '</button>' +
       '</div></div></div></div>';
 };
 
@@ -701,6 +704,7 @@ B.save = function (asDraft) {
     var no = rec.invoiceNumber || rec.purchaseNumber || rec.orderNumber ||
              rec.docNumber || rec.returnNumber || '';
     say(mode === 'purchase' && wasEdit ? 'Purchase ' + no + ' updated — stock and the supplier balance follow the change.'
+        : mode === 'receive' && wasEdit ? 'Stock receipt ' + no + ' updated — stock follows the change.'
         : cfg.title.replace(/^New /, '') + ' saved' + (no ? ' — ' + no : '') + '.');
     if (mode === 'sale' && orderId) ERP.Orders.markInvoiced(orderId, rec);
     ERP.Notify.fire(mode === 'sale' ? 'INVOICE_CREATED' : 'TRANSACTION_SAVED', { id: rec.id, ref: no });
@@ -715,6 +719,13 @@ B.save = function (asDraft) {
   }).catch(function (err) {
     setSaving(false);
     if (err && err.validation) { showErrors(err.validation); return; }
+    /* an edit's save is keyed on the record's revision, so the same key again almost always means the record was
+       already changed from another window or device (double clicks are stopped by B.saving) */
+    if (err && err.duplicate && wasEdit && (mode === 'receive' || mode === 'purchase')) {
+      showErrors(['This ' + cfg.noun + ' was already changed from another window or device, so this edit was not saved. ' +
+        'Reload the page to see the latest version, then make the change again.']);
+      return;
+    }
     if (err && err.duplicate) {
       showErrors(['This ' + cfg.noun + ' has already been saved — the repeated submission was ignored, ' +
         'so nothing was duplicated.']);
