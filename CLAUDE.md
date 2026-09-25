@@ -230,9 +230,9 @@ Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's 
 11. Not done by design/for later: undo for an area delete; bulk "move all shops"; notification "mark all read"; Documents/Audit lists paged;
     persistent PDO connections; base `<title>` still says "Warehouse ERP".
 12. The business-logic of the ERP modules has not had a dedicated audit — scope it separately if the user wants one.
-13. **Extra cost per bag** (Product prices panel, 2026-09-21, module 21, `docs/CLAUDE_HISTORY_2026-09-21.md`): a per-product planning figure (transport/labour WE pay) that drives the panel's
-    cost-to-us / margin / below-cost warning only. Invoices, Profit and Stock value still use actual purchase cost + the Landed costs screen. Ask the owner whether it should also feed sale-time
-    profit (moves every profit figure; would double-count anything also entered as a landed cost). Not yet seen on the live site.
+13. **Extra cost per bag now feeds sale-time profit** (2026-09-25, client: "purchase 3000 + extra 200 = 3200, profit still showed 200 more"): `Inventory.saleCostOf` = `costOf` + product
+    `extraP` → invoice `costSnapshot`, `Cost.forSale`, live invoice note. Stock value / `avgCostP` never carry it; skipped under `profitCostBasis:'PURCHASE'`; old invoices keep their
+    snapshot. Trap: a purchase with freight also entered on the Landed costs screen counts that transport twice — tell the owner to use one or the other. `docs/EXTRA_COST_PROFIT.md`.
 
 ## Not yet seen by a person on the live site / a physical phone
 

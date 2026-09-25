@@ -389,6 +389,21 @@ function costLine(buyP, extraP, sellP) {
              '%</b>, markup <b>' + f.markup + '%</b>' : '');
 }
 
+/* True when transport/labour for this product was already put on a purchase through the Landed costs screen (or
+   the purchase's own freight boxes): under the LANDED basis that is inside the stock cost, and the Extra cost per
+   bag is added on top of the stock cost when a sale is costed (Inventory.saleCostOf) — so the same transport would
+   count twice. The panel says so rather than guessing which one the owner meant. */
+function landedAlready(pid) {
+  if (ERP.Cost && ERP.Cost.basis && ERP.Cost.basis() !== 'LANDED') return false;
+  return (S.purchaseItems || []).some(function (it) {
+    if (it.productId !== pid) return false;
+    var pu = ERP.Purchases && ERP.Purchases.byId ? ERP.Purchases.byId(it.purchaseId) : null;
+    if (!pu || pu.status === 'CANCELLED') return false;
+    return it.landedUnitCost > 0 && it.goodsUnitCost > 0 && it.landedUnitCost > it.goodsUnitCost;
+  });
+}
+Prices.landedAlready = landedAlready;
+
 global.PANELS.prices = {
   t: 'Product prices', s: 'What it costs, what it sells for, and why it changed', cta: 'Save prices',
   f: function () {
@@ -411,9 +426,14 @@ global.PANELS.prices = {
         ' change is waiting for approval on this product.</p></div></div>' : '') +
       '<div class="f2">' + money('buy', 'Purchase price', 'What the mill or supplier charges per bag') +
         money('extra', 'Extra cost per bag',
-          'Transport, labour, loading and other charges we pay ourselves — not on the supplier’s bill. Type 0 if none.') +
+          'Transport, labour, loading and other charges we pay ourselves — not on the supplier’s bill. ' +
+          'Counted in the cost of every sale from now on. Type 0 if none.') +
       '</div>' +
       '<div class="pz-live" id="pzLive" aria-live="polite">' + costLine(info.buy, info.extra, info.sell) + '</div>' +
+      (landedAlready(pid)
+        ? '<div class="banner warn" id="pzLanded">' + I('alert') + '<div><p>Transport or other charges for this product are already ' +
+          'added to its purchases on the Landed costs screen. The extra cost per bag is added on top of that when a sale’s ' +
+          'profit is worked out — use one or the other, or the same cost is counted twice.</p></div></div>' : '') +
       '<div class="f2">' + money('sell', 'Selling price', 'The default rate on a new invoice') +
         money('min', 'Minimum selling price', 'A warning appears below this') + '</div>' +
       '<div class="f2">' + money('wholesale', 'Wholesale price') + money('retail', 'Retail price') + '</div>' +

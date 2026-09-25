@@ -88,7 +88,7 @@ var Cost = ERP.Cost = {
 
   /* the figure a sale should be costed at */
   forSale: function (productId, warehouseId) {
-    return ERP.Inventory.costOf(productId, warehouseId);
+    return ERP.Inventory.saleCostOf(productId, warehouseId);   /* stock cost + the product's extra cost per bag */
   },
 
   history: function (productId) {
@@ -219,7 +219,8 @@ var Profit = ERP.Profit = {
     var p = global.prodOf ? global.prodOf(productId) : null;
     var minP = p && p.minSellP ? p.minSellP : (p && p.min ? M.toP(p.min) : 0);
     return {
-      cost: cost, unitRevenue: q ? Math.round(revenue / q) : rate,
+      cost: cost, extra: cost ? ERP.Inventory.extraOf(productId) : 0,
+      unitRevenue: q ? Math.round(revenue / q) : rate,
       revenue: revenue, totalCost: totalCost, profit: profit,
       margin: revenue ? profit / revenue * 100 : 0,
       markup: totalCost ? profit / totalCost * 100 : 0,
@@ -380,10 +381,11 @@ function marginNote(ix) {
   if (!Number(it.quantity) || !M.toP(it.unitPrice)) return '';
   var warnPct = Number(ERP.Settings.get().lowMarginWarnPct || 5);
   var cls = p.belowCost ? 'bad' : (p.margin < warnPct ? 'low' : 'ok');
-  var msg = 'Cost <b>' + M.fmt(p.cost) + '</b>/bag · profit <b>' + M.fmt(p.profit) +
+  var costTxt = M.fmt(p.cost) + (p.extra ? ' (stock ' + M.fmt(p.cost - p.extra) + ' + extra ' + M.fmt(p.extra) + ')' : '');
+  var msg = 'Cost <b>' + costTxt + '</b>/bag · profit <b>' + M.fmt(p.profit) +
     '</b> · margin <b>' + pct(p.margin) + '</b> · markup ' + pct(p.markup);
   if (p.belowCost) {
-    msg = '<b>Below cost.</b> Cost ' + M.fmt(p.cost) + '/bag against ' + M.fmt(p.unitRevenue) +
+    msg = '<b>Below cost.</b> Cost ' + costTxt + '/bag against ' + M.fmt(p.unitRevenue) +
       ' — a loss of ' + M.fmt(Math.abs(p.profit)) + ' on this line.';
   } else if (p.belowMin && ERP.Settings.get().warnBelowMinPrice) {
     msg = '<b>Below the minimum price</b> of ' + M.fmt(p.minPrice) + '/bag. ' + msg;

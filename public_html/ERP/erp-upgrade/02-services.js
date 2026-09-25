@@ -151,6 +151,25 @@ var Inventory = ERP.Inventory = {
     var p = global.prodOf && global.prodOf(pid);
     return p && p.buy ? M.toP(p.buy) : 0;
   },
+  /* The product's own "Extra cost per bag" (Product prices panel, 21-settings.js): transport, labour,
+     loading WE pay to bring a bag in. Client, 2026-09-25: "purchase 3000, extra 200, total 3200 — and
+     profit still showed 200 more" — a sale was costed at the stock cost alone. It is part of what a
+     SALE costs (saleCostOf), not of the stock's own value, so avgCostP / Stock value never carry it.
+     Not added under the "purchase price only" profit basis (Settings → profitCostBasis 'PURCHASE'). */
+  extraOf: function (pid) {
+    var basis = ERP.Settings && ERP.Settings.get ? ERP.Settings.get().profitCostBasis : null;
+    if (basis === 'PURCHASE') return 0;
+    var p = global.prodOf && global.prodOf(pid);
+    if (!p) return 0;
+    var x = p.extraP !== undefined && p.extraP !== null ? Number(p.extraP) : (p.extra ? M.toP(p.extra) : 0);
+    return x > 0 ? x : 0;
+  },
+  /* what one bag of a sale is costed at: the stock cost plus the extra cost per bag. An unknown stock
+     cost stays unknown (0) — the extra alone is not a cost price and would show a made-up profit. */
+  saleCostOf: function (pid, wid) {
+    var base = Inventory.costOf(pid, wid);
+    return base ? base + Inventory.extraOf(pid) : 0;
+  },
   /* the weighted cost of stock that came in without ever touching avgCostP — opening stock, "Add
      stock" with a cost typed, transfers, brand conversions. avgCostP only moves on PURCHASE_IN /
      MILL_RECEIPT_IN (see apply() below), so a product priced only through one of these ways used to
@@ -421,7 +440,7 @@ var Invoices = ERP.Invoices = {
       unit: it.unit || 'Bag',
       quantity: it.quantity, unitPrice: it.unitPrice, discount: it.discount,
       tax: it.tax, lineTotal: it.lineTotal,
-      costSnapshot: Inventory.costOf(it.productId, wid),
+      costSnapshot: Inventory.saleCostOf(it.productId, wid),
       warehouseId: wid, batchNo: it.batchNo || '', notes: it.notes || '',
       returnedQty: 0
     };
