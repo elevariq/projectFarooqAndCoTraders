@@ -726,6 +726,8 @@ B.save = function (asDraft) {
     }
   }).catch(function (err) {
     setSaving(false);
+    /* a warning the person may override: showing it once is enough, the next Save keeps what they typed */
+    if (err && err.confirmable && err.validation) { B.draft.confirmCharges = true; showErrors(err.validation); return; }
     if (err && err.validation) { showErrors(err.validation); return; }
     /* an edit's save is keyed on the record's revision, so the same key again almost always means the record was
        already changed from another window or device (double clicks are stopped by B.saving) */
@@ -850,7 +852,10 @@ global.PAGES.invoices = function () {
         '<button class="btn sm" data-fcinv="dup" data-id="' + i.id + '">Duplicate</button>' +
         (i.status !== 'CANCELLED' && i.status !== 'DRAFT'
           ? '<button class="btn sm" data-fcinv="pay" data-id="' + i.id + '">Payment</button>' +
-            '<button class="btn sm" data-fcinv="return" data-id="' + i.id + '">Return</button>' : '') +
+            '<button class="btn sm" data-fcinv="return" data-id="' + i.id + '">Return</button>' +
+            /* money we owe the shop on this invoice (it paid, then returned goods): one button pays it back */
+            (ERP.Invoices.refundDue(i) > 0 && (!ERP.Can || ERP.Can('PAYMENT_CREATE'))
+              ? '<button class="btn sm pri" data-fcinv="payback" data-id="' + i.id + '">Pay back ' + M.fmtPlain(ERP.Invoices.refundDue(i)) + '</button>' : '') : '') +
       '</td></tr>';
   });
 

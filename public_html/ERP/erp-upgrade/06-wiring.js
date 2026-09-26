@@ -368,6 +368,49 @@ PANELS.paysup = {
   }
 };
 
+/* "Pay back" on an invoice: the shop paid, then returned goods, so we owe it money. The amount opens on everything owed
+   on this invoice; the person may pay less (in parts) but never more. The voucher remembers which invoice it settles. */
+var PAYBACK_FOR = null;
+PANELS.payback = {
+  t: 'Pay back the shop', s: 'Money we owe the shop on this invoice', cta: 'Pay back & print voucher',
+  f: function () {
+    var inv = PAYBACK_FOR ? ERP.Invoices.byId(PAYBACK_FOR) : null;
+    if (!inv) return '<div class="banner warn">' + I('alert') + '<div><p>Invoice not found.</p></div></div>';
+    var due = ERP.Invoices.refundDue(inv);
+    if (!(due > 0)) {
+      return '<div class="banner info">' + I('checkC') + '<div><p><b>' + esc(inv.invoiceNumber) + '</b> — nothing is owed to ' +
+        esc(inv.shopNameSnapshot) + ' on this invoice.</p></div></div>';
+    }
+    var credit = ERP.Invoices.returnsOn(inv.id).reduce(function (a, r) { return a + r.creditAmount; }, 0);
+    return '<div class="banner info">' + I('wallet') + '<div><p><b>' + esc(inv.invoiceNumber) + ' · ' + esc(inv.shopNameSnapshot) + '</b></p>' +
+        '<p>Invoice ' + M.fmt(inv.grandTotal) + ' · returned ' + M.fmt(credit) + ' · the shop paid <b>' + M.fmt(ERP.Invoices.paidFor(inv.id)) +
+        '</b>. We owe it <b>' + M.fmt(due) + '</b>.</p></div></div>' +
+      '<div class="f2 fc-amtpaid"><label class="f"><span>Amount to pay back</span>' +
+        '<input data-f="amt" inputmode="decimal" value="' + esc(M.toR(due)) + '">' +
+        '<span class="hint">Up to ' + M.fmt(due) + ' — you may pay less now and the rest later.</span></label>' +
+        '<label class="f"><span>Method</span><select data-f="method">' +
+          ERP.ENUM.methods.map(function (m) { return '<option>' + m + '</option>'; }).join('') + '</select></label></div>' +
+      '<div class="f2"><label class="f"><span>Date</span><input type="date" data-f="date" value="' + todayISO() + '"></label>' +
+        '<label class="f"><span>Internal note</span><input data-f="note" placeholder="Optional"></label></div>';
+  },
+  save: function (v) {
+    var inv = PAYBACK_FOR ? ERP.Invoices.byId(PAYBACK_FOR) : null;
+    if (!inv) return 'Invoice not found.';
+    var due = ERP.Invoices.refundDue(inv);
+    if (!(due > 0)) return 'Nothing is owed to the shop on this invoice.';
+    var amount = String(v.amt || '').replace(/[^\d.]/g, '');
+    if (!amount || !(Number(amount) > 0)) return 'Enter the amount to pay back.';
+    if (M.toP(amount) > due) return 'You can pay back at most ' + M.fmt(due) + ' — that is all the shop is owed on this invoice.';
+    ERP.Payments.refund({ customerId: inv.customerId, invoiceId: inv.id, amount: amount, method: v.method,
+        reference: inv.invoiceNumber, date: v.date || todayISO(), note: 'Paid back on ' + inv.invoiceNumber + (v.note ? ' — ' + v.note : '') })
+      .then(function (p) {
+        global.paint(); say('Voucher ' + p.receiptNumber + ' recorded — ' + M.fmt(p.amount) + ' paid back.');
+        setTimeout(function () { ERP.Viewer.open(ERP.DocModel.receipt(p.id)); }, 220);
+      }).catch(function (e) { say(e && e.validation ? 'NOT saved — ' + e.validation[0] : 'NOT saved — the payment could not be stored.'); });
+    return { msg: 'Saving payment…' };
+  }
+};
+
 PANELS.refund = {
   t: 'Pay a shop', s: 'Money paid out to a shop — a refund or adjustment, not tied to a return',
   cta: 'Record payment & print voucher',
@@ -672,7 +715,8 @@ function retMoneyNoteHtml(invId, treatment) {
   var after = owes - value;
   return say1(head + 'The shop owes <b>' + M.fmt(owes) + '</b> now. ' + (after >= 0
     ? 'After this return it will owe <b>' + M.fmt(after) + '</b>.'
-    : 'After this return it will have <b>' + M.fmt(-after) + '</b> of credit with you, to use on its next purchase.'));
+    : 'After this return it will have <b>' + M.fmt(-after) + '</b> of credit with you, to use on its next purchase. ' +
+      'To hand that money back in cash, post this return first — the invoice then shows a “Pay back” button.'));
 }
 function retLinesFromPanel() {
   var items = [];
@@ -1020,6 +1064,7 @@ D.addEventListener('click', function (e) {
     else if (what === 'dup') duplicateInvoice(id);
     else if (what === 'pay') { PAY_FOR = (ERP.Invoices.byId(id) || {}).customerId; global.openPanel('payment'); }
     else if (what === 'return') { RETURN_FOR = id; global.openPanel('creditnote'); }
+    else if (what === 'payback') { PAYBACK_FOR = id; global.openPanel('payback'); }
     return;
   }
 

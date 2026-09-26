@@ -902,6 +902,28 @@ var Invoices = ERP.Invoices = {
     return d;
   },
 
+  /* Cash already handed back to the shop FOR this invoice: vouchers made with the invoice's "Pay back" button, plus the
+     cash a REFUND-treatment return paid out. (Older "Pay a shop" vouchers were not linked to any invoice.) */
+  refundedFor: function (invoiceId) {
+    var viaVoucher = S.payments.filter(function (p) {
+      return p.direction === 'OUT' && p.partyType === 'CUSTOMER' && p.status !== 'REVERSED' && p.refundOfInvoiceId === invoiceId;
+    }).reduce(function (a, p) { return a + p.amount; }, 0);
+    var viaReturn = S.custReturns.filter(function (r) {
+      return r.invoiceId === invoiceId && r.status !== 'CANCELLED' && r.treatment === 'REFUND';
+    }).reduce(function (a, r) { return a + r.creditAmount; }, 0);
+    return viaVoucher + viaReturn;
+  },
+  /* What we still owe the shop on this invoice, in paisa (0 = nothing): what the shop paid beyond what the invoice is
+     worth after its returns, less what was already handed back — and never more than the shop's account actually holds
+     as credit (so an older, unlinked "Pay a shop" voucher can never be paid twice). */
+  refundDue: function (inv) {
+    if (!inv || inv.status === 'DRAFT' || inv.status === 'CANCELLED') return 0;
+    var credit = Invoices.returnsOn(inv.id).reduce(function (a, r) { return a + r.creditAmount; }, 0);
+    var worth = Math.max(0, inv.grandTotal - credit);
+    var over = Invoices.paidFor(inv.id) - worth - Invoices.refundedFor(inv.id);
+    var held = Math.max(0, -Ledger.customerBalance(inv.customerId));
+    return Math.max(0, Math.min(over, held));
+  },
   /* the live (not cancelled) customer returns posted against an invoice */
   returnsOn: function (invoiceId) {
     return S.custReturns.filter(function (r) { return r.invoiceId === invoiceId && r.status !== 'CANCELLED'; });
@@ -921,7 +943,11 @@ var Invoices = ERP.Invoices = {
   outstanding: function (inv) {
     var credit = S.custReturns.filter(function (r) { return r.invoiceId === inv.id && r.status !== 'CANCELLED'; })
                               .reduce(function (a, r) { return a + r.creditAmount; }, 0);
-    return inv.grandTotal - Invoices.paidFor(inv.id) - credit;
+    /* Never below zero. Money the shop paid beyond what is left of this invoice (a return credited more than the invoice
+       still owed) is held on the SHOP's account — Ledger.customer, where "Pay a shop" hands it back — not on the invoice.
+       Cash paid back through "Pay a shop" is not linked to any invoice, so a negative figure here never went away:
+       2026-09-26 a settled shop (account 0) showed −3,200 on its invoice and in the Sales "Outstanding" total. */
+    return Math.max(0, inv.grandTotal - Invoices.paidFor(inv.id) - credit);
   },
   refreshPaymentState: function (api, invoiceId) {
     var inv = Invoices.byId(invoiceId);
@@ -1143,12 +1169,32 @@ var Purchases = ERP.Purchases = {
     };
   },
 
+  /* '' when fine, else the sentence to show: freight / loading / other charges on this purchase AND a product on it that
+     already has an "Extra cost per bag" saved (that box is for exactly these costs — transport, labour, loading). */
+  doubleCostWarning: function (draft, totals) {
+    var charges = (totals.freightAmount || 0) + (totals.loadingAmount || 0) + (totals.otherCharges || 0);
+    if (!(charges > 0)) return '';
+    var hit = (draft.items || []).filter(function (i) { return i.productId && Inventory.extraOf(i.productId) > 0; })[0];
+    if (!hit) return '';
+    var p = global.prodOf(hit.productId) || {};
+    return (p.en || p.ur || hit.productId) + ' already has an Extra cost per bag of ' + M.fmt(Inventory.extraOf(hit.productId)) +
+      ' saved on its prices. Adding ' + M.fmt(charges) + ' of freight / loading / other charges to this purchase counts the same transport twice: ' +
+      'the profit on its sales would look too low, and the supplier would be shown as owed ' + M.fmt(charges) +
+      ' more than the mill charges. Remove the charges from this purchase, or clear the product’s extra cost.';
+  },
+
   save: function (draft) {
     var errs = Validate.purchase(draft);
     var totals = Calc.invoice(draft);
     var prior = draft.id ? Purchases.byId(draft.id) : null;
     if (prior && !errs.length) errs = Purchases.editErrors(draft, prior, totals);
     if (errs.length) return Promise.reject({ validation: errs });
+    /* the same transport counted twice (2026-09-26: 1,000 typed as "Other charges" on a purchase of bags whose product
+       already carried an Extra cost of 200 — the sale was costed at 6,400 instead of 6,200 and showed a loss) */
+    var twice = Purchases.doubleCostWarning(draft, totals);
+    if (twice && !draft.confirmCharges) {
+      return Promise.reject({ validation: [twice, 'If you really want both, press Save again and it will be kept.'], confirmable: true });
+    }
     draft.id = draft.id || FDB.uid('pur');
     var existing = Purchases.byId(draft.id);
     var revision = (draft.revision === undefined || draft.revision === null ? 0 : draft.revision);
@@ -1377,6 +1423,8 @@ var Payments = ERP.Payments = {
         createdAt: nowISO(), createdBy: currentUser(),
         balanceBefore: partyType === 'CUSTOMER' ? Ledger.customerBalance(o.partyId) : Ledger.supplierBalance(o.partyId)
       };
+      /* a voucher made from an invoice's "Pay back" button remembers which invoice it settles */
+      if (o.refundOfInvoiceId) { rec.refundOfInvoiceId = o.refundOfInvoiceId; rec.refundOfInvoiceNumber = o.refundOfInvoiceNumber || ''; }
       /* A shop's balance is what it owes us: receiving money lowers it, PAYING a shop raises it.
          A supplier's is what we owe: paying it lowers it. (This used to subtract in every case,
          so the stored figure on a payment to a shop pointed the wrong way; nothing reads it back,
@@ -1443,10 +1491,22 @@ var Payments = ERP.Payments = {
     var amountP = M.toP(o.amount);
     if (!(amountP > 0)) return Promise.reject({ validation: ['Enter an amount greater than zero.'] });
     if (!global.custBy(o.customerId)) return Promise.reject({ validation: ['Choose a shop.'] });
+    /* paying back on ONE invoice: never more than the shop is owed on it */
+    var inv = o.invoiceId ? Invoices.byId(o.invoiceId) : null;
+    if (o.invoiceId) {
+      if (!inv || inv.customerId !== o.customerId) return Promise.reject({ validation: ['That invoice does not belong to this shop.'] });
+      var due = Invoices.refundDue(inv);
+      if (amountP > due) {
+        return Promise.reject({ validation: [due > 0
+          ? 'You can pay back at most ' + M.fmt(due) + ' on ' + inv.invoiceNumber + ' — that is all the shop is owed on it.'
+          : 'Nothing is owed to the shop on ' + inv.invoiceNumber + ', so there is nothing to pay back.'] });
+      }
+    }
     return FDB.tx(['sequences', 'payments', 'paymentAllocations', 'auditLog'], function (api) {
       return Payments._write(api, {
         partyId: o.customerId, partyType: 'CUSTOMER', amountP: amountP, method: o.method,
-        reference: o.reference, date: o.date, note: o.note, description: o.description, allocations: []
+        reference: o.reference, date: o.date, note: o.note, description: o.description, allocations: [],
+        refundOfInvoiceId: inv ? inv.id : null, refundOfInvoiceNumber: inv ? inv.invoiceNumber : ''
       }, 'OUT');
     }).then(function (r) { Mirror.refresh(); return r; });
   },
@@ -1586,9 +1646,8 @@ var Returns = ERP.Returns = {
       var eff = it.quantity ? Math.round(it.lineTotal / it.quantity) : it.unitPrice;
       want += M.mul(eff, M.qty(l.quantity));
     });
-    var already = S.custReturns.filter(function (r) {
-      return r.invoiceId === inv.id && r.status !== 'CANCELLED' && r.treatment === 'REFUND';
-    }).reduce(function (a, r) { return a + r.creditAmount; }, 0);
+    /* everything already handed back for this invoice: earlier REFUND returns AND "Pay back" vouchers */
+    var already = Invoices.refundedFor(inv.id);
     var room = Math.max(0, Invoices.paidFor(inv.id) - already);
     if (want <= room) return '';
     return 'A refund can only give back money the shop has paid on this invoice. ' + inv.invoiceNumber + ' has ' +

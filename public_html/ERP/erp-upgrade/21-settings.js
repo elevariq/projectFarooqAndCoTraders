@@ -454,6 +454,22 @@ function landedAlready(pid) {
 }
 Prices.landedAlready = landedAlready;
 
+/* The numbers behind landedAlready: on the product's latest purchase that carried charges, the supplier's price per bag and the
+   charges per bag on top of it (both paisa), or null. The stock bought that way is already costed at goods + charges. */
+function landedBreakdown(pid) {
+  if (!landedAlready(pid)) return null;
+  var best = null;
+  (S.purchaseItems || []).forEach(function (it) {
+    if (it.productId !== pid || !(it.landedUnitCost > it.goodsUnitCost && it.goodsUnitCost > 0)) return;
+    var pu = ERP.Purchases && ERP.Purchases.byId ? ERP.Purchases.byId(it.purchaseId) : null;
+    if (!pu || pu.status === 'CANCELLED') return;
+    if (!best || (pu.purchaseDate || '') >= best.date) best = { date: pu.purchaseDate || '', goods: it.goodsUnitCost, charge: it.landedUnitCost - it.goodsUnitCost };
+  });
+  return best;
+}
+Prices.landedBreakdown = landedBreakdown;
+var PRICE_LANDED = null;     /* landedBreakdown() of the product on show — read by the live "counted twice" warning */
+
 global.PANELS.prices = {
   t: 'Product prices', s: 'What it costs, what it sells for, and why it changed', cta: 'Save prices',
   f: function () {
@@ -467,7 +483,19 @@ global.PANELS.prices = {
        the rate it last sold at (Save keeps it) */
     var soldP = info.sell ? 0 : lastSoldP(pid);
     var shown = { buy: info.buy, extra: info.extra, sell: info.sell || soldP };
-    var calc = calcHtml(info.buy, info.extra, shown.sell, 1);
+    /* Charges typed on a purchase are already inside the stock's cost. With no purchase price saved, "Purchase price" must
+       be what the MILL charges (6,000), not the stock's landed average (6,200) — else the 200 shows up as part of the price
+       and gets typed again as an extra cost. */
+    var lb = PRICE_LANDED = landedBreakdown(pid);
+    var buySaved = (p.buyP !== undefined && p.buyP !== null ? p.buyP : (p.buy ? M.toP(p.buy) : 0)) > 0;
+    if (lb && !buySaved) shown.buy = lb.goods;
+    var calc = calcHtml(shown.buy, info.extra, shown.sell, 1);
+    var landedBanner = lb
+      ? '<div class="banner warn" id="pzLanded">' + I('alert') + '<div><p><b>These bags already carry ' + M.fmt(lb.charge) + ' per bag of transport / other charges</b> ' +
+        'that were typed on their purchase: supplier price ' + M.fmt(lb.goods) + ' + charges ' + M.fmt(lb.charge) + ' = <b>' + M.fmt(lb.goods + lb.charge) + '</b> per bag in stock. ' +
+        'An Extra cost typed below is added on TOP of that when a sale is costed, so the same transport would be counted twice. ' +
+        'Leave Extra cost at 0 unless it is a different cost.</p></div></div>'
+      : '';
     var money = function (k, label, hint) {
       var val = shown[k] !== undefined ? shown[k] : info[k];
       return '<label class="f"><span>' + label + '</span><input data-f="' + k +
@@ -478,6 +506,7 @@ global.PANELS.prices = {
         esc(p.en || '') + '</b></p><p class="pz-inline">Average cost <b>' + M.fmt(info.averageCost) + '</b>' +
         (info.lastSupplier ? ' · last bought from ' + esc(info.lastSupplier) + ' at ' + M.fmt(info.lastCost) : '') +
         ' · margin <b>' + info.margin + '%</b>, markup <b>' + info.markup + '%</b></p></div></div>' +
+      landedBanner +
       (pend.length ? '<div class="banner warn">' + I('clock') + '<div><p>' + pend.length +
         ' change is waiting for approval on this product.</p></div></div>' : '') +
       '<div class="f2">' + money('buy', 'Purchase price', 'What the mill or supplier charges per bag') +
@@ -489,10 +518,6 @@ global.PANELS.prices = {
       '<div class="pz-calc"><div id="pzCalcRows">' + calc.rows + '</div>' +
         '<label class="pz-qty"><span>Try it with</span><input data-pzqty inputmode="decimal" value="1"><span>bags</span></label>' +
         '<div class="pz-ct" id="pzCalcTot">' + calc.total + '</div></div>' +
-      (landedAlready(pid)
-        ? '<div class="banner warn" id="pzLanded">' + I('alert') + '<div><p>Transport or other charges for this product are already ' +
-          'added to its purchases on the Landed costs screen. The extra cost per bag is added on top of that when a sale’s ' +
-          'profit is worked out — use one or the other, or the same cost is counted twice.</p></div></div>' : '') +
       '<div class="f2">' + money('sell', 'Selling price', soldP
           ? 'The default rate on a new invoice. Filled in from your last sale (' + M.fmt(soldP) + ') — press Save to keep it.'
           : 'The default rate on a new invoice') +
@@ -981,7 +1006,10 @@ D.addEventListener('input', function (e) {
         var el = D.querySelector('#panel [data-f="' + k + '"]'), n = el ? num(el.value) : null;
         return n === null ? held[k] : M.toP(n);
       };
-      live.innerHTML = costLine(box('buy'), box('extra'), box('sell'));
+      live.innerHTML = costLine(box('buy'), box('extra'), box('sell')) +
+        (PRICE_LANDED && box('extra') > 0
+          ? '<br><b>Careful:</b> these bags already include ' + M.fmt(PRICE_LANDED.charge) + ' per bag of charges from their purchase — an extra cost of ' +
+            M.fmt(box('extra')) + ' here would be counted twice.' : '');
       var qtyEl = D.querySelector('#panel [data-pzqty]'), rowsEl = D.getElementById('pzCalcRows'),
           totEl = D.getElementById('pzCalcTot');
       if (rowsEl && totEl) {

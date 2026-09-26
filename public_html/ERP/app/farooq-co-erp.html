@@ -1035,7 +1035,9 @@ PAGES.dashboard=()=>{
     .reduce((a,r)=>a+(window.Money?Money.toR(r.creditAmount||0):(r.creditAmount||0)/100),0);
   const todaySales=Math.max(0,SALES.filter(s=>s.iso===TD).reduce((a,s)=>a+(s.amt||0),0)-todayReturned);
   const todayBuys=PURCHASES.filter(p=>p.iso===TD).reduce((a,p)=>a+(p.amt||0),0);
-  const recv=CUSTOMERS.reduce((a,c)=>a+(c.bal||0),0);
+  /* only what shops OWE: a shop holding credit is money we owe it, it must not lower what other shops owe us
+     (the tile's own caption counts the shops with a positive balance) */
+  const recv=CUSTOMERS.reduce((a,c)=>a+Math.max(0,c.bal||0),0);
   const pay=SUPPLIERS.reduce((a,s)=>a+(s.due||0),0);
   const low=PRODUCTS.filter(p=>levelOf(p)!=='ok').length;
   const regionRows=REGIONS.filter(r=>r.active).map(r=>{

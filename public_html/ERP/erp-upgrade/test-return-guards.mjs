@@ -215,6 +215,114 @@ const run=async()=>{
   check('R35 the older list filters follow the real calendar (Today / This month are not stuck on 6 Sep 2026)',
     win.PERIODS.today[1]===today && win.PERIODS.month[1]===today.slice(0,8)+'01' && win.PERIODS.year[1]===today.slice(0,4)+'-01-01',
     JSON.stringify(win.PERIODS.today)+JSON.stringify(win.PERIODS.month));
+  /* the same transport must not be counted twice: purchase charges AND the product's Extra cost (client, 2026-09-26) */
+  const PP=win.PRODUCTS.filter(p=>p.active!==false);
+  const dbl=PP[6], plain=PP[7];
+  await ERP.Prices.set(dbl.id,{buy:6000,extra:200,sell:6300},{});
+  const buyDbl=()=>({supplierId:mill,warehouseId:wh,purchaseDate:'2026-09-26',otherCharges:1000,items:[{productId:dbl.id,quantity:5,unitPrice:6000}]});
+  const d1=buyDbl();
+  const rej=await ERP.Purchases.save(d1).then(()=>null).catch(e=>e);
+  check('R36 charges on a purchase of a product that already has an Extra cost are stopped, with a clear sentence',
+    !!rej && rej.confirmable===true && /counts the same transport twice/.test(rej.validation[0]) && /1,000/.test(rej.validation[0]) && /200/.test(rej.validation[0]),
+    rej && JSON.stringify(rej.validation));
+  check('R37 nothing was saved by the refused attempt', ERP.S.purchases.filter(p=>p.otherCharges===M.toP(1000)).length===0);
+  d1.confirmCharges=true;
+  const okPur=await ERP.Purchases.save(d1).then(r=>r,()=>null);
+  check('R38 pressing Save again keeps it (a real extra charge is still possible on purpose)', !!okPur && okPur.otherCharges===M.toP(1000));
+  const clean=buyDbl(); clean.otherCharges=0;
+  check('R39 the same purchase with no charges saves at once', !!(await ERP.Purchases.save(clean).then(r=>r,()=>null)));
+
+  /* the price screen shows what is already counted, so it is not typed again */
+  await ERP.Purchases.save({supplierId:mill,warehouseId:wh,purchaseDate:'2026-09-26',otherCharges:1000,items:[{productId:plain.id,quantity:5,unitPrice:6000}]});
+  ERP.openPriceEditor(plain.id); await sleep(300);
+  const lbTxt=$('#pzLanded')?$('#pzLanded').textContent.replace(/\s+/g,' '):'';
+  check('R40 the price screen says the stock already carries 200 per bag: supplier price 6,000 + charges 200 = 6,200',
+    /already carry PKR 200 per bag/.test(lbTxt) && /supplier price PKR 6,000 \+ charges PKR 200 = PKR 6,200/.test(lbTxt) && /counted twice/.test(lbTxt), lbTxt);
+  check('R41 "Purchase price" opens on what the MILL charges (6,000), not the stock\'s 6,200 that already includes the charges',
+    $('#panel [data-f="buy"]').value==='6000', $('#panel [data-f="buy"]').value);
+  type($('#panel [data-f="extra"]'),'200');
+  check('R42 typing an extra cost there warns at once that it would be counted twice',
+    /Careful/.test($('#pzLive').textContent) && /counted twice/.test($('#pzLive').textContent), $('#pzLive').textContent);
+  click($('#panel [data-close]')); await sleep(120);
+  /* the client's round: sold 31,500, shop paid 3,200, ALL bags returned, the 3,200 handed back through "Pay a shop" */
+  const shopH=win.CUSTOMERS[12].id;
+  const invH=await ERP.Invoices.save({customerId:shopH,warehouseId:wh,invoiceDate:'2026-09-26',paidAmount:3200,items:[{productId:X.id,quantity:5,unitPrice:6300}]});
+  await ERP.Returns.fromCustomer({invoiceId:invH.id,warehouseId:wh,treatment:'ADJUST_OUTSTANDING_BALANCE',reason:'Damaged product',
+    items:[{invoiceItemId:ERP.Invoices.items(invH.id)[0].id,quantity:5,condition:'SELLABLE'}]});
+  check('R43 after a full return the shop has 3,200 of credit on its account (it paid, then returned everything)',
+    ERP.Ledger.customerBalance(shopH)===-M.toP(3200), M.fmt(ERP.Ledger.customerBalance(shopH)));
+  check('R44 …but the invoice itself shows a balance of 0, never −3,200',
+    ERP.Invoices.outstanding(ERP.Invoices.byId(invH.id))===0, String(ERP.Invoices.outstanding(ERP.Invoices.byId(invH.id))));
+  await ERP.Payments.refund({customerId:shopH,amount:3200,method:'Cash'});
+  check('R45 after handing the 3,200 back the shop\'s account is 0 and the invoice still shows 0',
+    ERP.Ledger.customerBalance(shopH)===0 && ERP.Invoices.outstanding(ERP.Invoices.byId(invH.id))===0);
+  check('R46 the Sales "Outstanding" total has no minus in it: no live invoice reports a negative balance',
+    ERP.Invoices.live().every(i=>ERP.Invoices.outstanding(i)>=0));
+  /* one shop's credit must not lower what the OTHER shops owe on the dashboard's Receivables tile */
+  const shopOwes=win.CUSTOMERS[13].id, shopCredit=win.CUSTOMERS[14].id;
+  await ERP.Invoices.save({customerId:shopOwes,warehouseId:wh,invoiceDate:'2026-09-26',paidAmount:0,items:[{productId:X.id,quantity:2,unitPrice:6300}]});
+  await ERP.Payments.receive({customerId:shopCredit,amount:5000,method:'Cash',allocations:[]});
+  win.go('dashboard'); await sleep(250);
+  const positive=win.CUSTOMERS.reduce((a,c)=>a+Math.max(0,c.bal||0),0);
+  const recvTile=Array.from(D.querySelectorAll('.kpi')).find(k=>/Receivables/.test(k.textContent));
+  check('R47 the Receivables tile adds up only what shops owe (a shop in credit is not subtracted)',
+    ERP.Ledger.customerBalance(shopCredit)<0 && !!recvTile && recvTile.querySelector('.v').textContent.replace(/[^\d]/g,'')===String(Math.round(positive)),
+    recvTile&&recvTile.textContent.replace(/\s+/g,' ')+' vs '+positive);
+  /* the "Pay back" button on the invoice: paid 3,200, everything returned → 3,200 is owed to the shop */
+  const shopP=win.CUSTOMERS[15].id;
+  const invP=await ERP.Invoices.save({customerId:shopP,warehouseId:wh,invoiceDate:'2026-09-26',paidAmount:3200,items:[{productId:X.id,quantity:5,unitPrice:6300}]});
+  check('R48 before any return nothing is owed to the shop, so there is no Pay back button',
+    ERP.Invoices.refundDue(ERP.Invoices.byId(invP.id))===0);
+  await ERP.Returns.fromCustomer({invoiceId:invP.id,warehouseId:wh,treatment:'ADJUST_OUTSTANDING_BALANCE',reason:'Damaged product',
+    items:[{invoiceItemId:ERP.Invoices.items(invP.id)[0].id,quantity:5,condition:'SELLABLE'}]});
+  check('R49 after a full return the invoice says 3,200 is owed to the shop', ERP.Invoices.refundDue(ERP.Invoices.byId(invP.id))===M.toP(3200));
+  win.go('invoices'); await sleep(250);
+  const pbBtn=()=>D.querySelector('[data-fcinv="payback"][data-id="'+invP.id+'"]');
+  check('R50 the invoice list shows a "Pay back 3,200" button on that invoice', !!pbBtn() && /Pay back/.test(pbBtn().textContent) && /3,200/.test(pbBtn().textContent), pbBtn()&&pbBtn().textContent);
+  click(pbBtn()); await sleep(250);
+  check('R51 its screen opens with the amount already filled in: 3,200', $('#panel [data-f="amt"]') && $('#panel [data-f="amt"]').value==='3200',
+    $('#panel [data-f="amt"]') && $('#panel [data-f="amt"]').value);
+  type($('#panel [data-f="amt"]'),'5000'); click($('#panel [data-save]')); await sleep(250);
+  check('R52 more than is owed is refused inside the screen ("at most 3,200")', /at most PKR 3,200/.test($('#panelErr').textContent), $('#panelErr').textContent);
+  const outBefore=ERP.Payments.refunds().length;
+  type($('#panel [data-f="amt"]'),'1200'); click($('#panel [data-save]')); await sleep(600);
+  check('R53 paying part of it works: 1,200 goes out, linked to the invoice, and 2,000 is still owed',
+    ERP.Payments.refunds().length===outBefore+1 && ERP.Invoices.refundedFor(invP.id)===M.toP(1200) &&
+    ERP.Invoices.refundDue(ERP.Invoices.byId(invP.id))===M.toP(2000) && ERP.Ledger.customerBalance(shopP)===-M.toP(2000),
+    M.fmt(ERP.Invoices.refundDue(ERP.Invoices.byId(invP.id)))+' / '+M.fmt(ERP.Ledger.customerBalance(shopP)));
+  win.go('invoices'); await sleep(250);
+  check('R54 the button now reads "Pay back 2,000"', !!pbBtn() && /2,000/.test(pbBtn().textContent), pbBtn()&&pbBtn().textContent);
+  click(pbBtn()); await sleep(250);
+  click($('#panel [data-save]')); await sleep(600);
+  check('R55 paying the rest (the amount opened on 2,000): the shop\'s account is 0 and nothing is owed on the invoice',
+    ERP.Invoices.refundDue(ERP.Invoices.byId(invP.id))===0 && ERP.Ledger.customerBalance(shopP)===0 && ERP.Invoices.outstanding(ERP.Invoices.byId(invP.id))===0);
+  win.go('invoices'); await sleep(250);
+  check('R56 the button is gone once everything is paid back', !pbBtn());
+  const tooMuch=await ERP.Payments.refund({customerId:shopP,invoiceId:invP.id,amount:1}).then(()=>'paid').catch(e=>e.validation[0]);
+  check('R57 the service refuses too, even if the screen is bypassed', /Nothing is owed/.test(tooMuch), tooMuch);
+  /* an older "Pay a shop" voucher (not linked to the invoice) must not be paid a second time through the button */
+  const shopQ=win.CUSTOMERS[16].id;
+  const invQ=await ERP.Invoices.save({customerId:shopQ,warehouseId:wh,invoiceDate:'2026-09-26',paidAmount:3200,items:[{productId:X.id,quantity:5,unitPrice:6300}]});
+  await ERP.Returns.fromCustomer({invoiceId:invQ.id,warehouseId:wh,treatment:'ADJUST_OUTSTANDING_BALANCE',reason:'Damaged product',
+    items:[{invoiceItemId:ERP.Invoices.items(invQ.id)[0].id,quantity:5,condition:'SELLABLE'}]});
+  await ERP.Payments.refund({customerId:shopQ,amount:3200,method:'Cash'});
+  check('R58 after 3,200 was already handed back through Payments → Pay a shop, the invoice offers nothing more to pay back',
+    ERP.Invoices.refundDue(ERP.Invoices.byId(invQ.id))===0 && ERP.Ledger.customerBalance(shopQ)===0);
+  /* cash handed back in two different ways for one invoice never adds up to more than the shop paid */
+  const shopS=win.CUSTOMERS[17].id;
+  const invS=await ERP.Invoices.save({customerId:shopS,warehouseId:wh,invoiceDate:'2026-09-26',paidAmount:20000,items:[{productId:X.id,quantity:5,unitPrice:6300}]});
+  const sItem=ERP.Invoices.items(invS.id)[0];
+  await ERP.Returns.fromCustomer({invoiceId:invS.id,warehouseId:wh,treatment:'ADJUST_OUTSTANDING_BALANCE',reason:'Damaged product',
+    items:[{invoiceItemId:sItem.id,quantity:3,condition:'SELLABLE'}]});
+  check('R59 paid 20,000, 3 of 5 bags returned (18,900): the invoice is now worth 12,600, so 7,400 is owed back',
+    ERP.Invoices.refundDue(ERP.Invoices.byId(invS.id))===M.toP(7400), M.fmt(ERP.Invoices.refundDue(ERP.Invoices.byId(invS.id))));
+  await ERP.Payments.refund({customerId:shopS,invoiceId:invS.id,amount:7400,method:'Cash'});
+  const tooBig=await ERP.Returns.fromCustomer({invoiceId:invS.id,warehouseId:wh,treatment:'REFUND',reason:'Damaged product',
+    items:[{invoiceItemId:sItem.id,quantity:2,condition:'SELLABLE'}]}).then(()=>'posted').catch(e=>e.validation[0]);
+  check('R60 returning the last 2 bags with a cash REFUND (12,600) is allowed: 7,400 paid back + 12,600 = the 20,000 the shop paid',
+    tooBig==='posted', tooBig);
+  check('R61 in total exactly the 20,000 paid went back out and the shop\'s account is 0',
+    ERP.Invoices.refundedFor(invS.id)===M.toP(20000) && ERP.Ledger.customerBalance(shopS)===0, M.fmt(ERP.Invoices.refundedFor(invS.id))+' / '+M.fmt(ERP.Ledger.customerBalance(shopS)));
   check('R10 nothing threw', errors.length===0, errors.slice(0,2).join(' | '));
   win.close();
   console.log('\n'+out.join('\n')+'\n\n'+pass+' passed, '+fail+' failed\n');
