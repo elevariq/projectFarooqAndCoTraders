@@ -65,3 +65,8 @@ Fixed: Add stock offers the saved purchase price (else empty), never the selling
 
 **Not changed:** old invoices keep their cost snapshot (INV-2026-000001/2 on the server still show 1,500). The client's "Add stock" of 5 bags at cost 6,300 (RCV-2026-000002) is a
 data-entry slip (that is the selling price) — it is test data.
+
+**"I am unable to edit Charges on the purchase / Extra cost; Save says Nothing to save" (client, 2026-09-26):** the two lines in the sum under the boxes (`#pzCalcRows`) look like fields but are a
+read-only written-out sum — only the **Extra cost per bag** box above is a box; the "Charges on the purchase" figure is typed on the PURCHASE (Other charges ÷ bags). Now each line has a **Change** button
+(`data-pzedit`): Extra cost focuses its box; Charges closes the screen and opens `ERP.actions.editPurchase` for the purchase the figure came from (`landedBreakdown().purchaseId`) — refused with a message while boxes
+hold typed-but-unsaved figures (compared with `defaultValue`, so pre-filled boxes don't count). The "Nothing to save" text now says which boxes to type in and that the charges line is not a box. Tests P8–P12 in `test-purchase-cost.mjs`. Module 21 only → `deploy-erp.sh`.

@@ -129,6 +129,28 @@ const run=async()=>{
     !D.getElementById(buyI.getAttribute('data-fcinfo')).classList.contains('on') && (click(buyI), D.getElementById(buyI.getAttribute('data-fcinfo')).classList.contains('on')));
   check('P7 a warning that matters stays visible without pressing anything (the "counted twice" banner is not behind an i)',
     !!$('#pzLanded') && !$('#pzLanded').closest('.fc-info'));
+  /* the two summary lines look like boxes; each now has a Change button that leads to where the figure really is edited (client: "unable to edit") */
+  const chg=Array.from(D.querySelectorAll('#pzCalcRows [data-pzedit]'));
+  check('P8 the "Charges on the purchase" and "Extra cost" lines each carry a Change button',
+    chg.length===2 && chg.map(b=>b.dataset.pzedit).join()==='charges,extra', chg.map(b=>b.dataset.pzedit).join());
+  click(chg.find(b=>b.dataset.pzedit==='extra'));
+  check('P9 Change beside Extra cost puts the cursor in the Extra cost box', D.activeElement===$('#panel [data-f="extra"]'));
+  check('P10 the Change button survives typing (the lines are redrawn on every keystroke)',
+    (type($('#panel [data-f="extra"]'),'50'), D.querySelectorAll('#pzCalcRows [data-pzedit]').length===2));
+  let openedPu=null; const realEdit0=win.ERP.actions.editPurchase; win.ERP.actions.editPurchase=id=>{openedPu=id;};
+  click(D.querySelector('#pzCalcRows [data-pzedit="charges"]'));
+  win.ERP.actions.editPurchase=realEdit0;
+  check('P10b with a typed but unsaved price (Extra 50) the charges Change does NOT close the screen or lose it',
+    openedPu===null && !!D.querySelector('#panel.on [data-f="extra"]') && $('#panel [data-f="extra"]').value==='50', String(openedPu));
+  type($('#panel [data-f="extra"]'),'0'); type($('#panel [data-f="sell"]'),'');
+  const realEdit=win.ERP.actions.editPurchase; win.ERP.actions.editPurchase=id=>{openedPu=id;};
+  click(D.querySelector('#pzCalcRows [data-pzedit="charges"]'));
+  win.ERP.actions.editPurchase=realEdit;
+  check('P11 Change beside the charges opens that purchase for editing', !!openedPu && !!ERP.Purchases.byId(openedPu) && ERP.Purchases.byId(openedPu).otherCharges===M.toP(200), String(openedPu));
+  ERP.openPriceEditor(A.id); await sleep(300);
+  const nothing=win.PANELS.prices.save({});
+  check('P12 pressing Save with no box changed says what to do and that the charges line is not a box (names the purchase)',
+    typeof nothing==='string' && /Type a new figure in a box/.test(nothing) && /not a box/.test(nothing) && /PUR-/.test(nothing), String(nothing));
   check('X nothing threw', errors.length===0, errors.slice(0,2).join(' | '));
   win.close();
   console.log('\n'+out.join('\n')+'\n\n'+pass+' passed, '+fail+' failed\n');

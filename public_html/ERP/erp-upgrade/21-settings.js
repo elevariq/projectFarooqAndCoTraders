@@ -413,13 +413,20 @@ function costLine(buyP, extraP, sellP, chargeP) {
 function calcHtml(buyP, extraP, sellP, qty, chargeP) {
   if (buyP < 0 || extraP < 0 || sellP < 0) return { rows: '', total: '' };
   var f = figures(buyP, extraP, sellP, chargeP);
-  var row = function (label, p, strong) {
-    return '<div class="pz-cr' + (strong ? ' pz-cs' : '') + '"><span>' + label + '</span><b>' + M.fmt(p) + '</b></div>';
+  /* These lines are a written-out sum, not boxes — a "Change" button says where each figure is really edited */
+  var row = function (label, p, strong, act) {
+    return '<div class="pz-cr' + (strong ? ' pz-cs' : '') + '"><span>' + label + '</span><b>' + M.fmt(p) + '</b>' +
+      (act ? '<button type="button" class="pz-chg" data-pzedit="' + act.k + '"' + (act.id ? ' data-id="' + esc(act.id) + '"' : '') +
+        ' title="' + esc(act.tip) + '">Change</button>' : '') + '</div>';
   };
+  var lb = PRICE_LANDED;
   var n = qty > 0 && isFinite(qty) ? qty : 1;
   return {
-    rows: row('Purchase price', buyP) + (chargeP ? row('+ Charges on the purchase', chargeP) : '') +
-      row('+ Extra cost', extraP) + row('= Total cost per bag', f.cost, true) +
+    rows: row('Purchase price', buyP) +
+      (chargeP ? row('+ Charges on the purchase', chargeP, false,
+        lb && lb.purchaseId ? { k: 'charges', id: lb.purchaseId, tip: 'These charges were typed on purchase ' + (lb.number || '') + ' — open it to change them' } : null) : '') +
+      row('+ Extra cost', extraP, false, { k: 'extra', tip: 'Type the new figure in the Extra cost per bag box' }) +
+      row('= Total cost per bag', f.cost, true) +
       row('Selling price', sellP) + row('Profit per bag', f.profit, true),
     total: '<b>' + n + ' bag' + (n === 1 ? '' : 's') + '</b>: sale ' + n + ' × ' + M.fmt(sellP) + ' = <b>' + M.fmt(Math.round(sellP * n)) +
       '</b> · cost ' + n + ' × ' + M.fmt(f.cost) + ' = ' + M.fmt(Math.round(f.cost * n)) +
@@ -465,7 +472,8 @@ function landedBreakdown(pid) {
     if (it.productId !== pid || !(it.landedUnitCost > it.goodsUnitCost && it.goodsUnitCost > 0)) return;
     var pu = ERP.Purchases && ERP.Purchases.byId ? ERP.Purchases.byId(it.purchaseId) : null;
     if (!pu || pu.status === 'CANCELLED') return;
-    if (!best || (pu.purchaseDate || '') >= best.date) best = { date: pu.purchaseDate || '', goods: it.goodsUnitCost, charge: it.landedUnitCost - it.goodsUnitCost };
+    if (!best || (pu.purchaseDate || '') >= best.date) best = { date: pu.purchaseDate || '', goods: it.goodsUnitCost, charge: it.landedUnitCost - it.goodsUnitCost,
+      purchaseId: pu.id, number: pu.purchaseNumber || '' };
   });
   return best;
 }
@@ -563,7 +571,9 @@ global.PANELS.prices = {
     /* Everything that can be refused is refused HERE, inside the panel: once this function returns without an
        error the panel closes and says "Saving…", so a refusal found afterwards looked like a save that worked. */
     if (!Prices.diff(pid, pre.values).length) {
-      return 'Nothing to save — these are the prices already saved. Change a figure first.';
+      var lbn = landedBreakdown(pid);
+      return 'Nothing to save — every box still shows the price already saved. Type a new figure in a box (Purchase price, Extra cost per bag, Selling price …) and press Save.' +
+        (lbn ? ' The “Charges on the purchase” line is not a box: it comes from purchase ' + (lbn.number || '') + ' — press Change beside it to edit that purchase.' : '');
     }
     /* the below-cost warning is about the three cost/price boxes — editing only the alert level or the
        discount of a product that already sells under cost must not be stopped by it */
@@ -707,6 +717,11 @@ var CSS = `
 .pz-calc{border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 12px;margin:0 0 12px;font-size:13px}
 .pz-cr{display:flex;justify-content:space-between;gap:10px;padding:2px 0;font-variant-numeric:tabular-nums}
 .pz-cs{border-top:1px solid var(--line-2);margin-top:2px;padding-top:4px;font-weight:600}
+.pz-cr .pz-chg{margin-left:10px;padding:1px 9px;border:1px solid var(--line);border-radius:99px;background:var(--surface);
+  color:var(--violet-ink);font-size:12px;cursor:pointer}
+.pz-cr .pz-chg:hover{border-color:var(--violet);background:var(--violet-50)}
+.pz-cr{align-items:baseline}
+.pz-cr span{flex:1}
 .pz-qty{display:flex;align-items:center;gap:8px;margin:8px 0 4px;color:var(--muted)}
 .pz-qty input{width:72px;padding:5px 8px;border:1.5px solid var(--line);border-radius:var(--r-sm)}
 .pz-ct{line-height:1.5;font-variant-numeric:tabular-nums}
@@ -1025,6 +1040,28 @@ D.addEventListener('click', function (e) {
       if (why === null) return;
       return Prices.reject(rejId, why).then(function () { global.paint(); say('Rejected.'); });
     });
+    return;
+  }
+  if ((t = e.target.closest('[data-pzedit]'))) {
+    e.preventDefault(); e.stopPropagation();
+    if (t.dataset.pzedit === 'extra') {
+      var xb = D.querySelector('#panel [data-f="extra"]');
+      if (xb) { xb.focus(); try { xb.select(); } catch (err) {} }
+      return;
+    }
+    /* charges belong to the purchase they were typed on: close this screen and open that purchase for editing */
+    var typed = {};
+    D.querySelectorAll('#panel [data-f]').forEach(function (el) {
+      if (el.dataset.f !== 'reason' && el.value !== '' && el.value !== el.defaultValue) typed[el.dataset.f] = el.value;   /* only what the person changed, not what the screen pre-filled */
+    });
+    var pre = PRICE_FOR ? Prices.validate(PRICE_FOR, typed) : { errors: [], values: {} };
+    if (!pre.errors.length && PRICE_FOR && Prices.diff(PRICE_FOR, pre.values).length) {
+      say('You have typed prices here that are not saved yet — press Save first, then change the purchase (closing this screen would lose them).');
+      return;
+    }
+    var pcl = D.querySelector('#panel [data-close]');
+    if (pcl) pcl.click();
+    if (ERP.actions && ERP.actions.editPurchase) ERP.actions.editPurchase(t.dataset.id);
     return;
   }
   if ((t = e.target.closest('[data-editprices]'))) {
