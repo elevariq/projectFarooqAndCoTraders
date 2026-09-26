@@ -247,6 +247,11 @@ Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's 
     typed on a product with none covers stock already held. Purchase/receipt lines keep `extraUnitP` so edits don't re-price. Trap: any NEW code that adds bags must pass through `Inventory.apply`
     (or copy the blend, as `39-warehouse-server.js` does). App-only deploy, no schema change; not yet seen live.
 
+14. **Product prices screen** (2026-09-26, client saw profit 1500 not 500 — the extra cost was never saved; `docs/PRICE_SCREEN.md`): reason is now optional; the screen opens with saved values
+    (+ last sold rate), shows purchase + extra = cost / profit and a "try N bags" line. **Trap:** a base-app `panel.save()` that returns an object CLOSES the panel and says "Saving…" — refuse every
+    bad input by returning a STRING there, never later in a promise (it looked like a finished save). **Pending user:** the client's 26 Sep test entries (INV-000001/2, PUR-000001, RCV-000001/2) were
+    to be wiped again; the DB delete was blocked by the permission layer, nothing deleted (pre-wipe copy: `D:\projectFarooqAndCoTraders-backups\test-entries-before-wipe-20260926.json`).
+
 ## Not yet seen by a person on the live site / a physical phone
 
 The whole recent UI batch: Payments screen + Pay-a-shop/Pay-supplier panels, Payroll, Milling / Stock at mills / "Lying at mills" card, Edit purchase (no real

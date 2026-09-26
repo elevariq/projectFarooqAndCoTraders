@@ -107,6 +107,21 @@ var Prices = ERP.Prices = {
     };
   },
 
+  /* What a set of already-validated figures would change on the product (empty = nothing to save).
+     Shared by set() and the panel, which must know before it closes whether a Save will store anything. */
+  diff: function (productId, values) {
+    var current = Prices.of(productId) || {};
+    var changes = [];
+    Object.keys(values || {}).forEach(function (k) {
+      var f = FIELD_BY_KEY[k];
+      if (!f) return;
+      var oldVal = f.money ? current[k] : (current[k] || 0);
+      var newVal = f.money ? M.toP(values[k]) : values[k];
+      if (oldVal !== newVal) changes.push({ field: k, label: f.label, money: f.money, from: oldVal, to: newVal });
+    });
+    return changes;
+  },
+
   /* Validate a proposed set of prices without saving them. */
   validate: function (productId, values) {
     var errs = [];
@@ -155,18 +170,9 @@ var Prices = ERP.Prices = {
     if (!p) return Promise.reject({ validation: ['Product not found.'] });
     var v = Prices.validate(productId, values);
     if (v.errors.length) return Promise.reject({ validation: v.errors });
-    if (!opts.reason && ERP.Settings.get().priceReasonRequired !== false) {
-      return Promise.reject({ validation: ['Give a reason for the change — it is kept with the price.'] });
-    }
-
-    var current = Prices.of(productId);
-    var changes = [];
-    Object.keys(v.values).forEach(function (k) {
-      var f = FIELD_BY_KEY[k];
-      var oldVal = f.money ? current[k] : (current[k] || 0);
-      var newVal = f.money ? M.toP(v.values[k]) : v.values[k];
-      if (oldVal !== newVal) changes.push({ field: k, label: f.label, money: f.money, from: oldVal, to: newVal });
-    });
+    /* A reason is welcome (it is kept in the history) but never required: a save that silently
+       needed one looked like it had worked while nothing was stored. */
+    var changes = Prices.diff(productId, v.values);
     if (!changes.length) return Promise.resolve({ changes: [], unchanged: true });
 
     /* someone without the authority raises a request instead */
@@ -353,7 +359,7 @@ var origDefaults = ERP.Settings.defaults;
 ERP.Settings.defaults = function () {
   return Object.assign(origDefaults.call(ERP.Settings), {
     /* pricing */
-    priceApproval: false, priceReasonRequired: true, lowMarginWarnPct: 8,
+    priceApproval: false, lowMarginWarnPct: 8,
     allowSellBelowCost: true, showProfitToSales: false,
     /* inventory */
     lowStockAlerts: true, defaultReorderLevel: 50,
@@ -401,6 +407,38 @@ function costLine(buyP, extraP, sellP) {
              '%</b>, markup <b>' + f.markup + '%</b>' : '');
 }
 
+/* The sum written out the way the owner does it on paper: purchase + extra = cost, then the sale and what is left.
+   `qty` (bags) only scales the totals underneath. Numbers only, like costLine. Returns the per-bag lines and the totals line. */
+function calcHtml(buyP, extraP, sellP, qty) {
+  if (buyP < 0 || extraP < 0 || sellP < 0) return { rows: '', total: '' };
+  var f = figures(buyP, extraP, sellP);
+  var row = function (label, p, strong) {
+    return '<div class="pz-cr' + (strong ? ' pz-cs' : '') + '"><span>' + label + '</span><b>' + M.fmt(p) + '</b></div>';
+  };
+  var n = qty > 0 && isFinite(qty) ? qty : 1;
+  return {
+    rows: row('Purchase price', buyP) + row('+ Extra cost', extraP) + row('= Total cost per bag', f.cost, true) +
+      row('Selling price', sellP) + row('Profit per bag', f.profit, true),
+    total: '<b>' + n + ' bag' + (n === 1 ? '' : 's') + '</b>: sale ' + n + ' × ' + M.fmt(sellP) + ' = <b>' + M.fmt(Math.round(sellP * n)) +
+      '</b> · cost ' + n + ' × ' + M.fmt(f.cost) + ' = ' + M.fmt(Math.round(f.cost * n)) +
+      ' · <b>actual profit ' + M.fmt(Math.round(f.profit * n)) + '</b>'
+  };
+}
+
+/* The rate this product last sold at on a live invoice — offered in the Selling price box until a price is saved,
+   so the screen never opens blank on a product that has already been sold. */
+function lastSoldP(pid) {
+  var best = null;
+  (S.invoiceItems || []).forEach(function (it) {
+    if (it.productId !== pid || !(it.unitPrice > 0)) return;
+    var inv = ERP.Invoices && ERP.Invoices.byId ? ERP.Invoices.byId(it.invoiceId) : null;
+    if (!inv || inv.status === 'CANCELLED' || inv.status === 'DRAFT') return;
+    var stamp = (inv.invoiceDate || '') + '|' + (inv.createdAt || '');
+    if (!best || stamp > best.stamp) best = { stamp: stamp, p: it.unitPrice };
+  });
+  return best ? best.p : 0;
+}
+
 /* True when transport/labour for this product was already put on a purchase through the Landed costs screen (or
    the purchase's own freight boxes): under the LANDED basis that is inside the stock cost, and the Extra cost per
    bag is added on top of the stock cost when a sale is costed (Inventory.saleCostOf) — so the same transport would
@@ -425,9 +463,15 @@ global.PANELS.prices = {
     var p = info.product;
     var hist = Prices.history(pid).slice(0, 6);
     var pend = Prices.pending(pid);
+    /* what the boxes open with: what is saved; and, for the selling price of a product that has none saved yet,
+       the rate it last sold at (Save keeps it) */
+    var soldP = info.sell ? 0 : lastSoldP(pid);
+    var shown = { buy: info.buy, extra: info.extra, sell: info.sell || soldP };
+    var calc = calcHtml(info.buy, info.extra, shown.sell, 1);
     var money = function (k, label, hint) {
+      var val = shown[k] !== undefined ? shown[k] : info[k];
       return '<label class="f"><span>' + label + '</span><input data-f="' + k +
-        '" inputmode="decimal" value="' + esc(info[k] ? M.toR(info[k]) : '') + '">' +
+        '" inputmode="decimal" value="' + esc(val ? M.toR(val) : '') + '">' +
         (hint ? '<span class="hint">' + hint + '</span>' : '') + '</label>';
     };
     return '<div class="banner info">' + I('tag') + '<div><p><b>' + u(p.ur || '') + ' ' +
@@ -441,12 +485,17 @@ global.PANELS.prices = {
           'Transport, labour, loading and other charges we pay ourselves — not on the supplier’s bill. ' +
           'Added to the cost of the bags that come into stock from now on (a purchase, Add stock). Bags already in stock keep the extra they came in with. Type 0 if none.') +
       '</div>' +
-      '<div class="pz-live" id="pzLive" aria-live="polite">' + costLine(info.buy, info.extra, info.sell) + '</div>' +
+      '<div class="pz-live" id="pzLive" aria-live="polite">' + costLine(info.buy, info.extra, shown.sell) + '</div>' +
+      '<div class="pz-calc"><div id="pzCalcRows">' + calc.rows + '</div>' +
+        '<label class="pz-qty"><span>Try it with</span><input data-pzqty inputmode="decimal" value="1"><span>bags</span></label>' +
+        '<div class="pz-ct" id="pzCalcTot">' + calc.total + '</div></div>' +
       (landedAlready(pid)
         ? '<div class="banner warn" id="pzLanded">' + I('alert') + '<div><p>Transport or other charges for this product are already ' +
           'added to its purchases on the Landed costs screen. The extra cost per bag is added on top of that when a sale’s ' +
           'profit is worked out — use one or the other, or the same cost is counted twice.</p></div></div>' : '') +
-      '<div class="f2">' + money('sell', 'Selling price', 'The default rate on a new invoice') +
+      '<div class="f2">' + money('sell', 'Selling price', soldP
+          ? 'The default rate on a new invoice. Filled in from your last sale (' + M.fmt(soldP) + ') — press Save to keep it.'
+          : 'The default rate on a new invoice') +
         money('min', 'Minimum selling price', 'A warning appears below this') + '</div>' +
       '<div class="f2">' + money('wholesale', 'Wholesale price') + money('retail', 'Retail price') + '</div>' +
       '<div class="f2">' +
@@ -457,7 +506,7 @@ global.PANELS.prices = {
       '<div class="f2">' +
         '<label class="f"><span>Tax %</span><input data-f="taxPct" inputmode="decimal" value="' +
           esc(info.taxPct || '') + '"></label><div></div></div>' +
-      '<label class="f"><span>Reason for the change</span><input data-f="reason" ' +
+      '<label class="f"><span>Reason for the change (optional)</span><input data-f="reason" ' +
         'placeholder="e.g. Market price increase"></label>' +
       (Prices.approvalRequired()
         ? '<div class="banner warn">' + I('lock') + '<div><p>Price changes need the owner’s approval. ' +
@@ -482,6 +531,11 @@ global.PANELS.prices = {
       .forEach(function (k) { if (v[k] !== undefined && v[k] !== '') values[k] = v[k]; });
     var pre = Prices.validate(pid, values);
     if (pre.errors.length) return pre.errors[0];
+    /* Everything that can be refused is refused HERE, inside the panel: once this function returns without an
+       error the panel closes and says "Saving…", so a refusal found afterwards looked like a save that worked. */
+    if (!Prices.diff(pid, pre.values).length) {
+      return 'Nothing to save — these are the prices already saved. Change a figure first.';
+    }
     /* the below-cost warning is about the three cost/price boxes — editing only the alert level or the
        discount of a product that already sells under cost must not be stopped by it */
     var held = Prices.of(pid) || {};
@@ -503,7 +557,7 @@ global.PANELS.prices = {
       say(r.changes.length + ' price' + (r.changes.length === 1 ? '' : 's') + ' updated. ' +
           'The old figures are kept in the history.');
     }).catch(function (e) {
-      say(e && e.validation ? e.validation[0] : 'The prices could not be saved.');
+      say(e && e.validation ? 'NOT saved — ' + e.validation[0] : 'NOT saved — the prices could not be stored. Reload and try again.');
     });
     return { msg: 'Saving prices…' };
   }
@@ -587,6 +641,12 @@ var CSS = `
 .banner p.pz-inline b{display:inline;margin:0}
 .pz-live{border:1px solid var(--line);border-radius:var(--r-sm);background:var(--surface-2);
   padding:9px 12px;margin:0 0 12px;font-size:13px;line-height:1.5}
+.pz-calc{border:1px solid var(--line);border-radius:var(--r-sm);padding:9px 12px;margin:0 0 12px;font-size:13px}
+.pz-cr{display:flex;justify-content:space-between;gap:10px;padding:2px 0;font-variant-numeric:tabular-nums}
+.pz-cs{border-top:1px solid var(--line-2);margin-top:2px;padding-top:4px;font-weight:600}
+.pz-qty{display:flex;align-items:center;gap:8px;margin:8px 0 4px;color:var(--muted)}
+.pz-qty input{width:72px;padding:5px 8px;border:1.5px solid var(--line);border-radius:var(--r-sm)}
+.pz-ct{line-height:1.5;font-variant-numeric:tabular-nums}
 .pz-hist{border:1px solid var(--line);border-radius:var(--r-sm);overflow:hidden}
 .pz-h{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:7px 10px;border-bottom:1px solid var(--line-2)}
 .pz-h:last-child{border-bottom:none}
@@ -632,8 +692,6 @@ function pricingSection() {
   return '<div class="card"><div class="card-h"><h3>Pricing rules</h3></div><div class="card-b">' +
       toggle('priceApproval', 'Price changes need approval',
         'Staff raise a change; the owner or a manager approves it before it takes effect') +
-      toggle('priceReasonRequired', 'A reason is required with every price change',
-        'The reason is kept in the price history') +
       /* "Allow selling below cost" and "Show profit to sales staff" used to sit
          here as toggles writing allowSellBelowCost / showProfitToSales — keys
          nothing ever read. The rules are actually enforced from
@@ -915,7 +973,8 @@ D.addEventListener('input', function (e) {
   if (!e.target.dataset) return;
   /* the price panel's "cost to us" line follows the three boxes as they are typed in;
      a box left blank counts as what the product already holds, exactly as Save treats it */
-  if (e.target.dataset.f === 'buy' || e.target.dataset.f === 'extra' || e.target.dataset.f === 'sell') {
+  if (e.target.dataset.f === 'buy' || e.target.dataset.f === 'extra' || e.target.dataset.f === 'sell' ||
+      e.target.dataset.pzqty !== undefined) {
     var live = D.getElementById('pzLive'), held = live && PRICE_HELD;
     if (held) {
       var box = function (k) {
@@ -923,6 +982,12 @@ D.addEventListener('input', function (e) {
         return n === null ? held[k] : M.toP(n);
       };
       live.innerHTML = costLine(box('buy'), box('extra'), box('sell'));
+      var qtyEl = D.querySelector('#panel [data-pzqty]'), rowsEl = D.getElementById('pzCalcRows'),
+          totEl = D.getElementById('pzCalcTot');
+      if (rowsEl && totEl) {
+        var c = calcHtml(box('buy'), box('extra'), box('sell'), qtyEl ? num(qtyEl.value) : 1);
+        rowsEl.innerHTML = c.rows; totEl.innerHTML = c.total;
+      }
     }
   }
   if (e.target.dataset.stq !== undefined) {

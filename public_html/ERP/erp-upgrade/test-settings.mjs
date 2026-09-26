@@ -52,9 +52,9 @@ const run=async()=>{
     sellChange.oldValue===M.toP(2400) && sellChange.newValue===M.toP(2600) &&
     sellChange.reason==='Market price increase' && !!sellChange.changedBy && !!sellChange.changedAt,
     JSON.stringify({o:M.toR(sellChange.oldValue),n:M.toR(sellChange.newValue),by:sellChange.changedBy}));
-  check('S6 a change with no reason is refused when a reason is required',
-    await ERP.Prices.set(rice.id,{sell:2700},{}).then(()=>false)
-      .catch(e=>e.validation.some(m=>/reason/i.test(m))));
+  check('S6 a change with no reason is accepted — a reason is optional (2026-09-26: a required one made a Save look done when it was not)',
+    await ERP.Prices.set(rice.id,{sell:2700},{}).then(r=>r.applied===true).catch(()=>false));
+  await ERP.Prices.set(rice.id,{sell:2600},{reason:'back to the test price'});
   check('S7 nonsense prices are refused',
     await ERP.Prices.set(rice.id,{sell:-5},{reason:'x'}).then(()=>false)
       .catch(e=>e.validation.some(m=>/negative/i.test(m))));
