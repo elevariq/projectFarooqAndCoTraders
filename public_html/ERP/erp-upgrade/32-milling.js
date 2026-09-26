@@ -395,10 +395,13 @@
                 quantity: l.quantity, bagKg: l.bagKg, weightKg: l.weightKg,
                 rateBasis: l.rateBasis, unitRate: l.unitRate, lineTotal: l.lineTotal, unitCostP: costPerBag
               };
+              /* the product's extra cost per bag of the day, kept so cancelling the job takes exactly that back
+                 out of the stock's average (Inventory.rowExtraP) — set BEFORE the put */
+              if (mode === 'DELIVERED') r.extraUnitP = Inventory.rawExtraOf(l.productId);
               api.put('millingJobItems', r); (S.millingJobItems || (S.millingJobItems = [])).push(r);
               /* AT_MILL: the goods are still lying at the mill — no warehouse stock until an arrival says so */
               if (mode === 'DELIVERED') Inventory.apply(api, {
-                productId: l.productId, warehouseId: rec.warehouseId, qtyDelta: l.quantity,
+                productId: l.productId, warehouseId: rec.warehouseId, qtyDelta: l.quantity, extraCostP: r.extraUnitP,
                 kind: 'MILL_RECEIPT_IN', ref: number, refType: 'MILLING',
                 note: 'Received from mill — ' + rec.millSnapshot, date: rec.jobDate, unitCostP: costPerBag
               });
@@ -441,6 +444,7 @@
           } else {
             Inventory.apply(api, {
               productId: it.productId, warehouseId: job.warehouseId, qtyDelta: -it.quantity,
+              extraCostP: typeof it.extraUnitP === 'number' ? it.extraUnitP : undefined,
               kind: 'MILL_RECEIPT_REVERSAL_OUT', ref: job.jobNumber, refType: 'MILLING_CANCEL',
               note: 'Milling job cancelled — ' + (reason || 'no reason given'), date: today()
             });
@@ -511,12 +515,13 @@
             };
             clean.forEach(function (l) {
               var cost = Milling.atMillBalance(draft.millId, l.productId).costPerBagP;
+              var extraP = Inventory.rawExtraOf(l.productId);   /* kept on the line so cancelling the arrival takes it back out */
               rec.lines.push({ id: FDB.uid('mal'), productId: l.productId, productSnapshot: l.product.en || l.product.ur || '',
                 productUrSnapshot: l.product.ur || '', packageSnapshot: l.bagKg ? l.bagKg + ' KG' : 'Bag',
-                quantity: l.quantity, bagKg: l.bagKg, weightKg: l.weightKg, unitCostP: cost });
+                quantity: l.quantity, bagKg: l.bagKg, weightKg: l.weightKg, unitCostP: cost, extraUnitP: extraP });
               totalQty += l.quantity; totalKg += l.weightKg;
               Inventory.apply(api, {
-                productId: l.productId, warehouseId: rec.warehouseId, qtyDelta: l.quantity,
+                productId: l.productId, warehouseId: rec.warehouseId, qtyDelta: l.quantity, extraCostP: extraP,
                 kind: 'MILL_RECEIPT_IN', ref: number, refType: 'MILL_ARRIVAL',
                 note: 'Arrived from mill — ' + rec.millSnapshot, date: date, unitCostP: cost
               });
@@ -539,6 +544,7 @@
         (a.lines || []).forEach(function (l) {
           Inventory.apply(api, {
             productId: l.productId, warehouseId: a.warehouseId, qtyDelta: -l.quantity,
+            extraCostP: typeof l.extraUnitP === 'number' ? l.extraUnitP : undefined,
             kind: 'MILL_RECEIPT_REVERSAL_OUT', ref: a.arrivalNumber, refType: 'MILL_ARRIVAL_CANCEL',
             note: 'Arrival cancelled — ' + (reason || 'no reason given'), date: today()
           });

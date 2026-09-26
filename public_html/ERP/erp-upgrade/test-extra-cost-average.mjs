@@ -164,6 +164,43 @@ const run=async()=>{
   await ERP.Purchases.receiveMore(jp.id,[{itemId:ERP.Purchases.items(jp.id)[0].id,quantity:60}]);
   check('J1 the 60 bags delivered later still carry the 60 the purchase was made with (no re-price)', avgX(J)===R(60), String(avgX(J)));
 
+  /* ═══ K. cancelling a mill job / a mill arrival takes its extra back out (fresh window) ═══ */
+  {
+    const w2=boot({idb:new FDBFactory()}); const E2=await ready(w2);
+    const Mo=w2.Money, R2=Mo.toP;
+    const wh0=w2.WAREHOUSES[0].id, sup=w2.SUPPLIERS[0].id;
+    const wheat=w2.PRODUCTS.find(p=>p.id==='PRD-0097'), flour=w2.PRODUCTS.find(p=>p.id==='PRD-0004');
+    const ax=(p)=>{const r=E2.S.inventory[p.id+'|'+wh0];return r?r.avgExtraP:undefined;};
+    await E2.Purchases.save({supplierId:sup,warehouseId:wh0,purchaseDate:'2026-09-01',items:[{productId:wheat.id,quantity:500,unitPrice:100}]});
+    const q0=E2.Inventory.available(flour.id,wh0);
+    await E2.Prices.set(flour.id,{extra:100},{reason:'setup'});
+    const job=await E2.Milling.save({millId:sup,warehouseId:wh0,jobDate:'2026-09-10',settle:'NET',receiveMode:'DELIVERED',
+      issue:[{productId:wheat.id,quantity:100,weightKg:4900,unitRate:100,rateBasis:'BAG'}],
+      receive:[{productId:flour.id,quantity:60,weightKg:3000,unitRate:120,rateBasis:'BAG'}]});
+    check('K1 flour delivered by a mill job carries the extra of the day (100)', q0>0 || ax(flour)===R2(100), String(ax(flour)));
+    const base=ax(flour);
+    await E2.Prices.set(flour.id,{extra:300},{reason:'transport up'});
+    await E2.Purchases.save({supplierId:sup,warehouseId:wh0,purchaseDate:'2026-09-11',items:[{productId:flour.id,quantity:60,unitPrice:2500}]});
+    const blended=ax(flour);
+    check('K2 60 bought at 300 blend with the 60 from the mill job', blended>base, base+' → '+blended);
+    await E2.Milling.cancel(job.id,'wrong job');
+    check('K3 cancelling the job takes ITS 60 bags AND their extra back out: what is left is exactly the 300 lot',
+      ax(flour)===R2(300) && E2.Inventory.available(flour.id,wh0)===q0+60, String(ax(flour)));
+    /* an arrival of goods that were lying at the mill */
+    const job2=await E2.Milling.save({millId:sup,warehouseId:wh0,jobDate:'2026-09-12',settle:'NET',receiveMode:'AT_MILL',
+      issue:[{productId:wheat.id,quantity:100,weightKg:4900,unitRate:100,rateBasis:'BAG'}],
+      receive:[{productId:flour.id,quantity:60,weightKg:3000,unitRate:120,rateBasis:'BAG'}]});
+    await E2.Prices.set(flour.id,{extra:100},{reason:'cheaper again'});
+    const beforeArr=ax(flour);
+    const arr=await E2.Milling.receiveArrival({millId:sup,warehouseId:wh0,lines:[{productId:flour.id,quantity:20,weightKg:1000}]});
+    check('K4 an arrival at 100 blends into the stock at 300', ax(flour)<beforeArr, beforeArr+' → '+ax(flour));
+    await E2.Prices.set(flour.id,{extra:500},{reason:'up again'});
+    await E2.Milling.cancelArrival(arr.id,'wrong truck');
+    check('K5 cancelling the arrival puts the average back exactly where it was (no drift)', ax(flour)===beforeArr, beforeArr+' vs '+ax(flour));
+    check('K6 the arrival line remembers its extra', !!E2.Milling.arrivalById(arr.id).lines[0] && E2.Milling.arrivalById(arr.id).lines[0].extraUnitP===R2(100));
+    w2.close();
+  }
+
   check('Z nothing threw during the session', errors.length===0, errors.slice(0,2).join(' | '));
   win.close();
   console.log('\n'+out.join('\n')+'\n\n'+pass+' passed, '+fail+' failed\n');

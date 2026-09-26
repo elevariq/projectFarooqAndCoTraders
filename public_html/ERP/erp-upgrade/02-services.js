@@ -119,7 +119,7 @@ var Audit = ERP.Audit = {
    take such bags back out — see Inventory.rowExtraP. Returns, sale reversals and mill-issue reversals put bags back
    that already had a cost, so they are not in either list. */
 var EXTRA_FRESH_IN = { PURCHASE_IN: 1, MILL_RECEIPT_IN: 1, OPENING_STOCK: 1, ADJUSTMENT_IN: 1, SUPPLIER_REPLACEMENT_IN: 1 };
-var EXTRA_UNDO_OUT = { PURCHASE_REVERSAL_OUT: 1, RECEIPT_EDIT_OUT: 1 };
+var EXTRA_UNDO_OUT = { PURCHASE_REVERSAL_OUT: 1, RECEIPT_EDIT_OUT: 1, MILL_RECEIPT_REVERSAL_OUT: 1 };
 var Inventory = ERP.Inventory = {
   row: function (pid, wid) {
     var k = ikey(pid, wid);

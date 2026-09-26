@@ -343,6 +343,46 @@ async function main() {
     staleErr && (staleErr.conflict === true || staleErr.duplicate === true) && JSON.stringify(S6.rows('purchases').find(p => p.id === puH.id)) === before6, staleErr && staleErr.message);
   for (const b of [H1, H2]) b.w.close();
 
+  /* ══ HX. the extra cost per bag as an average carried by the stock, on the server (2026-09-26) ═══════
+     Each inventory row carries `avgExtraP`. A purchase blends it in; changing the product's extra pins the OLD figure on
+     rows that were still following the product (so Prices.set now WRITES stock rows) — that must arrive as a normal atomic
+     save, and a window with a stale copy of the stock must be refused, never overwrite the other window's stock. */
+  const SX = new Mock(SEED);
+  const X1 = await boot(SX), X2 = await boot(SX), EX = X1.w.ERP, wX = X1.w;
+  const whX = wX.WAREHOUSES[1].id, pX = wX.PRODUCTS.filter(x => x.active !== false)[5], supX = wX.SUPPLIERS[0].id;
+  const rowX = (pid, wid) => SX.rows('inventory').find(r => r.id === pid + '|' + wid);
+  await EX.Prices.set(pX.id, { buy: 3000, extra: 200, sell: 3600 }, { reason: 'setup' });
+  await EX.Purchases.save({ supplierId: supX, warehouseId: whX, purchaseDate: '2026-09-20', items: [{ productId: pX.id, quantity: 100, unitPrice: 3000 }] });
+  check('HX1 a purchase reaches the server with the stock row carrying its extra cost (200)', !!rowX(pX.id, whX) && rowX(pX.id, whX).avgExtraP === 20000, JSON.stringify(rowX(pX.id, whX)));
+  await EX.Prices.set(pX.id, { extra: 300 }, { reason: 'transport went up' });
+  check('HX2 raising the extra is a normal save (not refused), and the stock on the server still carries 200',
+    !X1.w.FDB.server.failed && SX.rows('products').find(p => p.id === pX.id).extraP === 30000 && rowX(pX.id, whX).avgExtraP === 20000,
+    JSON.stringify([X1.w.FDB.server.failed, rowX(pX.id, whX) && rowX(pX.id, whX).avgExtraP]));
+  await EX.Purchases.save({ supplierId: supX, warehouseId: whX, purchaseDate: '2026-09-21', items: [{ productId: pX.id, quantity: 100, unitPrice: 3000 }] });
+  check('HX3 100 more bags at the new 300 blend on the server to 250', rowX(pX.id, whX).avgExtraP === 25000 && rowX(pX.id, whX).qty >= 200, String(rowX(pX.id, whX).avgExtraP));
+  /* stock that was there before this feature: its row has no figure yet (made here by buying, then stripping the
+     figure from the row ON THE SERVER, and opening fresh windows so they load it that way) */
+  const prX = wX.PRODUCTS.filter(x => x.active !== false), pQ = prX[6], pQ2 = prX[7];
+  for (const q of [pQ, pQ2]) await EX.Purchases.save({ supplierId: supX, warehouseId: whX, purchaseDate: '2026-09-22', items: [{ productId: q.id, quantity: 40, unitPrice: 2000 }] });
+  for (const q of [pQ, pQ2]) delete SX.stores.inventory.get(q.id + '|' + whX).d.avgExtraP;
+  const X3 = await boot(SX), X4 = await boot(SX);          /* X4 will be the window holding an old copy */
+  check('HX4 (guard) both windows load stock rows that carry no figure yet', typeof X3.w.ERP.S.inventory[pQ.id + '|' + whX].avgExtraP !== 'number' && !(X3.w.prodOf(pQ.id).extraP > 0));
+  const revRow0 = SX.rev('inventory', pQ.id + '|' + whX);
+  await X3.w.ERP.Prices.set(pQ.id, { extra: 150 }, { reason: 'first extra' });
+  check('HX5 the first extra typed on a product already in stock covers that stock ON THE SERVER, as one accepted save',
+    !X3.w.FDB.server.failed && rowX(pQ.id, whX).avgExtraP === 15000 && SX.rev('inventory', pQ.id + '|' + whX) > revRow0,
+    JSON.stringify([X3.w.FDB.server.failed, rowX(pQ.id, whX).avgExtraP, revRow0, SX.rev('inventory', pQ.id + '|' + whX)]));
+  /* one window sells a bag of pQ2 (its stock row moves on); the OTHER window, still holding the old row, edits the extra */
+  await X3.w.ERP.Invoices.save({ customerId: X3.w.CUSTOMERS[0].id, warehouseId: whX, invoiceDate: '2026-09-25', items: [{ productId: pQ2.id, quantity: 1, unitPrice: 9000 }] });
+  const beforeRow = JSON.stringify(rowX(pQ2.id, whX)), beforeProd = JSON.stringify(SX.rows('products').find(p => p.id === pQ2.id));
+  const staleX = await X4.w.ERP.Prices.set(pQ2.id, { extra: 90 }, { reason: 'from an old screen' }).then(() => null, e => e);
+  check('HX6 a window holding an OLD copy of the stock is refused ("NOT saved"), and the other window stock row is left exactly as it was',
+    !!staleX && (staleX.conflict === true || /NOT saved|conflict/i.test(String(staleX.message || ''))) && JSON.stringify(rowX(pQ2.id, whX)) === beforeRow,
+    staleX && staleX.message);
+  check('HX7 …and the product on the server did not get the refused extra', JSON.stringify(SX.rows('products').find(p => p.id === pQ2.id)) === beforeProd);
+  for (const b of [X3, X4]) b.w.close();
+  for (const b of [X1, X2]) b.w.close();
+
   /* ══ HR. editing an "Add stock" receipt on the server (2026-09-25) ═══════════════
      StockDocs.editReceive reverses the old lines and re-posts the new ones: the header, the replaced lines, the
      stock row and the movements must reach the server in ONE commit, and a stale window must be refused. */
