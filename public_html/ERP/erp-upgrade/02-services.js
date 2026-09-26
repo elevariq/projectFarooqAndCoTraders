@@ -134,7 +134,9 @@ var Inventory = ERP.Inventory = {
     }, 0);
   },
   costOf: function (pid, wid) {
-    var r = Inventory.row(pid, wid);
+    /* with no warehouse given this is a product-level question: never create a stock row for it (a
+       `<product>|undefined` row was created here and later saved to the server by Prices.set) */
+    var r = wid ? Inventory.row(pid, wid) : { avgCostP: 0 };
     if (r.avgCostP) return r.avgCostP;
     /* this row's own carried cost outranks another warehouse's recorded average — the same
        priority Stock value uses for one row (37-stock-value.js costFor: recorded → carried →
@@ -565,6 +567,15 @@ var Invoices = ERP.Invoices = {
       errs.push('The shop on a posted invoice cannot be changed while editing it. ' +
                 'Use "Change shop" on the invoice, which moves its payments with it.');
     }
+    /* An edit deletes the invoice's lines and writes new ones under NEW ids. A customer return points at a line
+       by its id, so after an edit the returned bags would no longer be found: the same bags could be returned a
+       second time, the profit report would lose the cost of the returned bags, and the "returned" status is
+       overwritten. Until lines keep their ids, an invoice with a live return is closed to editing. */
+    if (prior && prior.status !== 'DRAFT' && Invoices.returnsOn(prior.id).length) {
+      errs.push(prior.invoiceNumber + ' already has a return (' +
+        Invoices.returnsOn(prior.id).map(function (r) { return r.returnNumber; }).join(', ') +
+        '), which is tied to its lines — it can no longer be edited. Correct it with a further return, or make a new invoice.');
+    }
     if (errs.length) return Promise.reject({ validation: errs });
 
     var totals = Calc.invoice(draft);
@@ -891,6 +902,10 @@ var Invoices = ERP.Invoices = {
     return d;
   },
 
+  /* the live (not cancelled) customer returns posted against an invoice */
+  returnsOn: function (invoiceId) {
+    return S.custReturns.filter(function (r) { return r.invoiceId === invoiceId && r.status !== 'CANCELLED'; });
+  },
   returnedQty: function (invoiceId, itemId) {
     return S.custReturnItems.filter(function (r) {
       var ret = S.custReturns.find(function (x) { return x.id === r.returnId; });

@@ -100,6 +100,31 @@ const run=async()=>{
   check('P16 pressing Save without changing anything says so inside the screen and stores nothing',
     /Nothing to save/.test($('#panelErr').textContent) && ERP.Prices.history(X.id).filter(h=>h.field==='extra').length===1,
     $('#panelErr').textContent);
+  /* Add stock asks what the bags COST — it used to open with the SELLING price (6300 kept as the stock cost → a loss) */
+  const pickInto=async(mode,prod)=>{
+    ERP.Builder.start(mode); await sleep(120);
+    click($('[data-fcbact="openpicker"]')); await sleep(60);
+    type($('#fcbPick'),prod.en||prod.ur); await sleep(80);
+    click($$('.fcb-res').find(b=>b.dataset.fcbadd===prod.id)||$('.fcb-res')); await sleep(80);
+    return $('[data-fcline="rate"]');
+  };
+  const $$=s=>Array.from(D.querySelectorAll(s));
+  let rateBox=await pickInto('receive',X);
+  check('P18 Add stock opens with the saved PURCHASE price (6,000) in its Cost box, not the selling price (6,300)',
+    !!rateBox && rateBox.value==='6000', rateBox&&rateBox.value);
+  const Y=P[4];
+  await ERP.Prices.set(Y.id,{sell:6300},{});
+  rateBox=await pickInto('receive',Y);
+  check('P19 a product with only a selling price saved opens Add stock with an EMPTY cost (never the selling price)',
+    !!rateBox && rateBox.value==='', rateBox&&rateBox.value);
+  rateBox=await pickInto('sale',X);
+  check('P20 a sale still opens with the selling price (6,300)', !!rateBox && rateBox.value==='6300', rateBox&&rateBox.value);
+  /* no empty stock row without a warehouse is created by reading a price, or stored by saving one */
+  const Z=P[5];
+  ERP.Prices.of(Z.id);
+  await ERP.Prices.set(Z.id,{extra:200,sell:6300},{});
+  check('P21 opening/saving prices for a product with no stock creates no "<product>|undefined" stock row',
+    !Object.keys(ERP.S.inventory).some(k=>/undefined/.test(k)), Object.keys(ERP.S.inventory).filter(k=>/undefined/.test(k)).join(','));
   check('P17 nothing threw', errors.length===0, errors.slice(0,2).join(' | '));
   win.close();
   console.log('\n'+out.join('\n')+'\n\n'+pass+' passed, '+fail+' failed\n');

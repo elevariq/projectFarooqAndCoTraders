@@ -249,8 +249,12 @@ Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's 
 
 14. **Product prices screen** (2026-09-26, client saw profit 1500 not 500 — the extra cost was never saved; `docs/PRICE_SCREEN.md`): reason is now optional; the screen opens with saved values
     (+ last sold rate), shows purchase + extra = cost / profit and a "try N bags" line. **Trap:** a base-app `panel.save()` that returns an object CLOSES the panel and says "Saving…" — refuse every
-    bad input by returning a STRING there, never later in a promise (it looked like a finished save). **Pending user:** the client's 26 Sep test entries (INV-000001/2, PUR-000001, RCV-000001/2) were
-    to be wiped again; the DB delete was blocked by the permission layer, nothing deleted (pre-wipe copy: `D:\projectFarooqAndCoTraders-backups\test-entries-before-wipe-20260926.json`).
+    bad input by returning a STRING there, never later in a promise (it looked like a finished save). **Add stock's Cost box used to open with the product's SELLING price** (`lastRate` in 05-ui-builder.js) — the
+    client kept it → stock cost 6300 → a sale at 6300 showed a loss; now it offers the saved purchase price. Test data wiped a 2nd time 2026-09-26 (transaction tables + 2 return tables, masters kept; copy in
+    `D:\projectFarooqAndCoTraders-backups\test-entries-before-wipe-20260926.json`; the wipe needs the DB MCP allow-rule — the auto-mode classifier blocks bulk DELETEs otherwise).
+    Returns (same day): receiving-warehouse box defaults to the invoice's; return quantity checked inside the panel; an invoice with a live return can NOT be edited (edit recreates lines under new ids and
+    orphans the return). ~20 other panels still refuse only after closing (list in `docs/PRICE_SCREEN.md`). 2nd wipe done later the same day (prices kept); nothing pending in the DB.
+    **Old note (cleared by the 2nd wipe):** stray rows from the client's newer test — an inventory row `PRD-0002|undefined`, INV-2026-000001 (cost 6,500 from the 6300 slip), RCV-2026-000001 (cost 6300) and audit row "Document viewed INV-2026-000003".
 
 ## Not yet seen by a person on the live site / a physical phone
 

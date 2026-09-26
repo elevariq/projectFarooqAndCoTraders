@@ -547,7 +547,10 @@ PANELS.creditnote = {
         '<label class="f"><span>Return date</span><input type="date" data-f="date" value="' + todayISO() + '"></label>' +
         '<label class="f"><span>Warehouse receiving</span><select data-f="wid">' +
           (global.activeWh ? global.activeWh() : []).map(function (w) {
-            return '<option value="' + w.id + '">' + esc(w.name) + '</option>'; }).join('') +
+            /* the bags go back where they were sold from unless the person says otherwise — with nothing
+               selected the list's FIRST warehouse was taken (2026-09-26: a return landed in the wrong one) */
+            var home = (ERP.Invoices.byId(pre) || {}).warehouseId;
+            return '<option value="' + w.id + '"' + (w.id === home ? ' selected' : '') + '>' + esc(w.name) + '</option>'; }).join('') +
         '</select></label></div>' +
       '<div class="f2">' +
         '<label class="f"><span>Reason</span><select data-f="reason">' +
@@ -580,6 +583,25 @@ PANELS.creditnote = {
                    condition: cond ? cond.value : 'SELLABLE' });
     });
     if (!items.length) return 'Enter how many bags are coming back on at least one line.';
+    /* refuse here, inside the panel: once save() returns without an error the panel closes and says "Posting
+       return…", so a refusal found afterwards would look like a return that was posted */
+    var bad = items.filter(function (i) { return !isFinite(i.quantity) || i.quantity <= 0; })[0];
+    if (bad) return 'A quantity is not a valid number.';
+    var inv0 = ERP.Invoices.byId(v.invoice);
+    if (!inv0 || inv0.status === 'DRAFT' || inv0.status === 'CANCELLED') return 'That invoice is not a confirmed sale.';
+    for (var n = 0; n < items.length; n++) {
+      var left = ERP.Returns.returnableQty(items[n].invoiceItemId);
+      if (items[n].quantity > left) {
+        var line = ERP.Invoices.items(v.invoice).filter(function (x) { return x.id === items[n].invoiceItemId; })[0] || {};
+        return 'Cannot return ' + items[n].quantity + ' × ' + esc(line.descriptionEnSnapshot || line.descriptionSnapshot || 'that line') +
+          ' — only ' + left + ' can still come back.';
+      }
+      if (v.treatment === 'REPLACEMENT') {
+        var line2 = ERP.Invoices.items(v.invoice).filter(function (x) { return x.id === items[n].invoiceItemId; })[0];
+        var have = line2 ? ERP.Inventory.available(line2.productId, v.wid || inv0.warehouseId) : 0;
+        if (line2 && items[n].quantity > have) return 'Replacement cannot be issued: only ' + have + ' in stock there.';
+      }
+    }
     ERP.Returns.fromCustomer({
       invoiceId: v.invoice, items: items, date: v.date, warehouseId: v.wid,
       reason: v.reason, treatment: v.treatment, notes: v.notes, description: v.description
@@ -1116,6 +1138,9 @@ D.addEventListener('change', function (e) {
   if (el.id === 'fcRetInv') {
     var host = D.getElementById('fcRetLines');
     if (host) host.innerHTML = retLines(el.value);
+    /* the receiving warehouse follows the invoice chosen (the person can still change it) */
+    var retInv = ERP.Invoices.byId(el.value), whBox = D.querySelector('#panel [data-f="wid"]');
+    if (retInv && whBox && retInv.warehouseId) whBox.value = retInv.warehouseId;
     return;
   }
   if (el.dataset.fclogo !== undefined && el.files && el.files[0]) {
@@ -1217,6 +1242,13 @@ function editInvoice(id) {
   var inv = ERP.Invoices.byId(id);
   if (!inv) { say('Invoice not found.'); return; }
   if (inv.status === 'CANCELLED') { say('A cancelled invoice cannot be edited. Duplicate it instead.'); return; }
+  var hasReturns = ERP.Invoices.returnsOn(inv.id);
+  if (hasReturns.length) {
+    say(inv.invoiceNumber + ' already has ' + (hasReturns.length === 1 ? 'a return' : 'returns') + ' (' +
+        hasReturns.map(function (r) { return r.returnNumber; }).join(', ') +
+        '), which are tied to its lines — it can no longer be edited. Correct it with a further return, or make a new invoice.');
+    return;
+  }
   var open = function () {
     var d = ERP.Invoices.toDraft(inv);
     d.id = inv.id; d.clientOpId = inv.clientOpId; d.revision = inv.revision || 0; d.existing = true;

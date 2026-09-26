@@ -191,7 +191,7 @@ var Prices = ERP.Prices = {
              the first figure typed covers the bags already held (a row that never carried one). */
           Object.keys(S.inventory || {}).forEach(function (k) {
             var row = S.inventory[k];
-            if (!row || row.productId !== productId) return;
+            if (!row || row.productId !== productId || !row.warehouseId) return;   /* a row with no warehouse is not stock */
             var was = typeof row.avgExtraP === 'number' ? row.avgExtraP : null;
             var next = c.from > 0 ? (was === null ? c.from : was) : (was > 0 ? was : c.to);
             if (next !== was) { row.avgExtraP = next; api.put('inventory', row); }

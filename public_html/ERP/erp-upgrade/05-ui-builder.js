@@ -172,6 +172,14 @@ function searchProducts(q) {
    unconfirmed, and it is not a price. */
 function lastRate(pid) {
   var hit = null;
+  /* Add stock (cfg.cost) is asked what the bags COST us. It used to fall into the sale branch below and open
+     with the product's SELLING price — 2026-09-26: 6300 (the selling price) was kept as the stock cost, so a
+     sale at 6300 showed a loss. The purchase price the owner saved (else the stock's own cost) is offered
+     instead; with neither, the box stays empty ("Cost (optional)"). */
+  if (B.cfg.cost && !B.cfg.rates && B.cfg.party !== 'supplier') {
+    var held = ERP.Prices && ERP.Prices.of ? ERP.Prices.of(pid) : null;
+    return held && held.buy > 0 ? held.buy : null;
+  }
   if (B.cfg.party === 'supplier') {
     ERP.S.purchaseItems.forEach(function (it) {
       if (it.productId !== pid) return;
