@@ -207,6 +207,20 @@ function payBalanceHtml(custs, preId) {
   if (!(preId && custs.some(function (c) { return c.id === preId; }))) return payChooseShopHtml();
   return I('wallet') + '<div><p>Outstanding balance: <b>' + M.fmt(ERP.Ledger.customerBalance(preId)) + '</b></p></div>';
 }
+/* "Receive payment" version: the shop's balance, and once an amount is typed where it lands. A shop that owes nothing
+   (the wrong shop picked — 2026-09-26 a payment went to a shop that owed nothing, so the real shop's invoice still showed
+   Paid 0) gets a clear warning BEFORE Save instead of quietly becoming credit. */
+function receiveBalanceHtml(cid, amtStr) {
+  var before = ERP.Ledger.customerBalance(cid);
+  var amt = M.toP(String(amtStr || '').replace(/[^\d.]/g, ''));
+  var h = I('wallet') + '<div><p>Outstanding balance: <b>' + M.fmt(before) + '</b>';
+  if (amt > 0) h += ' → after this payment: <b>' + M.fmt(before - amt) + '</b>';
+  h += '</p>';
+  if (amt > 0 && before <= 0) h += '<p><b>This shop owes nothing.</b> The whole payment would be kept as credit — check that you chose the right shop.</p>';
+  else if (amt > 0 && amt > before) h += '<p>This is more than the shop owes: <b>' + M.fmt(amt - before) + '</b> would be kept as credit.</p>';
+  return h + '</div>';
+}
+
 /* "Pay a shop" version: once an amount is typed, also show where the shop's
    account lands. Paying a shop moves its balance UP (towards "owes us"), so
    paying more than we owed it flips the account — say so before Save rather
@@ -268,6 +282,12 @@ PANELS.payment = {
     var amount = String(v.amt || '').replace(/[^\d.]/g, '');
     if (!v.cust) return 'Choose the shop.';
     if (!amount || Number(amount) <= 0) return 'Enter the amount received.';
+    /* "Oldest unpaid invoices first" with no unpaid invoice would silently turn the whole payment into credit — almost
+       always the wrong shop. Keeping money on account on purpose stays possible: choose "Leave on account". */
+    if (v.mode === 'auto' && !openInvoicesForCustomer(v.cust).length) {
+      return 'This shop has no unpaid invoice, so this money would just sit as credit. Check that you chose the right shop — ' +
+        'or, if you really are taking money in advance, change “Apply to” to “Leave on account”.';
+    }
     var allocations = [];
     if (v.mode === 'pick') {
       D.querySelectorAll('[data-fcalloc]').forEach(function (el) {
@@ -559,13 +579,14 @@ PANELS.creditnote = {
                           'Unsold stock', 'Other approved return'])
             .map(function (r) { return '<option>' + esc(r) + '</option>'; }).join('') +
         '</select></label>' +
-        '<label class="f"><span>What happens to the money</span><select data-f="treatment">' +
-          '<option value="ADJUST_OUTSTANDING_BALANCE">Reduce what the shop owes</option>' +
-          '<option value="CUSTOMER_CREDIT">Hold as customer credit</option>' +
-          '<option value="REFUND">Refund the money</option>' +
-          '<option value="REPLACEMENT">Replace the goods</option>' +
-        '</select><span class="hint">A replacement issues the same bags again instead of crediting money.</span></label>' +
+        /* three plain choices ("Hold as customer credit" was the same as the first in the books, so it is no longer offered) */
+        '<label class="f"><span>What should happen to the money?</span><select data-f="treatment">' +
+          '<option value="ADJUST_OUTSTANDING_BALANCE">Take it off what the shop owes</option>' +
+          '<option value="REFUND">Give the money back in cash</option>' +
+          '<option value="REPLACEMENT">Send the same bags again</option>' +
+        '</select></label>' +
       '</div>' +
+      '<div class="banner info" id="fcRetMoney">' + retMoneyNoteHtml(pre, 'ADJUST_OUTSTANDING_BALANCE') + '</div>' +
       '<div class="f"><span>Quantity and condition per line</span>' +
         '<div id="fcRetLines">' + retLines(pre) + '</div></div>' +
       '<label class="f fc-desc"><span>Description / تفصیل</span>' +
@@ -589,6 +610,10 @@ PANELS.creditnote = {
     if (bad) return 'A quantity is not a valid number.';
     var inv0 = ERP.Invoices.byId(v.invoice);
     if (!inv0 || inv0.status === 'DRAFT' || inv0.status === 'CANCELLED') return 'That invoice is not a confirmed sale.';
+    if (v.treatment === 'REFUND') {
+      var refundErr = ERP.Returns.refundLimitError(inv0, items);
+      if (refundErr) return esc(refundErr);
+    }
     for (var n = 0; n < items.length; n++) {
       var left = ERP.Returns.returnableQty(items[n].invoiceItemId);
       if (items[n].quantity > left) {
@@ -617,6 +642,50 @@ PANELS.creditnote = {
     return { msg: 'Posting return…' };
   }
 };
+
+/* One plain sentence about the money for the return being filled in: what the shop owes now and after, in numbers.
+   Bags always go back into stock by themselves — only the money needs a decision. */
+function retMoneyNoteHtml(invId, treatment) {
+  var inv = ERP.Invoices.byId(invId);
+  if (!inv) return '';
+  var value = 0;
+  D.querySelectorAll('#panel [data-fcret]').forEach(function (el) {
+    var q = Number(String(el.value || '').replace(/[^\d.]/g, '')) || 0;
+    if (q <= 0) return;
+    var it = ERP.Invoices.items(invId).filter(function (x) { return x.id === el.dataset.fcret; })[0];
+    if (!it) return;
+    value += M.mul(it.quantity ? Math.round(it.lineTotal / it.quantity) : it.unitPrice, q);
+  });
+  var owes = ERP.Ledger.customerBalance(inv.customerId);
+  var say1 = function (t) { return I('wallet') + '<div><p>' + t + '</p></div>'; };
+  if (!value) return say1('The bags you enter below go back into stock by themselves. Enter how many are coming back to see what happens to the money.');
+  var head = 'These bags are worth <b>' + M.fmt(value) + '</b> and go back into stock. ';
+  if (treatment === 'REPLACEMENT') {
+    return say1(head + 'The same bags go out again, so no money changes hands. The shop still owes <b>' + M.fmt(owes) + '</b>.');
+  }
+  if (treatment === 'REFUND') {
+    var err = ERP.Returns.refundLimitError(inv, retLinesFromPanel());
+    if (err) return I('alert') + '<div><p>' + head + 'But this shop has paid only <b>' + M.fmt(ERP.Invoices.paidFor(inv.id)) +
+      '</b> on this invoice, so cash can only be given back up to that. Choose “Take it off what the shop owes” instead.</p></div>';
+    return say1(head + 'You give <b>' + M.fmt(value) + '</b> back in cash. The shop still owes <b>' + M.fmt(owes) + '</b> (this return does not change it).');
+  }
+  var after = owes - value;
+  return say1(head + 'The shop owes <b>' + M.fmt(owes) + '</b> now. ' + (after >= 0
+    ? 'After this return it will owe <b>' + M.fmt(after) + '</b>.'
+    : 'After this return it will have <b>' + M.fmt(-after) + '</b> of credit with you, to use on its next purchase.'));
+}
+function retLinesFromPanel() {
+  var items = [];
+  D.querySelectorAll('#panel [data-fcret]').forEach(function (el) {
+    var q = Number(String(el.value || '').replace(/[^\d.]/g, '')) || 0;
+    if (q > 0) items.push({ invoiceItemId: el.dataset.fcret, quantity: q });
+  });
+  return items;
+}
+function refreshRetMoney() {
+  var box = D.getElementById('fcRetMoney'), inv = D.getElementById('fcRetInv'), tr = D.querySelector('#panel [data-f="treatment"]');
+  if (box && inv && tr) box.innerHTML = retMoneyNoteHtml(inv.value, tr.value);
+}
 
 function retLines(invoiceId) {
   var items = ERP.Invoices.items(invoiceId);
@@ -990,6 +1059,12 @@ D.addEventListener('click', function (e) {
 D.addEventListener('input', function (e) {
   var el = e.target;
   if (el.id === 'fcbPick') { B.pickerQuery = el.value; B.pickerOpen = true; ERP.BuilderRender.results(); return; }
+  if (el.dataset.fcret !== undefined && D.getElementById('fcRetMoney')) { refreshRetMoney(); return; }
+  if (el.dataset.f === 'amt' && D.getElementById('fcPayBal') && D.getElementById('fcPayCust')) {
+    var psel = D.getElementById('fcPayCust');
+    if (psel.value && !psel.disabled) D.getElementById('fcPayBal').innerHTML = receiveBalanceHtml(psel.value, el.value);
+    return;
+  }
   if (el.dataset.f === 'amt' && D.getElementById('fcRefundBal') && D.getElementById('fcRefundCust')) {
     var rsel = D.getElementById('fcRefundCust'), rb = D.getElementById('fcRefundBal');
     if (rsel.value && !rsel.disabled) rb.innerHTML = refundBalanceHtml(rsel.value, el.value);
@@ -1067,8 +1142,8 @@ D.addEventListener('change', function (e) {
   }
   if (el.id === 'fcPayCust') {
     var box = D.getElementById('fcPayBal');
-    if (box) box.innerHTML = el.value ? I('wallet') + '<div><p>Outstanding balance: <b>' +
-      M.fmt(ERP.Ledger.customerBalance(el.value)) + '</b></p></div>' : payChooseShopHtml();
+    var amtBox = D.querySelector('#panel [data-f="amt"]');
+    if (box) box.innerHTML = el.value ? receiveBalanceHtml(el.value, amtBox ? amtBox.value : '') : payChooseShopHtml();
     renderAllocList(); return;
   }
   if (el.id === 'fcPayArea') {
@@ -1135,9 +1210,11 @@ D.addEventListener('change', function (e) {
     return;
   }
   if (el.id === 'fcPayMode') { renderAllocList(); return; }
+  if (el.dataset.f === 'treatment' && D.getElementById('fcRetMoney')) { refreshRetMoney(); return; }
   if (el.id === 'fcRetInv') {
     var host = D.getElementById('fcRetLines');
     if (host) host.innerHTML = retLines(el.value);
+    refreshRetMoney();
     /* the receiving warehouse follows the invoice chosen (the person can still change it) */
     var retInv = ERP.Invoices.byId(el.value), whBox = D.querySelector('#panel [data-f="wid"]');
     if (retInv && whBox && retInv.warehouseId) whBox.value = retInv.warehouseId;
@@ -1535,8 +1612,8 @@ global.PAGES.reports = function () {
         '<div class="d">' + r.count + ' invoices</div></div>' +
       '<div class="kpi"><div class="k">Cost of goods</div><div class="v">' + M.fmt(r.cost) + '</div>' +
         '<div class="d">From the cost recorded at sale time</div></div>' +
-      '<div class="kpi"><div class="k">Gross profit</div><div class="v">' + M.fmt(r.grossProfit) + '</div>' +
-        '<div class="d">' + r.margin + '% margin</div></div>' +
+      '<div class="kpi"><div class="k">Gross profit</div><div class="v">' + M.fmt(r.netProfit) + '</div>' +
+        '<div class="d">' + r.netMargin + '% margin · after returns</div></div>' +
       '<div class="kpi"><div class="k">Returns</div><div class="v">' + M.fmt(r.returns) + '</div>' +
         '<div class="d">Credited back</div></div>' +
     '</div>' +

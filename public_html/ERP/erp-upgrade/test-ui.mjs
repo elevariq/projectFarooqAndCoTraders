@@ -331,8 +331,10 @@ const run = async () => {
   check('UI39 the return panel lists every line of the invoice with a condition',
         $$('[data-fcret]').length === 4 && $$('[data-fcretcond]').length === 4,
         `${$$('[data-fcret]').length}/${$$('[data-fcretcond]').length}`);
+  /* 2026-09-26: three plain choices — "Hold as customer credit" was identical to "take it off" in the books */
   check('UI40 the return panel offers the financial treatments',
-        !!$('[data-f="treatment"]') && $('[data-f="treatment"]').options.length === 4);
+        !!$('[data-f="treatment"]') && $('[data-f="treatment"]').options.length === 3 &&
+        Array.from($('[data-f="treatment"]').options).map(o => o.value).join() === 'ADJUST_OUTSTANDING_BALANCE,REFUND,REPLACEMENT');
 
   win.openPanel('smsconnect'); await sleep(120);
   check('UI40b the SMS provider panel opens', !!$('[data-f="smsProvider"]'));

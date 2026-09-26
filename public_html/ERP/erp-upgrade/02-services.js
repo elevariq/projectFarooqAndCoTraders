@@ -1539,6 +1539,7 @@ var Payments = ERP.Payments = {
    return as a whole carries a financial treatment, which decides what
    happens to the money. The original sale is never deleted.
    ══════════════════════════════════════════════════════════════════════════ */
+var RETURN_IN_FLIGHT = {};       /* customer returns being posted right now, keyed by invoice + lines (see fromCustomer) */
 var Returns = ERP.Returns = {
   customerAll: function () { return S.custReturns; },
   customerItems: function (id) { return S.custReturnItems.filter(function (i) { return i.returnId === id; })
@@ -1573,6 +1574,29 @@ var Returns = ERP.Returns = {
     return M.qty((it.receivedQty === undefined ? it.quantity : it.receivedQty) - already);
   },
 
+  /* A REFUND pays cash OUT, and the credit note it comes with is cancelled by that payment, so the shop's balance
+     does not move. That is only right for money the shop actually paid on THIS invoice — refunding an unpaid
+     invoice would leave the shop owing the full sale while we hand back cash we never received (found 2026-09-26).
+     Returns '' when the refund is fine, else the sentence to show. `lines` = [{invoiceItemId, quantity}]. */
+  refundLimitError: function (inv, lines) {
+    var want = 0;
+    (lines || []).forEach(function (l) {
+      var it = S.invoiceItems.find(function (x) { return x.id === l.invoiceItemId; });
+      if (!it) return;
+      var eff = it.quantity ? Math.round(it.lineTotal / it.quantity) : it.unitPrice;
+      want += M.mul(eff, M.qty(l.quantity));
+    });
+    var already = S.custReturns.filter(function (r) {
+      return r.invoiceId === inv.id && r.status !== 'CANCELLED' && r.treatment === 'REFUND';
+    }).reduce(function (a, r) { return a + r.creditAmount; }, 0);
+    var room = Math.max(0, Invoices.paidFor(inv.id) - already);
+    if (want <= room) return '';
+    return 'A refund can only give back money the shop has paid on this invoice. ' + inv.invoiceNumber + ' has ' +
+      M.fmt(Invoices.paidFor(inv.id)) + ' paid' + (already ? ' (' + M.fmt(already) + ' already refunded)' : '') +
+      ', so at most ' + M.fmt(room) + ' can be refunded, but this return is worth ' + M.fmt(want) +
+      '. Choose “Reduce what the shop owes” instead.';
+  },
+
   fromCustomer: function (o) {
     var inv = Invoices.byId(o.invoiceId);
     if (!inv) return Promise.reject({ validation: ['Choose the invoice being returned against.'] });
@@ -1604,8 +1628,22 @@ var Returns = ERP.Returns = {
         }
       }
     });
+    if (treatment === 'REFUND') {
+      var refundErr = Returns.refundLimitError(inv, lines);
+      if (refundErr) errs.push(refundErr);
+    }
     if (errs.length) return Promise.reject({ validation: errs });
 
+    /* The same return pressed twice (a double click on "Post return") used to run twice: each press got its own
+       operation id, both passed the "how many can still come back" check before either had written anything, and
+       the server refused the second — but the second had already put the bags and the credit into THIS page's
+       memory, so stock read 10 instead of 5 and the shop had two credit notes until a reload (2026-09-26).
+       A return that is still being posted is refused before it touches anything. */
+    var flightKey = inv.id + '|' + lines.map(function (l) { return l.invoiceItemId + ':' + M.qty(l.quantity); }).sort().join(',');
+    if (RETURN_IN_FLIGHT[flightKey]) {
+      return Promise.reject({ validation: ['This return is already being posted — please wait a moment.'] });
+    }
+    RETURN_IN_FLIGHT[flightKey] = true;
     var opId = o.clientOpId || FDB.uid('cretop');
     return FDB.tx(['sequences', 'customerReturns', 'customerReturnItems', 'inventory', 'stockMovements',
                    'invoices', 'invoiceItems', 'payments', 'paymentAllocations', 'auditLog', 'operations'],
@@ -1698,7 +1736,8 @@ var Returns = ERP.Returns = {
         return rec;
       });
       });
-    }).then(function (r) { Mirror.refresh(); return r; });
+    }).then(function (r) { delete RETURN_IN_FLIGHT[flightKey]; Mirror.refresh(); return r; },
+            function (e) { delete RETURN_IN_FLIGHT[flightKey]; throw e; });
   },
 
   toSupplier: function (o) {
@@ -1968,9 +2007,14 @@ var Reports = ERP.Reports = {
       return p.direction === 'IN' && p.status !== 'REVERSED' &&
              (!from || p.paymentDate >= from) && (!to || p.paymentDate <= to);
     }).reduce(function (a, p) { return a + p.amount; }, 0);
+    /* profit after the returned bags are taken back out (Profit.returned, 17-profit.js) */
+    var back = ERP.Profit && ERP.Profit.returned ? ERP.Profit.returned(from, to) : { revenue: 0, cost: 0 };
+    var netProfit = (revenue - back.revenue) - (cost - back.cost);
     return {
       count: list.length, revenue: revenue, cost: cost, grossProfit: revenue - cost,
       margin: revenue ? Math.round((revenue - cost) / revenue * 1000) / 10 : 0,
+      netProfit: netProfit,
+      netMargin: revenue - back.revenue ? Math.round(netProfit / (revenue - back.revenue) * 1000) / 10 : 0,
       qty: qty, returns: returns, netRevenue: revenue - returns, collected: collected,
       invoices: list
     };

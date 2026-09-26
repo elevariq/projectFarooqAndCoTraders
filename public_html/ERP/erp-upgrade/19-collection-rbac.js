@@ -606,13 +606,16 @@ global.PAGES.dashboard = function () {
   var mk = function (key, label) {
     var p = ERP.Period.resolve(key);
     var r = Profit.report(p[0], p[1], { by: 'none' });
-    return { label: label, revenue: r.totals.revenue, cost: r.totals.cost,
-             profit: r.totals.profit, margin: r.totals.margin, purchases: r.totals.purchases };
+    /* after returns: a sale whose bags all came back must not still show its profit (2026-09-26, client: 31,500 sold
+       and fully returned still read Sales 31,500 / Gross profit 500). The gross figures stay on the Profit screen. */
+    var t = r.totals;
+    return { label: label, revenue: t.netRevenue, cost: t.netCost,
+             profit: t.netProfit, margin: t.netMargin, purchases: t.purchases };
   };
   var spans = [mk('today', 'Today'), mk('week', 'This week'), mk('month', 'This month'), mk('year', 'This year')];
   return '<div class="card"><div class="card-h"><h3>Profit &amp; margin</h3>' +
       '<span class="pill neu">From the cost recorded on each sale</span></div><div class="card-b">' +
-      '<div class="tw"><table class="fcb-list"><thead><tr><th>Period</th><th class="r">Sales</th>' +
+      '<div class="tw"><table class="fcb-list"><thead><tr><th>Period</th><th class="r">Sales (after returns)</th>' +
       '<th class="r">Cost of goods</th><th class="r">Gross profit</th><th class="r">Margin</th>' +
       '<th class="r">Purchases</th></tr></thead><tbody>' +
       spans.map(function (s) {

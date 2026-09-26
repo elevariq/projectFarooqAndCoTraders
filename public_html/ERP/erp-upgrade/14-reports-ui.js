@@ -162,7 +162,7 @@ function build(tab, from, to, label) {
         id: 'overview', title: 'Business overview', from: from, to: to, periodLabel: label,
         cards: [
           card('Revenue', M.fmt(s.revenue), s.count + ' invoices'),
-          card('Gross profit', M.fmt(s.grossProfit), s.margin + '% margin', 'good'),
+          card('Gross profit', M.fmt(s.netProfit), s.netMargin + '% margin · after returns', 'good'),
           card('Bags sold', qty(s.bags), s.lines + ' lines'),
           card('Collected', M.fmt(s.collected), 'From shops'),
           card('Purchases', M.fmt(p.total), p.count + ' from mills'),
@@ -224,7 +224,7 @@ function build(tab, from, to, label) {
         cards: [
           card('Total sales', M.fmt(sa.revenue), sa.count + ' invoices'),
           card('Bags sold', qty(sa.bags), sa.lines + ' lines'),
-          card('Gross profit', M.fmt(sa.grossProfit), sa.margin + '% margin', 'good'),
+          card('Gross profit', M.fmt(sa.netProfit), sa.netMargin + '% margin · after returns', 'good'),
           card('Returns', M.fmt(sa.returned), sa.returnCount + ' returns'),
           card('Collected', M.fmt(sa.collected), 'In this period'),
           card('Still to collect', M.fmt(sa.outstanding), 'On these invoices', sa.outstanding ? 'bad' : '')

@@ -785,6 +785,9 @@ window.FAROOQ_ERP_MASTER={"version":"2026-09-09-v1","generated":"2026-09-09","so
    Master data confirmed by the business. No invented figures.
    ═══════════════════════════════════════════════════════════════ */
 const TODAY_ISO='2026-09-06';
+/* TODAY_ISO is a date frozen in the original mock-up. Anything that must follow the calendar (the list filters, the
+   period pickers, exported file names) uses this instead — local date, so Pakistan's evening is not "yesterday". */
+const realToday=()=>{const d=new Date();return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);};
 const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const nf=n=>Number(n||0).toLocaleString('en-US');
 const rs=n=>'Rs.\u00A0'+Number(n||0).toLocaleString('en-US');
@@ -972,7 +975,7 @@ function toolbar(o={}){
 }
 function applyFilters(){
   const scope=document.getElementById('view'); if(!scope)return;
-  const q=FIL.q.toLowerCase().trim(), now=new Date(TODAY_ISO+'T00:00:00');
+  const q=FIL.q.toLowerCase().trim(), now=new Date(realToday()+'T00:00:00');
   const inRange=iso=>{
     if(FIL.range==='all'||!iso)return true;
     const d=new Date(iso+'T00:00:00'), days=(now-d)/86400000;
@@ -1014,7 +1017,7 @@ function exportCSV(){
   const csv=rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}));
-  a.download=`farooq-co-${cur}-${TODAY_ISO}.csv`;
+  a.download=`farooq-co-${cur}-${realToday()}.csv`;
   document.body.appendChild(a);a.click();a.remove();
   say(`${rows.length-1} rows exported.`);
 }
@@ -1024,8 +1027,14 @@ const PAGES={};
 
 /* ══ Dashboard (§11) ══ */
 PAGES.dashboard=()=>{
-  const todaySales=SALES.filter(s=>s.iso===TODAY_ISO).reduce((a,s)=>a+(s.amt||0),0);
-  const todayBuys=PURCHASES.filter(p=>p.iso===TODAY_ISO).reduce((a,p)=>a+(p.amt||0),0);
+  /* TODAY_ISO is a date frozen in the original mock-up ('2026-09-06'): the "Today" tiles counted that one day
+     forever. The real calendar day is used here (FC_TODAY); the older screens still read the constant. */
+  const TD=(window.FC_TODAY?window.FC_TODAY():TODAY_ISO);
+  /* returns take today's sales back out (2026-09-26: a fully returned sale still read as sold) */
+  const todayReturned=((window.ERP&&ERP.S&&ERP.S.custReturns)||[]).filter(r=>r.status!=='CANCELLED'&&r.returnDate===TD)
+    .reduce((a,r)=>a+(window.Money?Money.toR(r.creditAmount||0):(r.creditAmount||0)/100),0);
+  const todaySales=Math.max(0,SALES.filter(s=>s.iso===TD).reduce((a,s)=>a+(s.amt||0),0)-todayReturned);
+  const todayBuys=PURCHASES.filter(p=>p.iso===TD).reduce((a,p)=>a+(p.amt||0),0);
   const recv=CUSTOMERS.reduce((a,c)=>a+(c.bal||0),0);
   const pay=SUPPLIERS.reduce((a,s)=>a+(s.due||0),0);
   const low=PRODUCTS.filter(p=>levelOf(p)!=='ok').length;
@@ -1050,9 +1059,9 @@ PAGES.dashboard=()=>{
     <div class="kpi"><div class="k">${I('box')}All bags available</div><div class="v">${nf(allStock())}</div>
       <div class="d">Across ${activeWh().length} warehouses</div></div>
     <div class="kpi"><div class="k">${I('tag')}Today's sales</div><div class="v">${todaySales?rs(todaySales):'—'}</div>
-      <div class="d">${SALES.filter(s=>s.iso===TODAY_ISO).length} invoices today</div></div>
+      <div class="d">${SALES.filter(s=>s.iso===TD).length} invoices today${todayReturned?' · '+rs(todayReturned)+' returned':''}</div></div>
     <div class="kpi"><div class="k">${I('cart')}Today's purchases</div><div class="v">${todayBuys?rs(todayBuys):'—'}</div>
-      <div class="d">${PURCHASES.filter(p=>p.iso===TODAY_ISO).length} deliveries today</div></div>
+      <div class="d">${PURCHASES.filter(p=>p.iso===TD).length} deliveries today</div></div>
     <div class="kpi"><div class="k">${I('wallet')}Receivables</div><div class="v">${recv?rs(recv):'—'}</div>
       <div class="d">From ${CUSTOMERS.filter(c=>c.bal>0).length} shops</div></div>
     <div class="kpi ${pay?'alert':''}"><div class="k">${I('mill')}Payables</div><div class="v">${pay?rs(pay):'—'}</div>
@@ -2638,9 +2647,14 @@ function genCreditNote(cn){
   });
   cn.doc=d.no; return d;
 }
-const PERIODS={today:['Today',TODAY_ISO,TODAY_ISO],week:['This week','2026-08-31',TODAY_ISO],
-  month:['This month','2026-09-01',TODAY_ISO],last:['Last month','2026-08-01','2026-08-31'],
-  year:['This year','2026-01-01',TODAY_ISO],all:['All time',null,null]};
+const PERIODS=(()=>{      /* these were fixed dates ('2026-08-31', '2026-09-01' …) — they now follow the calendar */
+  const iso=d=>d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  const t=realToday(), d=new Date(t+'T00:00:00');
+  const mon=new Date(d); mon.setDate(d.getDate()-((d.getDay()||7)-1));
+  const lastFirst=new Date(d.getFullYear(),d.getMonth()-1,1), lastEnd=new Date(d.getFullYear(),d.getMonth(),0);
+  return {today:['Today',t,t],week:['This week',iso(mon),t],month:['This month',t.slice(0,8)+'01',t],
+    last:['Last month',iso(lastFirst),iso(lastEnd)],year:['This year',t.slice(0,4)+'-01-01',t],all:['All time',null,null]};
+})();
 function genCustStatement(id,periodKey){
   const c=custBy(id), pr=PERIODS[periodKey]||PERIODS.all;
   const L=custLedger(id,pr[1],pr[2]);
@@ -2868,6 +2882,10 @@ function openPanel(k){
 }
 const closePanel=()=>{panel.classList.remove('on');scrim.classList.remove('on');};
 function savePanel(){
+  /* A saved panel only slides out (closePanel removes the class) — its Save button stays in the page for the
+     length of the animation, so a quick second click ran the whole save AGAIN (two receipts, two returns …).
+     Once the panel is closed, Save does nothing. */
+  if(!panel.classList.contains('on'))return;
   const p=PANELS[panel.dataset.key]||PANELS.generic;
   const v={}; panel.querySelectorAll('[data-f]').forEach(el=>v[el.dataset.f]=(el.value||'').trim());
   const res=p.save(v);

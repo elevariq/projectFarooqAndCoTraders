@@ -480,7 +480,8 @@ async function main() {
      its amount is duplicated onto customerReturns.creditAmount, and the two cancel out
      in the shop's ledger (N7.8 in test-erp.mjs) only as long as they still match */
   const invRet = await ERP.Invoices.save({
-    customerId: c3.id, warehouseId: wh.id, invoiceDate: '2026-09-14', paidAmount: 0,
+    /* paid in full: a REFUND can only give back money the shop actually paid (Returns.refundLimitError, 2026-09-26) */
+    customerId: c3.id, warehouseId: wh.id, invoiceDate: '2026-09-14', paidAmount: 5000,
     items: [{ productId: prod.id, quantity: 5, unitPrice: 1000, discount: 0, warehouseId: wh.id }]
   });
   const itRet = ERP.Invoices.items(invRet.id)[0];

@@ -183,6 +183,17 @@ A.sales = function (from, to, f) {
            (!f.customerId || r.customerId === f.customerId);
   });
   var returned = returns.reduce(function (a, r) { return a + r.creditAmount; }, 0);
+  /* what the returned bags took back out of revenue and cost — the same reading as Profit.returned (17-profit.js),
+     limited to the same customer / product filter, so "gross profit" here is after returns */
+  var retRevenue = 0, retCost = 0;
+  returns.forEach(function (r) {
+    ERP.Returns.customerItems(r.id).forEach(function (ri) {
+      if (f.productId && ri.productId !== f.productId) return;
+      var src = S.invoiceItems.filter(function (x) { return x.id === ri.invoiceItemId; })[0];
+      retRevenue += ri.lineTotal;
+      retCost += M.mul(src ? (src.costSnapshot || 0) : 0, ri.quantity);
+    });
+  });
   var collected = ERP.Payments.incoming().filter(function (p) {
     return within(p.paymentDate, from, to) && (!f.customerId || p.partyId === f.customerId);
   }).reduce(function (a, p) { return a + p.amount; }, 0);
@@ -197,6 +208,8 @@ A.sales = function (from, to, f) {
     margin: revenue ? Math.round((revenue - cost) / revenue * 1000) / 10 : 0,
     bags: bags, lines: lines, returned: returned, returnCount: returns.length,
     netRevenue: revenue - returned, collected: collected,
+    returnedCost: retCost, netProfit: (revenue - retRevenue) - (cost - retCost),
+    netMargin: revenue - retRevenue ? Math.round(((revenue - retRevenue) - (cost - retCost)) / (revenue - retRevenue) * 1000) / 10 : 0,
     outstanding: list.reduce(function (a, i) { return a + ERP.Invoices.outstanding(i); }, 0),
     byProduct: sorted(byProduct), byRegion: sorted(byRegion), byCustomer: sorted(byCustomer),
     byWarehouse: sorted(byWarehouse),
