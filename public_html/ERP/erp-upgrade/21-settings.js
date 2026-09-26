@@ -53,8 +53,8 @@ FIELDS.forEach(function (f) { FIELD_BY_KEY[f.key] = f; });
    get it here (transport, labour, loading) — it is not on the supplier's bill, so
    it never touches a supplier balance. Shared by the panel, its live line and
    Prices.of so they cannot disagree. All figures in paisa. */
-function figures(buyP, extraP, sellP) {
-  var costP = (buyP || 0) + (extraP || 0);
+function figures(buyP, extraP, sellP, chargeP) {
+  var costP = (buyP || 0) + (chargeP || 0) + (extraP || 0);     /* chargeP: per-bag charges already typed on the purchase */
   var profit = (sellP || 0) - costP;
   return {
     cost: costP, profit: profit,
@@ -397,27 +397,29 @@ ERP.openPriceEditor = function (productId) {
 };
 
 /* The line under the cost boxes. Numbers only, so nothing typed can reach the page as markup. */
-function costLine(buyP, extraP, sellP) {
+function costLine(buyP, extraP, sellP, chargeP) {
   if (buyP < 0 || extraP < 0 || sellP < 0) return 'A price or cost cannot be negative.';
-  var f = figures(buyP, extraP, sellP);
+  var f = figures(buyP, extraP, sellP, chargeP);
   if (!f.cost) return 'Enter the purchase price and our extra cost to see what a bag costs us.';
   return 'Cost to us per bag <b>' + M.fmt(f.cost) + '</b>' +
-    (extraP ? ' (purchase ' + M.fmt(buyP) + ' + extra ' + M.fmt(extraP) + ')' : '') +
+    (chargeP ? ' (purchase ' + M.fmt(buyP) + ' + charges on the purchase ' + M.fmt(chargeP) + (extraP ? ' + extra ' + M.fmt(extraP) : '') + ')'
+             : (extraP ? ' (purchase ' + M.fmt(buyP) + ' + extra ' + M.fmt(extraP) + ')' : '')) +
     (sellP ? ' · profit per bag <b>' + M.fmt(f.profit) + '</b> · margin <b>' + f.margin +
              '%</b>, markup <b>' + f.markup + '%</b>' : '');
 }
 
 /* The sum written out the way the owner does it on paper: purchase + extra = cost, then the sale and what is left.
    `qty` (bags) only scales the totals underneath. Numbers only, like costLine. Returns the per-bag lines and the totals line. */
-function calcHtml(buyP, extraP, sellP, qty) {
+function calcHtml(buyP, extraP, sellP, qty, chargeP) {
   if (buyP < 0 || extraP < 0 || sellP < 0) return { rows: '', total: '' };
-  var f = figures(buyP, extraP, sellP);
+  var f = figures(buyP, extraP, sellP, chargeP);
   var row = function (label, p, strong) {
     return '<div class="pz-cr' + (strong ? ' pz-cs' : '') + '"><span>' + label + '</span><b>' + M.fmt(p) + '</b></div>';
   };
   var n = qty > 0 && isFinite(qty) ? qty : 1;
   return {
-    rows: row('Purchase price', buyP) + row('+ Extra cost', extraP) + row('= Total cost per bag', f.cost, true) +
+    rows: row('Purchase price', buyP) + (chargeP ? row('+ Charges on the purchase', chargeP) : '') +
+      row('+ Extra cost', extraP) + row('= Total cost per bag', f.cost, true) +
       row('Selling price', sellP) + row('Profit per bag', f.profit, true),
     total: '<b>' + n + ' bag' + (n === 1 ? '' : 's') + '</b>: sale ' + n + ' × ' + M.fmt(sellP) + ' = <b>' + M.fmt(Math.round(sellP * n)) +
       '</b> · cost ' + n + ' × ' + M.fmt(f.cost) + ' = ' + M.fmt(Math.round(f.cost * n)) +
@@ -489,7 +491,7 @@ global.PANELS.prices = {
     var lb = PRICE_LANDED = landedBreakdown(pid);
     var buySaved = (p.buyP !== undefined && p.buyP !== null ? p.buyP : (p.buy ? M.toP(p.buy) : 0)) > 0;
     if (lb && !buySaved) shown.buy = lb.goods;
-    var calc = calcHtml(shown.buy, info.extra, shown.sell, 1);
+    var calc = calcHtml(shown.buy, info.extra, shown.sell, 1, lb ? lb.charge : 0);
     var landedBanner = lb
       ? '<div class="banner warn" id="pzLanded">' + I('alert') + '<div><p><b>These bags already carry ' + M.fmt(lb.charge) + ' per bag of transport / other charges</b> ' +
         'that were typed on their purchase: supplier price ' + M.fmt(lb.goods) + ' + charges ' + M.fmt(lb.charge) + ' = <b>' + M.fmt(lb.goods + lb.charge) + '</b> per bag in stock. ' +
@@ -509,12 +511,12 @@ global.PANELS.prices = {
       landedBanner +
       (pend.length ? '<div class="banner warn">' + I('clock') + '<div><p>' + pend.length +
         ' change is waiting for approval on this product.</p></div></div>' : '') +
-      '<div class="f2">' + money('buy', 'Purchase price', 'What the mill or supplier charges per bag') +
+      '<div class="f2">' + money('buy', 'Purchase price', 'What the mill or supplier charges per bag. This is your reference price: a sale is costed from what each purchase really cost, and this box also starts Add stock.') +
         money('extra', 'Extra cost per bag',
           'Transport, labour, loading and other charges we pay ourselves — not on the supplier’s bill. ' +
           'Added to the cost of the bags that come into stock from now on (a purchase, Add stock). Bags already in stock keep the extra they came in with. Type 0 if none.') +
       '</div>' +
-      '<div class="pz-live" id="pzLive" aria-live="polite">' + costLine(info.buy, info.extra, shown.sell) + '</div>' +
+      '<div class="pz-live" id="pzLive" aria-live="polite">' + costLine(shown.buy, info.extra, shown.sell, lb ? lb.charge : 0) + '</div>' +
       '<div class="pz-calc"><div id="pzCalcRows">' + calc.rows + '</div>' +
         '<label class="pz-qty"><span>Try it with</span><input data-pzqty inputmode="decimal" value="1"><span>bags</span></label>' +
         '<div class="pz-ct" id="pzCalcTot">' + calc.total + '</div></div>' +
@@ -1006,14 +1008,14 @@ D.addEventListener('input', function (e) {
         var el = D.querySelector('#panel [data-f="' + k + '"]'), n = el ? num(el.value) : null;
         return n === null ? held[k] : M.toP(n);
       };
-      live.innerHTML = costLine(box('buy'), box('extra'), box('sell')) +
+      live.innerHTML = costLine(box('buy'), box('extra'), box('sell'), PRICE_LANDED ? PRICE_LANDED.charge : 0) +
         (PRICE_LANDED && box('extra') > 0
           ? '<br><b>Careful:</b> these bags already include ' + M.fmt(PRICE_LANDED.charge) + ' per bag of charges from their purchase — an extra cost of ' +
             M.fmt(box('extra')) + ' here would be counted twice.' : '');
       var qtyEl = D.querySelector('#panel [data-pzqty]'), rowsEl = D.getElementById('pzCalcRows'),
           totEl = D.getElementById('pzCalcTot');
       if (rowsEl && totEl) {
-        var c = calcHtml(box('buy'), box('extra'), box('sell'), qtyEl ? num(qtyEl.value) : 1);
+        var c = calcHtml(box('buy'), box('extra'), box('sell'), qtyEl ? num(qtyEl.value) : 1, PRICE_LANDED ? PRICE_LANDED.charge : 0);
         rowsEl.innerHTML = c.rows; totEl.innerHTML = c.total;
       }
     }

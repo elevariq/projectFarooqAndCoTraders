@@ -51,14 +51,19 @@ var Cost = ERP.Cost = {
   basis: function () { return ERP.Settings.get().profitCostBasis || 'LANDED'; },
 
   /* returns [{itemId, goodsUnit, landedUnit, share}] for a purchase draft or record */
-  allocate: function (lines, charges) {
+  /* `overallDiscount` = the one amount taken off the WHOLE purchase after the line discounts. It lowers what is owed, so it
+     must lower what the bags cost too: it is spread over the lines by value, the same way the charges are (2026-09-26 it was
+     left out — the bill fell but every bag still cost the full price, so profit looked too low). */
+  allocate: function (lines, charges, overallDiscount) {
     var goods = M.sum(lines.map(function (l) { return Math.max(0, l.lineTotal); }));
     var extra = Math.max(0, charges || 0);
+    var off = Math.max(0, overallDiscount || 0);
     return lines.map(function (l) {
       var qty = Number(l.quantity) || 0;
       var received = l.receivedQty === undefined ? qty : Number(l.receivedQty) || 0;
       var basis = received || qty;
-      var goodsUnit = basis ? Math.round(l.lineTotal / basis) : l.unitPrice;
+      var discShare = goods > 0 ? Math.round(off * Math.max(0, l.lineTotal) / goods) : 0;
+      var goodsUnit = basis ? Math.max(0, Math.round((l.lineTotal - discShare) / basis)) : l.unitPrice;
       var share = goods > 0 ? Math.round(extra * l.lineTotal / goods) : (lines.length ? Math.round(extra / lines.length) : 0);
       var landedUnit = basis ? goodsUnit + Math.round(share / basis) : goodsUnit;
       return { itemId: l.id, productId: l.productId, qty: basis,
@@ -128,7 +133,9 @@ ERP.Purchases.save = function (draft) {
   return origPurchaseSave.call(ERP.Purchases, draft).then(function (rec) {
     var items = ERP.Purchases.items(rec.id);
     var charges = Cost.chargesOf(rec);
-    var alloc = Cost.allocate(items, charges);
+    /* the overall discount = what is left of the purchase's discount after the discounts already inside each line */
+    var overall = Math.max(0, (rec.discountAmount || 0) - M.sum(items.map(function (i) { return i.discount || 0; })));
+    var alloc = Cost.allocate(items, charges, overall);
     var stillOn = {};
     items.forEach(function (i) { stillOn[i.productId + '|' + i.warehouseId] = true; });
     var dropped = wasOn.filter(function (k) { return !stillOn[k.productId + '|' + k.warehouseId]; });

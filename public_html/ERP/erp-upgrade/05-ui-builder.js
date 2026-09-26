@@ -518,6 +518,28 @@ function totalsBar() {
     row('Grand total', M.fmt(t.grandTotal), 'grand');
 }
 
+/* What each bag on this purchase really costs, worked out live with the same rule the save uses (Cost.allocate):
+   line price − its share of the overall discount + its share of the charges, per bag. Numbers only. */
+function costPerBagHtml() {
+  var t = totals();
+  var lines = t.items.filter(function (i) { return i.productId && Number(i.quantity) > 0; });
+  if (!lines.length) return I('wallet') + '<div><p>Add a product to see what each bag will really cost you.</p></div>';
+  var charges = t.freightAmount + t.loadingAmount + t.otherCharges;
+  var alloc = ERP.Cost.allocate(lines.map(function (i, ix) {
+    return { id: String(ix), productId: i.productId, quantity: i.quantity, receivedQty: i.receivedQty, lineTotal: i.lineTotal, unitPrice: i.unitPrice };
+  }), charges, t.invoiceDiscount);
+  var rows = lines.map(function (i, ix) {
+    var a = alloc[ix], p = global.prodOf(i.productId) || {};
+    var perBagCharge = a.qty ? Math.round(a.share / a.qty) : 0;
+    return '<p><b>' + esc(p.en || p.ur || i.productId) + '</b>: each bag costs <b>' + M.fmt(a.landedUnit) + '</b>' +
+      ' (supplier price ' + M.fmt(i.unitPrice) +
+      (a.goodsUnit !== i.unitPrice ? ' → ' + M.fmt(a.goodsUnit) + ' after discounts' : '') +
+      (perBagCharge ? ' + charges ' + M.fmt(perBagCharge) +
+        (lines.length === 1 ? ' (' + M.fmt(charges) + ' ÷ ' + Number(a.qty).toLocaleString('en-US') + ' bags)' : '') : '') + ')</p>';
+  }).join('');
+  return I('wallet') + '<div>' + rows + '</div>';
+}
+
 function chargesBlock() {
   if (!B.cfg.rates || B.mode === 'supreturn') {
     return '<div class="card fcb-card"><div class="card-h"><h3>Notes</h3></div><div class="card-b">' +
@@ -532,16 +554,33 @@ function chargesBlock() {
   };
   var isSaleSide = B.cfg.party === 'customer';
   var quoteLike = B.mode === 'order' || B.mode === 'quotation';
+  var isPur = B.mode === 'purchase';
+  /* plain-English meaning of each box (2026-09-26: the owner did not know if a charge was per bag or for the whole load) */
+  var hDisc = isPur
+    ? 'One amount off the WHOLE purchase, taken after any discount on a line. It lowers what you owe and what every bag costs.'
+    : 'One amount off the whole invoice, taken after any discount on a line.';
+  var hChg = isPur
+    ? 'Total for the whole purchase — NOT per bag. Only what the supplier charges on this same bill: it is added to what you owe and shared over the bags.'
+    : 'Total for the whole invoice, added to the amount due.';
+  var hOwn = isPur ? 'Paid a truck or labour separately? Do not type it here — use the product’s “Extra cost per bag” instead.' : '';
+  var guide = isPur
+    ? '<div class="banner info">' + I('tag') + '<div><p><b>How a purchase is worked out</b></p>' +
+      '<p><b>Rate</b> = the price of ONE bag. <b>Discount</b> on a line = money off that whole line (not per bag). ' +
+      '<b>Overall discount</b> = money off the whole purchase. <b>Delivery, Loading, Other</b> = totals for the whole purchase. ' +
+      '<b>Amount paid</b> = what you hand the supplier now for the whole purchase; the rest stays owed to the supplier.</p></div></div>'
+    : '';
   return '<div class="card fcb-card"><div class="card-h"><h3>Charges' +
-      (quoteLike ? '' : ' &amp; payment') + '</h3></div><div class="card-b">' +
-    '<div class="f2">' + f('invoiceDiscount', 'Overall discount') + f('freight', 'Delivery / freight') + '</div>' +
-    '<div class="f2">' + f('loading', 'Loading / unloading') + f('otherCharges', 'Other charges') + '</div>' +
+      (quoteLike ? '' : ' &amp; payment') + '</h3></div><div class="card-b">' + guide +
+    '<div class="f2">' + f('invoiceDiscount', 'Overall discount', hDisc) + f('freight', 'Delivery / freight', hChg) + '</div>' +
+    '<div class="f2">' + f('loading', 'Loading / unloading', hChg) + f('otherCharges', 'Other charges', hChg + ' ' + hOwn) + '</div>' +
+    (isPur ? '<div class="banner info fcb-cpb" id="fcbCpb">' + costPerBagHtml() + '</div>' : '') +
     (quoteLike ? '' :
       '<div class="f2 fc-amtpaid">' + f('paidAmount', 'Amount Paid',
           isSaleSide ? 'Leave at 0 for a credit sale'
             : (B.mode === 'purchase' && B.editingId
                 ? 'What has been paid with this purchase so far. Raising it records another payment voucher for ' +
-                  'the difference; to lower it, reverse the voucher from Payments.' : '')) +
+                  'the difference; to lower it, reverse the voucher from Payments.'
+                : (isPur ? 'What you pay the supplier now, for the whole purchase (all lines together). Leave 0 to pay later.' : ''))) +
         '<label class="f"><span>Payment method</span><select data-fcb="paymentMethod">' +
           ERP.ENUM.methods.map(function (m) {
             return '<option' + (B.draft.paymentMethod === m ? ' selected' : '') + '>' + m + '</option>';
@@ -669,6 +708,8 @@ function refreshTotals() {
         (over ? ' · short by ' + Number(calc.qty - have).toLocaleString('en-US') : '');
     }
   });
+  var cpb = global.document.getElementById('fcbCpb');
+  if (cpb && B.mode === 'purchase') cpb.innerHTML = costPerBagHtml();
   var chk = global.document.querySelector('.fcb-check');
   if (chk) chk.textContent = t.grandTotal
     ? 'Grand total ' + M.fmt(t.grandTotal) + ' · balance after this payment ' + M.fmt(t.grandTotal - t.paidAmount)
