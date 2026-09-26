@@ -72,3 +72,5 @@ product's CURRENT extra at sale time, so raising 200 → 300 re-priced every bag
 **Tests.** `test-extra-cost-average.mjs` (30 checks: the client's 200→300 example, sales don't move it, sold-out lots don't drag,
 first extra covers held stock, 0 later, legacy rows, transfers, purchase and receipt edits, later deliveries, the profit basis).
 Mutation-checked: costing at the product's extra again turns 11 checks red. `test-extra-cost-profit.mjs` X13/X13b/X16/X22 updated.
+
+**Deployed 2026-09-26 ~12:00** (commit `ac2db3f`, app only): clean-clone deploy, full test gate green, served `_app/*` md5 = build, ERP 401 / homepage 200, Hostinger cache cleared. Not yet seen by a person on the live site.
