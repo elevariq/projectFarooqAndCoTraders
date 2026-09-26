@@ -242,6 +242,10 @@ Then: **clear the Hostinger cache**, and verify `_app/*` md5s equal the build's 
 13. **Extra cost per bag now feeds sale-time profit** (2026-09-25, client: "purchase 3000 + extra 200 = 3200, profit still showed 200 more"): `Inventory.saleCostOf` = `costOf` + product
     `extraP` → invoice `costSnapshot`, `Cost.forSale`, live invoice note. Stock value / `avgCostP` never carry it; skipped under `profitCostBasis:'PURCHASE'`; old invoices keep their
     snapshot. Trap: a purchase with freight also entered on the Landed costs screen counts that transport twice — tell the owner to use one or the other. `docs/EXTRA_COST_PROFIT.md`.
+    **Since 2026-09-26 the extra is an AVERAGE carried by the stock** (client: "bags already in stock keep the old extra"): each `inventory` row has `avgExtraP`, blended in by bags on hand when
+    NEW bags arrive (purchase, Add stock, opening, mill receipt); `saleCostOf` uses the row's figure, not the product's current one. `Prices.set` pins old rows when the extra changes; the first extra
+    typed on a product with none covers stock already held. Purchase/receipt lines keep `extraUnitP` so edits don't re-price. Trap: any NEW code that adds bags must pass through `Inventory.apply`
+    (or copy the blend, as `39-warehouse-server.js` does). App-only deploy, no schema change; not yet seen live.
 
 ## Not yet seen by a person on the live site / a physical phone
 

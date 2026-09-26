@@ -249,16 +249,26 @@ WH.post = function (type, draft) {
         lines.forEach(function (l, ix) {
           var p = m.raw.products[l.productId], q = M.qty(l.quantity);
           var unitCostP = costOf(l.productId, draft.warehouseId);
-          api.put('stockDocItems', {                              /* snapshot() in 07-transactions.js */
+          var extraNow = (function () {                           /* Inventory.rawExtraOf */
+            var x = p.extraP !== undefined && p.extraP !== null ? Number(p.extraP) : (p.extra ? M.toP(p.extra) : 0);
+            return x > 0 ? x : 0;
+          })();
+          var sdItem = {                                          /* snapshot() in 07-transactions.js */
             id: FDB.uid('sdi'), docId: rec.id, sortOrder: ix, direction: def.out ? 'OUT' : 'IN',
             warehouseId: draft.warehouseId, toWarehouseId: null, reason: rec.reason, fromDamaged: false, unitCostP: unitCostP,
             productId: l.productId, descriptionSnapshot: p.ur || p.en || '', descriptionEnSnapshot: p.en || '',
             brandSnapshot: p.brandEn || p.brand || '', categorySnapshot: p.cat || '', packageSnapshot: p.kg ? p.kg + ' KG' : 'Bag',
             skuSnapshot: p.sku || p.sourceFolio || p.id || '', unit: 'Bag', quantity: q, batchNo: '', notes: ''
-          });
+          };
+          if (type === 'RECEIVE') sdItem.extraUnitP = extraNow;   /* the office's receipt line keeps it too (StockDocs.save) */
+          api.put('stockDocItems', sdItem);
           qty += q;
           if (type === 'RECEIVE' || deduct) {                     /* Inventory.apply */
             var r = row(l.productId, draft.warehouseId), delta = type === 'RECEIVE' ? q : -q;
+            if (type === 'RECEIVE') {                              /* Inventory.apply: blend in the extra cost of the bags coming in */
+              var exPrev = typeof r.avgExtraP === 'number' ? r.avgExtraP : extraNow;
+              r.avgExtraP = r.qty > 0 ? Math.round((r.qty * exPrev + delta * extraNow) / (r.qty + delta)) : extraNow;
+            }
             r.qty = Math.round((r.qty + delta) * 1000) / 1000;
             api.put('inventory', r);
             api.put('stockMovements', {

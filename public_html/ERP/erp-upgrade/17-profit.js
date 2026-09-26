@@ -219,7 +219,7 @@ var Profit = ERP.Profit = {
     var p = global.prodOf ? global.prodOf(productId) : null;
     var minP = p && p.minSellP ? p.minSellP : (p && p.min ? M.toP(p.min) : 0);
     return {
-      cost: cost, extra: cost ? ERP.Inventory.extraOf(productId) : 0,
+      cost: cost, extra: cost ? ERP.Inventory.extraFor(productId, warehouseId) : 0,
       unitRevenue: q ? Math.round(revenue / q) : rate,
       revenue: revenue, totalCost: totalCost, profit: profit,
       margin: revenue ? profit / revenue * 100 : 0,

@@ -329,6 +329,8 @@ var StockDocs = ERP.StockDocs = {
               r.toBrandSnapshot = toProd.brandEn || toProd.brand || '';
               r.toPackageSnapshot = toProd.kg ? toProd.kg + ' KG' : 'Bag';
             }
+            /* a receipt line keeps the product's extra cost of the day, for a later edit (set BEFORE the put) */
+            if (type === 'RECEIVE') r.extraUnitP = Inventory.rawExtraOf(r.productId);
             api.put('stockDocItems', r); S.stockDocItems.push(r);
             qty += q;
 
@@ -339,11 +341,12 @@ var StockDocs = ERP.StockDocs = {
                 note: 'To ' + rec.toWarehouseSnapshot, date: rec.docDate });
               Inventory.apply(api, { productId: r.productId, warehouseId: rec.toWarehouseId, qtyDelta: q,
                 kind: 'TRANSFER_IN', ref: number, refType: 'TRANSFER',
-                note: 'From ' + rec.warehouseSnapshot, date: rec.docDate, unitCostP: r.unitCostP });
+                note: 'From ' + rec.warehouseSnapshot, date: rec.docDate, unitCostP: r.unitCostP,
+                extraCostP: Inventory.rowExtraP(r.productId, r.warehouseId) });   /* the bags keep the extra they had */
             } else if (type === 'RECEIVE') {
               Inventory.apply(api, { productId: r.productId, warehouseId: r.warehouseId, qtyDelta: q,
                 kind: draft.opening ? 'OPENING_STOCK' : 'ADJUSTMENT_IN', ref: number, refType: 'STOCK_RECEIPT',
-                note: rec.reason, date: rec.docDate, unitCostP: r.unitCostP });
+                note: rec.reason, date: rec.docDate, unitCostP: r.unitCostP, extraCostP: r.extraUnitP });
             } else if (type === 'ADJUST') {
               Inventory.apply(api, {
                 productId: r.productId, warehouseId: r.warehouseId,
@@ -361,7 +364,7 @@ var StockDocs = ERP.StockDocs = {
               Inventory.apply(api, { productId: r.toProductId, warehouseId: r.warehouseId, qtyDelta: q,
                 kind: 'CONVERT_IN', ref: number, refType: 'CONVERSION',
                 note: 'Converted from ' + (r.descriptionEnSnapshot || r.productId), date: rec.docDate,
-                unitCostP: r.unitCostP });
+                unitCostP: r.unitCostP, extraCostP: Inventory.rowExtraP(r.productId, r.warehouseId) });
             } else if (type === 'DISPATCH' && deduct) {
               Inventory.apply(api, { productId: r.productId, warehouseId: r.warehouseId, qtyDelta: -q,
                 kind: 'DISPATCH_OUT', ref: number, refType: 'DISPATCH',
@@ -488,12 +491,18 @@ var StockDocs = ERP.StockDocs = {
           qty: prior.totalQty, lines: oldItems.map(function (i) {
             return (i.descriptionEnSnapshot || i.productId) + ' × ' + i.quantity + (i.unitCostP ? ' @ ' + M.toR(i.unitCostP) : '');
           }) };
+        /* the extra cost per bag the old lines came in with: an edit takes exactly that back out, and a line kept
+           for the same product and warehouse goes back in with it, so it does not re-price the bags around it */
+        var oldExtra = {}, exKey = function (pid, wid) { return pid + '|' + wid; };
         oldItems.forEach(function (o) {
+          var w = o.warehouseId || prior.warehouseId;
+          var ex = typeof o.extraUnitP === 'number' ? o.extraUnitP : Inventory.rowExtraP(o.productId, w);
+          if (oldExtra[exKey(o.productId, w)] === undefined) oldExtra[exKey(o.productId, w)] = ex;
           var q = Number(o.quantity) || 0;
           if (q > 0) {
-            Inventory.apply(api, { productId: o.productId, warehouseId: o.warehouseId || prior.warehouseId,
+            Inventory.apply(api, { productId: o.productId, warehouseId: w,
               qtyDelta: -q, kind: 'RECEIPT_EDIT_OUT', ref: number, refType: 'STOCK_RECEIPT_EDIT',
-              note: 'Reversed on receipt edit', date: prior.docDate, unitCostP: o.unitCostP || 0 });
+              note: 'Reversed on receipt edit', date: prior.docDate, unitCostP: o.unitCostP || 0, extraCostP: ex });
           }
           api.del('stockDocItems', o.id);
         });
@@ -514,11 +523,13 @@ var StockDocs = ERP.StockDocs = {
             reason: l.reason || rec.reason, fromDamaged: false,
             unitCostP: l.unitPrice ? M.toP(l.unitPrice) : Inventory.costOf(l.productId, rec.warehouseId)
           });
+          var exKept = oldExtra[exKey(r.productId, r.warehouseId)];
+          r.extraUnitP = exKept !== undefined ? exKept : Inventory.rawExtraOf(r.productId);
           api.put('stockDocItems', r); S.stockDocItems.push(r);
           qty += q;
           Inventory.apply(api, { productId: r.productId, warehouseId: r.warehouseId, qtyDelta: q,
             kind: wasOpening ? 'OPENING_STOCK' : 'ADJUSTMENT_IN', ref: number, refType: 'STOCK_RECEIPT',
-            note: rec.reason, date: rec.docDate, unitCostP: r.unitCostP });
+            note: rec.reason, date: rec.docDate, unitCostP: r.unitCostP, extraCostP: r.extraUnitP });
         });
         rec.totalQty = qty; rec.lineCount = v.lines.length;
         api.put('stockDocs', rec);

@@ -79,7 +79,12 @@ const run=async()=>{
   await ERP.Prices.set(X.id,{extra:500},{reason:'Transport went up'});
   check('X12 raising the extra later does not rewrite that invoice\'s profit',
     ERP.Profit.invoice(inv.id).profit===M.toP(2000), M.fmt(ERP.Profit.invoice(inv.id).profit));
-  check('X13 but the next sale is costed at the new figure (3,500)', ERP.Cost.forSale(X.id,wh)===M.toP(3500));
+  check('X13 the 90 bags already in stock KEEP the extra they came in with (3,200) — a new figure only reaches new bags',
+    ERP.Cost.forSale(X.id,wh)===M.toP(3200), M.fmt(ERP.Cost.forSale(X.id,wh)));
+  await ERP.Purchases.save({supplierId:mill,warehouseId:wh,purchaseDate:'2026-09-25',
+    items:[{productId:X.id,quantity:90,unitPrice:3000}]});
+  check('X13b after 90 more bags bought at the new extra (500) the two lots blend: (200+500)/2 = 350 → 3,350',
+    ERP.Cost.forSale(X.id,wh)===M.toP(3350), M.fmt(ERP.Cost.forSale(X.id,wh)));
 
   /* no extra → nothing changes */
   await ERP.Purchases.save({supplierId:mill,warehouseId:wh,purchaseDate:'2026-09-20',
@@ -92,7 +97,7 @@ const run=async()=>{
   check('X15 with profit worked on purchase price only, the extra is left out', ERP.Cost.forSale(X.id,wh)===M.toP(3000),
     M.fmt(ERP.Cost.forSale(X.id,wh)));
   await ERP.Settings.save({profitCostBasis:'LANDED'});
-  check('X16 and back on the landed basis it is included again', ERP.Cost.forSale(X.id,wh)===M.toP(3500));
+  check('X16 and back on the landed basis it is included again', ERP.Cost.forSale(X.id,wh)===M.toP(3350));
 
   /* an unknown stock cost stays unknown — the extra alone is not a cost price */
   const Z=P.find(p=>p.id!==X.id && p.id!==Y.id && !ERP.Inventory.costOf(p.id,wh) && !(p.buy>0) && !(p.buyP>0));
@@ -117,8 +122,8 @@ const run=async()=>{
   await ERP.Settings.save({profitCostBasis:'PURCHASE'});
   check('X21 nor on the purchase-price-only basis (the extra is not added there)', ERP.Prices.landedAlready(W.id)===false);
   await ERP.Settings.save({profitCostBasis:'LANDED'});
-  check('X22 the Extra cost box says it is counted in every sale',
-    /Counted in the cost of every sale/.test($('#panel').textContent));
+  check('X22 the Extra cost box says new bags carry it and old stock keeps its own',
+    /Bags already in stock keep the extra they came in with/.test($('#panel').textContent));
 
   check('X18 nothing threw during the session', errors.length===0, errors.slice(0,2).join(' | '));
   win.close();

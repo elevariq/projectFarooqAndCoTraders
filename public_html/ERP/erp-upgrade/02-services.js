@@ -115,6 +115,11 @@ var Audit = ERP.Audit = {
    Stock is per product per warehouse and only ever changes through a
    movement, so the ledger of bags always reconciles with the quantity.
    ══════════════════════════════════════════════════════════════════════════ */
+/* stock movements that bring NEW bags in (they carry the product's extra cost of that day) and the reversals that
+   take such bags back out — see Inventory.rowExtraP. Returns, sale reversals and mill-issue reversals put bags back
+   that already had a cost, so they are not in either list. */
+var EXTRA_FRESH_IN = { PURCHASE_IN: 1, MILL_RECEIPT_IN: 1, OPENING_STOCK: 1, ADJUSTMENT_IN: 1, SUPPLIER_REPLACEMENT_IN: 1 };
+var EXTRA_UNDO_OUT = { PURCHASE_REVERSAL_OUT: 1, RECEIPT_EDIT_OUT: 1 };
 var Inventory = ERP.Inventory = {
   row: function (pid, wid) {
     var k = ikey(pid, wid);
@@ -159,16 +164,37 @@ var Inventory = ERP.Inventory = {
   extraOf: function (pid) {
     var basis = ERP.Settings && ERP.Settings.get ? ERP.Settings.get().profitCostBasis : null;
     if (basis === 'PURCHASE') return 0;
+    return Inventory.rawExtraOf(pid);
+  },
+  /* the product's own extra cost figure, whatever the profit basis */
+  rawExtraOf: function (pid) {
     var p = global.prodOf && global.prodOf(pid);
     if (!p) return 0;
     var x = p.extraP !== undefined && p.extraP !== null ? Number(p.extraP) : (p.extra ? M.toP(p.extra) : 0);
     return x > 0 ? x : 0;
   },
+  /* 2026-09-26, client: "when the extra cost changes, the bags already in stock must keep the old one".
+     The extra is no longer read off the product at sale time. Each stock row carries `avgExtraP`, the
+     moving average of the extra cost of the bags on hand: bags coming in (a purchase, Add stock, opening
+     stock, a mill receipt) bring the product's extra AS IT IS THAT DAY and blend in by quantity, exactly
+     as avgCostP does for the price; a transfer / brand conversion carries the source row's figure.
+     A row that has never been blended (`avgExtraP` unset — every row from before this change) follows the
+     product's current extra, which is what it always did, until the extra is edited (Prices.set freezes it). */
+  rowExtraP: function (pid, wid) {
+    var r = wid ? S.inventory[ikey(pid, wid)] : null;
+    return r && typeof r.avgExtraP === 'number' ? r.avgExtraP : Inventory.rawExtraOf(pid);
+  },
+  /* the extra a sale out of this warehouse carries (0 under the "purchase price only" profit basis) */
+  extraFor: function (pid, wid) {
+    var basis = ERP.Settings && ERP.Settings.get ? ERP.Settings.get().profitCostBasis : null;
+    if (basis === 'PURCHASE') return 0;
+    return Inventory.rowExtraP(pid, wid);
+  },
   /* what one bag of a sale is costed at: the stock cost plus the extra cost per bag. An unknown stock
      cost stays unknown (0) — the extra alone is not a cost price and would show a made-up profit. */
   saleCostOf: function (pid, wid) {
     var base = Inventory.costOf(pid, wid);
-    return base ? base + Inventory.extraOf(pid) : 0;
+    return base ? base + Inventory.extraFor(pid, wid) : 0;
   },
   /* the weighted cost of stock that came in without ever touching avgCostP — opening stock, "Add
      stock" with a cost typed, transfers, brand conversions. avgCostP only moves on PURCHASE_IN /
@@ -209,6 +235,22 @@ var Inventory = ERP.Inventory = {
       var had = r.qty - delta, avg0 = r.avgCostP || 0;
       if (had <= 0) r.avgCostP = mv.unitCostP;
       else if (avg0 > 0) r.avgCostP = Math.round((had * avg0 + delta * mv.unitCostP) / (had + delta));
+    }
+    /* the extra cost per bag on hand (see Inventory.rowExtraP). Only stock in the usable bucket. */
+    if (mv.bucket !== 'damaged') {
+      var exGiven = typeof mv.extraCostP === 'number' ? mv.extraCostP : null;
+      if (delta > 0 && (exGiven !== null || EXTRA_FRESH_IN[mv.kind])) {
+        var exIn = exGiven !== null ? exGiven : Inventory.rawExtraOf(mv.productId);
+        var exHad = r.qty - delta;
+        var exPrev = typeof r.avgExtraP === 'number' ? r.avgExtraP : Inventory.rawExtraOf(mv.productId);
+        r.avgExtraP = exHad > 0 ? Math.round((exHad * exPrev + delta * exIn) / (exHad + delta)) : exIn;
+      } else if (delta < 0 && exGiven !== null && EXTRA_UNDO_OUT[mv.kind] &&
+                 r.qty > 0 && typeof r.avgExtraP === 'number') {
+        /* a reversal takes bags back out at the extra they came in with, so re-posting them (a purchase or
+           receipt edit) does not re-price the bags that were already there */
+        var exOut = -delta;
+        r.avgExtraP = Math.max(0, Math.round(((r.qty + exOut) * r.avgExtraP - exOut * exGiven) / r.qty));
+      }
     }
     api.put('inventory', r);
 
@@ -1139,6 +1181,12 @@ var Purchases = ERP.Purchases = {
         oldItems.forEach(function (o) { if (!keepIds[o.id]) api.del('purchaseItems', o.id); });
         S.purchaseItems = S.purchaseItems.filter(function (i) { return i.purchaseId !== rec.id; });
 
+        /* the extra cost per bag each old line came in with (a line saved before this existed: what its row
+           carries now), so an edit takes exactly that back out and puts the same back in */
+        var oldExtra = {};
+        oldItems.forEach(function (o) {
+          oldExtra[o.id] = typeof o.extraUnitP === 'number' ? o.extraUnitP : Inventory.rowExtraP(o.productId, o.warehouseId);
+        });
         if (existing) {
           /* what actually arrived comes back out — judged per line, because a later
              delivery (receiveMore) added bags without ever setting stockApplied.
@@ -1148,7 +1196,7 @@ var Purchases = ERP.Purchases = {
             var was = o.receivedQty === undefined ? o.quantity : o.receivedQty;
             if (!(was > 0)) return;
             Inventory.apply(api, { productId: o.productId, warehouseId: o.warehouseId,
-              qtyDelta: -was,
+              qtyDelta: -was, extraCostP: oldExtra[o.id],
               kind: 'PURCHASE_REVERSAL_OUT', ref: existing.purchaseNumber, refType: 'PURCHASE_EDIT',
               note: 'Reversed on purchase edit', date: existing.purchaseDate || rec.purchaseDate });
           });
@@ -1174,10 +1222,13 @@ var Purchases = ERP.Purchases = {
             warehouseId: it.warehouseId || rec.warehouseId, batchNo: it.batchNo || '',
             returnedQty: old ? Purchases.returnedQty(old.id) : 0, notes: it.notes || ''
           });
+          /* the extra cost per bag these bags come in with: the product's figure of the day for a new line, the
+             line's own for one the edit keeps (unless it is now a different product) */
+          r.extraUnitP = old && old.productId === r.productId ? oldExtra[old.id] : Inventory.rawExtraOf(r.productId);
           api.put('purchaseItems', r); S.purchaseItems.push(r);
           if (receivedQty > 0) {
             Inventory.apply(api, {
-              productId: r.productId, warehouseId: r.warehouseId, qtyDelta: receivedQty,
+              productId: r.productId, warehouseId: r.warehouseId, qtyDelta: receivedQty, extraCostP: r.extraUnitP,
               kind: 'PURCHASE_IN', ref: rec.purchaseNumber, refType: 'PURCHASE',
               note: rec.supplierNameSnapshot, date: rec.purchaseDate, unitCostP: r.unitPrice
             });
@@ -1250,9 +1301,10 @@ var Purchases = ERP.Purchases = {
             var it = S.purchaseItems.find(function (x) { return x.id === l.itemId; });
             var q = M.qty(l.quantity);
             it.receivedQty = M.qty(it.receivedQty + q);
+            if (typeof it.extraUnitP !== 'number') it.extraUnitP = Inventory.rawExtraOf(it.productId);
             api.put('purchaseItems', it);
             Inventory.apply(api, {
-              productId: it.productId, warehouseId: it.warehouseId, qtyDelta: q,
+              productId: it.productId, warehouseId: it.warehouseId, qtyDelta: q, extraCostP: it.extraUnitP,
               kind: 'PURCHASE_IN', ref: pu.purchaseNumber, refType: 'PURCHASE',
               note: 'Later delivery', date: todayISO(), unitCostP: it.unitPrice
             });

@@ -33,3 +33,42 @@ unknown cost stays unknown; the double-count warning shows only when it should).
 invoice line at `costOf` again turns X8/X9/X10/X12 red (X9 then shows the client's exact bug: 4,000 profit instead of 2,000).
 
 **Deploy.** App only (`deploy-erp.sh`); no schema or PHP change. **Deployed 2026-09-25 ~22:33** with `b2b0778` (the other session's stock-receipt edit): clean-clone deploy, full test gate green, served `_app/*` md5 = build, ERP 401 / homepage 200, Hostinger cache cleared. Backup `~/backups/erp-deploy-20260925223246`. Not yet seen by a person on the live site.
+
+---
+
+# Update 2026-09-26 — the extra is an average carried by the stock
+
+**Client request.** "When the extra cost changes, the bags already in stock must keep the old one; new bags bring the new one; a
+sale uses the average" — the same way the purchase price / landed cost already averages. Before this, `saleCostOf` read the
+product's CURRENT extra at sale time, so raising 200 → 300 re-priced every bag in the godown.
+
+**How it works now.**
+- Every `inventory` row (product × warehouse) carries `avgExtraP`, the moving average of the extra cost of the bags on hand.
+  `Inventory.apply` (02-services.js) blends it in **by the bags on hand** (`before`), exactly like `avgCostP`, when NEW bags arrive:
+  `PURCHASE_IN`, `MILL_RECEIPT_IN`, `OPENING_STOCK`, `ADJUSTMENT_IN`, `SUPPLIER_REPLACEMENT_IN` — using the product's extra of that day
+  (`Inventory.rawExtraOf`). Sales, returns and reversals never move it. Because the weight is the bags LEFT, sold-out lots do not drag the
+  figure (unlike `weightedAverage` of the purchase price, which counts every purchase ever made).
+- `Inventory.saleCostOf` = `costOf` + `Inventory.extraFor(pid, wid)` (the row's `avgExtraP`; 0 under the "purchase price only" basis).
+  `avgCostP`, Stock value and stock-document costs still never carry the extra.
+- **Transfers / brand conversion** carry the SOURCE row's figure (`extraCostP` on the `TRANSFER_IN` / `CONVERT_IN` movement).
+- **Edits do not re-price the bags around them.** Each purchase line (`purchaseItems.extraUnitP`) and Add-stock line
+  (`stockDocItems.extraUnitP`) remembers the extra it came in with. A purchase / receipt edit takes those bags out at that figure
+  (`PURCHASE_REVERSAL_OUT` / `RECEIPT_EDIT_OUT` with `extraCostP` un-blend) and puts them back with it. `receiveMore` uses the line's own.
+- **Changing the extra** (`Prices.set`, the only writer): rows still following the product (no `avgExtraP` — every row from before this
+  change) are pinned to the OLD figure. If the product had NO extra before (0), the first figure typed covers the bags already held
+  (rows with no extra), so a client who types an extra on a product that is already in stock sees it at once (the 2026-09-25 behaviour).
+  Setting it back to 0 (moving a product to Landed costs) leaves the bags already in stock costed at their figure.
+- A row with no `avgExtraP` follows the product's current extra — the old behaviour — until the first stock-in or edit of the extra.
+- The warehouse tile's receive (`39-warehouse-server.js`) blends it too (same formula; `extraUnitP` on the mirrored item).
+
+**Not changed / limits.**
+- Old invoices keep their `costSnapshot`. An invoice re-saved through edit is re-costed at today's average, as before.
+- Landed costs (owner-only, per purchase) still go into `avgCostP`. A product on Landed costs should have Extra = 0 or the
+  double-count warning applies (`Prices.landedAlready`).
+- The figure is per warehouse row. Customer returns / sale reversals put bags back at the row's current figure.
+- No DB schema change (`avgExtraP` / `extraUnitP` live in the JSON docs) → `deploy-erp.sh` only. The new fields are not in
+  `database/schema-mariadb.sql`; nothing indexes them.
+
+**Tests.** `test-extra-cost-average.mjs` (30 checks: the client's 200→300 example, sales don't move it, sold-out lots don't drag,
+first extra covers held stock, 0 later, legacy rows, transfers, purchase and receipt edits, later deliveries, the profit basis).
+Mutation-checked: costing at the product's extra again turns 11 checks red. `test-extra-cost-profit.mjs` X13/X13b/X16/X22 updated.

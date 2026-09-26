@@ -174,11 +174,23 @@ var Prices = ERP.Prices = {
       return Prices.request(productId, changes, opts.reason);
     }
 
-    var stores = ['products', 'priceHistory', 'auditLog'];
+    var stores = ['products', 'priceHistory', 'inventory', 'auditLog'];
     return FDB.tx(stores, function (api) {
       changes.forEach(function (c) {
         if (c.field === 'buy') { p.buyP = c.to; p.buy = M.toR(c.to); }
-        else if (c.field === 'extra') { p.extraP = c.to; p.extra = M.toR(c.to); }
+        else if (c.field === 'extra') {
+          p.extraP = c.to; p.extra = M.toR(c.to);
+          /* Bags already in stock keep the extra cost they came in with (Inventory.rowExtraP). A row that was
+             still following the product's figure is pinned to the OLD one; and when there was no extra before,
+             the first figure typed covers the bags already held (a row that never carried one). */
+          Object.keys(S.inventory || {}).forEach(function (k) {
+            var row = S.inventory[k];
+            if (!row || row.productId !== productId) return;
+            var was = typeof row.avgExtraP === 'number' ? row.avgExtraP : null;
+            var next = c.from > 0 ? (was === null ? c.from : was) : (was > 0 ? was : c.to);
+            if (next !== was) { row.avgExtraP = next; api.put('inventory', row); }
+          });
+        }
         else if (c.field === 'sell') { p.sellP = c.to; p.sell = M.toR(c.to); }
         else if (c.field === 'min') { p.minSellP = c.to; p.min = M.toR(c.to); }
         else if (c.field === 'wholesale') { p.wholesaleP = c.to; }
@@ -427,7 +439,7 @@ global.PANELS.prices = {
       '<div class="f2">' + money('buy', 'Purchase price', 'What the mill or supplier charges per bag') +
         money('extra', 'Extra cost per bag',
           'Transport, labour, loading and other charges we pay ourselves — not on the supplier’s bill. ' +
-          'Counted in the cost of every sale from now on. Type 0 if none.') +
+          'Added to the cost of the bags that come into stock from now on (a purchase, Add stock). Bags already in stock keep the extra they came in with. Type 0 if none.') +
       '</div>' +
       '<div class="pz-live" id="pzLive" aria-live="polite">' + costLine(info.buy, info.extra, info.sell) + '</div>' +
       (landedAlready(pid)
