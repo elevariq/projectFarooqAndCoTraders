@@ -71,12 +71,31 @@ const run=async()=>{
   ERP.Builder.start('purchase'); await sleep(250);
   const view=()=>$('#view').textContent.replace(/\s+/g,' ');
   check('S1 the purchase screen explains Rate, Discount, Overall discount, the three charges and Amount paid in plain words',
-    /How a purchase is worked out/.test(view()) && /Rate = the price of ONE bag/.test(view()) && /money off that whole line \(not per bag\)/.test(view()) &&
+    /Rate = the price of ONE bag/.test(view()) && /money off that whole line \(not per bag\)/.test(view()) &&
     /totals for the whole purchase/.test(view()) && /Amount paid = what you hand the supplier now for the whole purchase/.test(view()), view().slice(0,200));
   check('S2 each charge box says it is the TOTAL for the whole purchase, not per bag',
     (view().match(/NOT per bag/g)||[]).length>=3, String((view().match(/NOT per bag/g)||[]).length));
   check('S3 …and where a truck or labour paid separately belongs (the product\'s Extra cost per bag)',
     /Paid a truck or labour separately\?/.test(view()) && /Extra cost per bag/.test(view()));
+  /* the explanations sit behind a small round "i": closed until pressed, closed again by a second press */
+  const iBtns=Array.from(D.querySelectorAll('#view [data-fcinfo]'));
+  check('I1 the purchase screen has an "i" beside the card title and beside each of the six boxes',
+    iBtns.length>=6, String(iBtns.length));
+  const iBox=b=>D.getElementById(b.getAttribute('data-fcinfo'));
+  check('I2 every explanation starts hidden (nothing printed under the boxes)',
+    iBtns.every(b=>iBox(b) && !iBox(b).classList.contains('on') && b.getAttribute('aria-expanded')==='false'));
+  const chargeI=iBtns.find(b=>/NOT per bag/.test(iBox(b).textContent));
+  click(chargeI);
+  check('I3 pressing the "i" beside a charge box shows its explanation right there',
+    iBox(chargeI).classList.contains('on') && chargeI.getAttribute('aria-expanded')==='true' && /NOT per bag/.test(iBox(chargeI).textContent));
+  check('I4 …and only that one: the others stay closed', iBtns.filter(b=>iBox(b).classList.contains('on')).length===1);
+  click(chargeI);
+  check('I5 pressing it again hides it', !iBox(chargeI).classList.contains('on') && chargeI.getAttribute('aria-expanded')==='false');
+  const guideI=iBtns.find(b=>b.title==='How a purchase is worked out');
+  click(guideI);
+  check('I6 the "i" by "Charges & payment" opens the whole guide (Rate, Discount, Overall discount, charges, Amount paid)',
+    !!guideI && /Rate<\/b> = the price of ONE bag|Rate = the price of ONE bag/.test(iBox(guideI).textContent) && iBox(guideI).classList.contains('on'));
+  click(guideI);
   check('S4 with no product yet the cost box says to add one', /Add a product to see what each bag will really cost you/.test($('#fcbCpb').textContent));
   const Bd=ERP.Builder.draft; Bd.supplierId=mill; Bd.warehouseId=wh;
   win.ERP.BuilderUI.addLine(P[8].id); await sleep(150);
@@ -103,6 +122,13 @@ const run=async()=>{
     /already carry PKR 40 per bag/.test($('#pzLanded').textContent.replace(/\s+/g,' ')), $('#pzLanded') && $('#pzLanded').textContent);
   check('P4 the Purchase price hint says where the number comes from',
     /reference price/.test($('#panel').textContent) && /each purchase really cost/.test($('#panel').textContent));
+  const pI=Array.from(D.querySelectorAll('#panel [data-fcinfo]'));
+  check('P5 the price screen\'s explanations are behind "i" buttons too (purchase price, extra cost, selling price, minimum)', pI.length>=4, String(pI.length));
+  const buyI=pI.find(b=>/reference price/.test(D.getElementById(b.getAttribute('data-fcinfo')).textContent));
+  check('P6 the one for Purchase price is closed, then opens on a press',
+    !D.getElementById(buyI.getAttribute('data-fcinfo')).classList.contains('on') && (click(buyI), D.getElementById(buyI.getAttribute('data-fcinfo')).classList.contains('on')));
+  check('P7 a warning that matters stays visible without pressing anything (the "counted twice" banner is not behind an i)',
+    !!$('#pzLanded') && !$('#pzLanded').closest('.fc-info'));
   check('X nothing threw', errors.length===0, errors.slice(0,2).join(' | '));
   win.close();
   console.log('\n'+out.join('\n')+'\n\n'+pass+' passed, '+fail+' failed\n');

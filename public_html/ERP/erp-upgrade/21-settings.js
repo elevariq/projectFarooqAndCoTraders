@@ -493,16 +493,19 @@ global.PANELS.prices = {
     if (lb && !buySaved) shown.buy = lb.goods;
     var calc = calcHtml(shown.buy, info.extra, shown.sell, 1, lb ? lb.charge : 0);
     var landedBanner = lb
-      ? '<div class="banner warn" id="pzLanded">' + I('alert') + '<div><p><b>These bags already carry ' + M.fmt(lb.charge) + ' per bag of transport / other charges</b> ' +
+      ? '<div class="banner warn" id="pzLanded">' + I('alert') + '<div><p class="pz-inline"><b>These bags already carry ' + M.fmt(lb.charge) + ' per bag of transport / other charges</b> ' +
         'that were typed on their purchase: supplier price ' + M.fmt(lb.goods) + ' + charges ' + M.fmt(lb.charge) + ' = <b>' + M.fmt(lb.goods + lb.charge) + '</b> per bag in stock. ' +
         'An Extra cost typed below is added on TOP of that when a sale is costed, so the same transport would be counted twice. ' +
         'Leave Extra cost at 0 unless it is a different cost.</p></div></div>'
       : '';
-    var money = function (k, label, hint) {
+    /* `hint` = the explanation, behind an "i" beside the label; `notice` = something the person must SEE (stays visible) */
+    var money = function (k, label, hint, notice) {
       var val = shown[k] !== undefined ? shown[k] : info[k];
-      return '<label class="f"><span>' + label + '</span><input data-f="' + k +
+      var tip = hint && ERP.info ? ERP.info.pair(hint) : null;
+      return '<label class="f"><span>' + label + (tip ? tip.btn : '') + '</span><input data-f="' + k +
         '" inputmode="decimal" value="' + esc(val ? M.toR(val) : '') + '">' +
-        (hint ? '<span class="hint">' + hint + '</span>' : '') + '</label>';
+        (notice ? '<span class="hint">' + notice + '</span>' : '') +
+        (tip ? tip.box : (hint ? '<span class="hint">' + hint + '</span>' : '')) + '</label>';
     };
     return '<div class="banner info">' + I('tag') + '<div><p><b>' + u(p.ur || '') + ' ' +
         esc(p.en || '') + '</b></p><p class="pz-inline">Average cost <b>' + M.fmt(info.averageCost) + '</b>' +
@@ -520,9 +523,8 @@ global.PANELS.prices = {
       '<div class="pz-calc"><div id="pzCalcRows">' + calc.rows + '</div>' +
         '<label class="pz-qty"><span>Try it with</span><input data-pzqty inputmode="decimal" value="1"><span>bags</span></label>' +
         '<div class="pz-ct" id="pzCalcTot">' + calc.total + '</div></div>' +
-      '<div class="f2">' + money('sell', 'Selling price', soldP
-          ? 'The default rate on a new invoice. Filled in from your last sale (' + M.fmt(soldP) + ') — press Save to keep it.'
-          : 'The default rate on a new invoice') +
+      '<div class="f2">' + money('sell', 'Selling price', 'The default rate on a new invoice.', soldP
+          ? 'Filled in from your last sale (' + M.fmt(soldP) + ') — press Save to keep it.' : '') +
         money('min', 'Minimum selling price', 'A warning appears below this') + '</div>' +
       '<div class="f2">' + money('wholesale', 'Wholesale price') + money('retail', 'Retail price') + '</div>' +
       '<div class="f2">' +
@@ -629,7 +631,41 @@ var SECTIONS = [
 ];
 var SET = ERP.SettingsUI = { section: 'general', q: '' };
 
+/* ── the small round "i" that opens a plain-English explanation under a field ───────────────────────────────────
+   ERP.info.pair(html) → { btn, box }: put `btn` beside the label and `box` where the text should appear. The text is
+   hidden until the i is pressed (again to hide). A button rather than a hover tip, so it works on a phone. Text only —
+   callers pass already-escaped markup. Warnings that matter and live figures stay visible; only explanations go here. */
+var INFO_SEQ = 0;
+ERP.info = {
+  pair: function (html, label) {
+    var id = 'fcinfo' + (++INFO_SEQ), name = label || 'What is this?';
+    return {
+      btn: '<button type="button" class="fc-i" data-fcinfo="' + id + '" title="' + name + '" aria-label="' + name + '" aria-expanded="false" aria-controls="' + id + '"></button>',
+      box: '<span class="hint fc-info" id="' + id + '" role="note">' + html + '</span>'
+    };
+  }
+};
+D.addEventListener('click', function (e) {
+  var b = e.target && e.target.closest ? e.target.closest('[data-fcinfo]') : null;
+  if (!b) return;
+  e.preventDefault(); e.stopPropagation();
+  var box = D.getElementById(b.getAttribute('data-fcinfo'));
+  if (!box) return;
+  var on = !box.classList.contains('on');
+  box.classList.toggle('on', on);
+  b.setAttribute('aria-expanded', on ? 'true' : 'false');
+}, true);
+
 var CSS = `
+.fc-i{display:inline-flex;align-items:center;justify-content:center;width:17px;height:17px;margin:0 0 0 6px;padding:0;
+  border-radius:50%;border:1.5px solid var(--line);background:var(--surface);color:var(--muted);
+  font-size:11px;font-weight:600;line-height:1;font-family:inherit;cursor:pointer;vertical-align:middle}
+.fc-i::before{content:"i"}
+.fc-i:hover,.fc-i[aria-expanded="true"]{border-color:var(--violet);color:var(--violet);background:var(--surface-2)}
+.fc-i:focus-visible{outline:2px solid var(--violet);outline-offset:2px}
+.fc-info{display:none !important}
+.fc-info.on{display:block !important;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:8px 10px;margin:6px 0 2px;color:var(--ink-2);font-size:12.5px;line-height:1.5}
 .st-shell{display:grid;grid-template-columns:230px minmax(0,1fr);gap:16px;align-items:start}
 .st-nav{position:sticky;top:12px;border:1px solid var(--line);border-radius:var(--r);
   background:var(--surface);overflow:hidden}

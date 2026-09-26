@@ -205,7 +205,7 @@ function payBalanceHtml(custs, preId) {
     return I('alert') + '<div><b>No shops in this area</b><p>Pick a different area, or choose "All areas".</p></div>';
   }
   if (!(preId && custs.some(function (c) { return c.id === preId; }))) return payChooseShopHtml();
-  return I('wallet') + '<div><p>Outstanding balance: <b>' + M.fmt(ERP.Ledger.customerBalance(preId)) + '</b></p></div>';
+  return I('wallet') + '<div><p class="pz-inline">Outstanding balance: <b>' + M.fmt(ERP.Ledger.customerBalance(preId)) + '</b></p></div>';
 }
 /* "Receive payment" version: the shop's balance, and once an amount is typed where it lands. A shop that owes nothing
    (the wrong shop picked — 2026-09-26 a payment went to a shop that owed nothing, so the real shop's invoice still showed
@@ -213,11 +213,11 @@ function payBalanceHtml(custs, preId) {
 function receiveBalanceHtml(cid, amtStr) {
   var before = ERP.Ledger.customerBalance(cid);
   var amt = M.toP(String(amtStr || '').replace(/[^\d.]/g, ''));
-  var h = I('wallet') + '<div><p>Outstanding balance: <b>' + M.fmt(before) + '</b>';
+  var h = I('wallet') + '<div><p class="pz-inline">Outstanding balance: <b>' + M.fmt(before) + '</b>';
   if (amt > 0) h += ' → after this payment: <b>' + M.fmt(before - amt) + '</b>';
   h += '</p>';
-  if (amt > 0 && before <= 0) h += '<p><b>This shop owes nothing.</b> The whole payment would be kept as credit — check that you chose the right shop.</p>';
-  else if (amt > 0 && amt > before) h += '<p>This is more than the shop owes: <b>' + M.fmt(amt - before) + '</b> would be kept as credit.</p>';
+  if (amt > 0 && before <= 0) h += '<p class="pz-inline"><b>This shop owes nothing.</b> The whole payment would be kept as credit — check that you chose the right shop.</p>';
+  else if (amt > 0 && amt > before) h += '<p class="pz-inline">This is more than the shop owes: <b>' + M.fmt(amt - before) + '</b> would be kept as credit.</p>';
   return h + '</div>';
 }
 
@@ -228,7 +228,7 @@ function receiveBalanceHtml(cid, amtStr) {
 function refundBalanceHtml(cid, amtStr) {
   var before = ERP.Ledger.customerBalance(cid);
   var amt = M.toP(String(amtStr || '').replace(/[^\d.]/g, ''));
-  var h = I('wallet') + '<div><p>Outstanding balance: <b>' + M.fmt(before) + '</b>';
+  var h = I('wallet') + '<div><p class="pz-inline">Outstanding balance: <b>' + M.fmt(before) + '</b>';
   if (amt > 0) h += ' → after this payment: <b>' + M.fmt(before + amt) + '</b>';
   h += '</p>';
   if (amt > 0 && before + amt > 0) h += '<p>After this payment the shop will owe you ' + M.fmt(before + amt) + '.</p>';
@@ -382,8 +382,8 @@ PANELS.payback = {
         esc(inv.shopNameSnapshot) + ' on this invoice.</p></div></div>';
     }
     var credit = ERP.Invoices.returnsOn(inv.id).reduce(function (a, r) { return a + r.creditAmount; }, 0);
-    return '<div class="banner info">' + I('wallet') + '<div><p><b>' + esc(inv.invoiceNumber) + ' · ' + esc(inv.shopNameSnapshot) + '</b></p>' +
-        '<p>Invoice ' + M.fmt(inv.grandTotal) + ' · returned ' + M.fmt(credit) + ' · the shop paid <b>' + M.fmt(ERP.Invoices.paidFor(inv.id)) +
+    return '<div class="banner info">' + I('wallet') + '<div><p class="pz-inline"><b>' + esc(inv.invoiceNumber) + ' · ' + esc(inv.shopNameSnapshot) + '</b></p>' +
+        '<p class="pz-inline">Invoice ' + M.fmt(inv.grandTotal) + ' · returned ' + M.fmt(credit) + ' · the shop paid <b>' + M.fmt(ERP.Invoices.paidFor(inv.id)) +
         '</b>. We owe it <b>' + M.fmt(due) + '</b>.</p></div></div>' +
       '<div class="f2 fc-amtpaid"><label class="f"><span>Amount to pay back</span>' +
         '<input data-f="amt" inputmode="decimal" value="' + esc(M.toR(due)) + '">' +
@@ -700,7 +700,7 @@ function retMoneyNoteHtml(invId, treatment) {
     value += M.mul(it.quantity ? Math.round(it.lineTotal / it.quantity) : it.unitPrice, q);
   });
   var owes = ERP.Ledger.customerBalance(inv.customerId);
-  var say1 = function (t) { return I('wallet') + '<div><p>' + t + '</p></div>'; };
+  var say1 = function (t) { return I('wallet') + '<div><p class="pz-inline">' + t + '</p></div>'; };
   if (!value) return say1('The bags you enter below go back into stock by themselves. Enter how many are coming back to see what happens to the money.');
   var head = 'These bags are worth <b>' + M.fmt(value) + '</b> and go back into stock. ';
   if (treatment === 'REPLACEMENT') {
@@ -708,7 +708,7 @@ function retMoneyNoteHtml(invId, treatment) {
   }
   if (treatment === 'REFUND') {
     var err = ERP.Returns.refundLimitError(inv, retLinesFromPanel());
-    if (err) return I('alert') + '<div><p>' + head + 'But this shop has paid only <b>' + M.fmt(ERP.Invoices.paidFor(inv.id)) +
+    if (err) return I('alert') + '<div><p class="pz-inline">' + head + 'But this shop has paid only <b>' + M.fmt(ERP.Invoices.paidFor(inv.id)) +
       '</b> on this invoice, so cash can only be given back up to that. Choose “Take it off what the shop owes” instead.</p></div>';
     return say1(head + 'You give <b>' + M.fmt(value) + '</b> back in cash. The shop still owes <b>' + M.fmt(owes) + '</b> (this return does not change it).');
   }

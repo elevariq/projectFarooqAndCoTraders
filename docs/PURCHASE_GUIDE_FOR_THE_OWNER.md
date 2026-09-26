@@ -3,6 +3,8 @@
 Worked example used below: you buy **5 bags** from a mill at **6,000 a bag**. The mill gives **500 off the whole deal**.
 The mill's bill also has **200 for delivery**. You pay **10,000** now.
 
+> On the screens, every explanation is behind a small round **i** next to the label. Press it to read; press again to hide.
+
 ## The Purchase screen
 
 | Box | What it means | In the example |

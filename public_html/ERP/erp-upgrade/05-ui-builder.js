@@ -531,7 +531,7 @@ function costPerBagHtml() {
   var rows = lines.map(function (i, ix) {
     var a = alloc[ix], p = global.prodOf(i.productId) || {};
     var perBagCharge = a.qty ? Math.round(a.share / a.qty) : 0;
-    return '<p><b>' + esc(p.en || p.ur || i.productId) + '</b>: each bag costs <b>' + M.fmt(a.landedUnit) + '</b>' +
+    return '<p class="pz-inline"><b>' + esc(p.en || p.ur || i.productId) + '</b>: each bag costs <b>' + M.fmt(a.landedUnit) + '</b>' +
       ' (supplier price ' + M.fmt(i.unitPrice) +
       (a.goodsUnit !== i.unitPrice ? ' → ' + M.fmt(a.goodsUnit) + ' after discounts' : '') +
       (perBagCharge ? ' + charges ' + M.fmt(perBagCharge) +
@@ -547,10 +547,12 @@ function chargesBlock() {
       esc(B.draft.notes || '') + '</textarea></label></div></div>';
   }
   var t = totals();
+  /* the explanation sits behind a small "i" beside the label instead of being printed under every box */
   var f = function (key, label, hint) {
-    return '<label class="f"><span>' + label + '</span><input class="num" data-fcb="' + key +
+    var tip = hint && hint.trim() && ERP.info ? ERP.info.pair(hint) : null;
+    return '<label class="f"><span>' + label + (tip ? tip.btn : '') + '</span><input class="num" data-fcb="' + key +
       '" inputmode="decimal" value="' + esc(B.draft[key] || '') + '" placeholder="0">' +
-      (hint ? '<span class="hint">' + hint + '</span>' : '') + '</label>';
+      (tip ? tip.box : (hint ? '<span class="hint">' + hint + '</span>' : '')) + '</label>';
   };
   var isSaleSide = B.cfg.party === 'customer';
   var quoteLike = B.mode === 'order' || B.mode === 'quotation';
@@ -563,14 +565,15 @@ function chargesBlock() {
     ? 'Total for the whole purchase — NOT per bag. Only what the supplier charges on this same bill: it is added to what you owe and shared over the bags.'
     : 'Total for the whole invoice, added to the amount due.';
   var hOwn = isPur ? 'Paid a truck or labour separately? Do not type it here — use the product’s “Extra cost per bag” instead.' : '';
-  var guide = isPur
-    ? '<div class="banner info">' + I('tag') + '<div><p><b>How a purchase is worked out</b></p>' +
-      '<p><b>Rate</b> = the price of ONE bag. <b>Discount</b> on a line = money off that whole line (not per bag). ' +
+  /* "How a purchase is worked out": one "i" beside the card title opens the whole explanation */
+  var guideTip = isPur && ERP.info ? ERP.info.pair(
+      '<b>Rate</b> = the price of ONE bag. <b>Discount</b> on a line = money off that whole line (not per bag). ' +
       '<b>Overall discount</b> = money off the whole purchase. <b>Delivery, Loading, Other</b> = totals for the whole purchase. ' +
-      '<b>Amount paid</b> = what you hand the supplier now for the whole purchase; the rest stays owed to the supplier.</p></div></div>'
-    : '';
+      '<b>Amount paid</b> = what you hand the supplier now for the whole purchase; the rest stays owed to the supplier.',
+      'How a purchase is worked out') : null;
   return '<div class="card fcb-card"><div class="card-h"><h3>Charges' +
-      (quoteLike ? '' : ' &amp; payment') + '</h3></div><div class="card-b">' + guide +
+      (quoteLike ? '' : ' &amp; payment') + (guideTip ? guideTip.btn : '') +
+      '</h3></div><div class="card-b">' + (guideTip ? guideTip.box : '') +
     '<div class="f2">' + f('invoiceDiscount', 'Overall discount', hDisc) + f('freight', 'Delivery / freight', hChg) + '</div>' +
     '<div class="f2">' + f('loading', 'Loading / unloading', hChg) + f('otherCharges', 'Other charges', hChg + ' ' + hOwn) + '</div>' +
     (isPur ? '<div class="banner info fcb-cpb" id="fcbCpb">' + costPerBagHtml() + '</div>' : '') +
